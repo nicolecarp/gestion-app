@@ -1,0 +1,2753 @@
+// ===== GLOBAL ERROR HANDLER =====
+window.onerror = function(msg, url, line, col, err) {
+    console.error('GLOBAL ERROR:', msg, url, line, col, err);
+    document.getElementById('app').innerHTML =
+        '<div class="empty-state" style="padding:60px">' +
+        '<div class="empty-icon">⚠️</div>' +
+        '<h3>Error en la aplicación</h3>' +
+        '<p style="color:var(--text-muted);font-size:0.85rem;margin-top:8px">' + msg + '</p>' +
+        '</div>';
+};
+
+console.log('app.js loaded at', new Date().toISOString());
+
+// ===== STATE =====
+const state = {
+    view: 'dashboard',
+    workTab: 'tasks',
+    cal: { year: 0, month: 0 },
+    showCompleted: false,
+    healthTab: 'injections',
+    estradiolRange: 365,
+    estradiolData: null,
+};
+
+// ===== SAFE API CALL =====
+async function api(fn, ...args) {
+    try {
+        if (typeof fn !== 'function') {
+            const eelType = typeof window.eel;
+            const keys = window.eel ? Object.keys(window.eel).filter(k => !k.startsWith('_')).slice(0, 15) : [];
+            throw new Error(
+                eelType === 'undefined'
+                    ? 'eel no está definido (window.eel = undefined)'
+                    : `eel existe pero '${fn ? fn.name || 'fn' : 'fn'}' no es función. Funciones disponibles: ${keys.join(', ') || 'ninguna'}`
+            );
+        }
+        return await fn(...args)();
+    } catch (e) {
+        console.error('API error:', e.message);
+        showToast('Error: ' + e.message);
+        throw e;
+    }
+}
+
+// ===== HELPERS =====
+function esc(v) {
+    if (v === null || v === undefined) return '';
+    return String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function todayStr() {
+    return new Date().toISOString().split('T')[0];
+}
+
+function fmtDate(d) {
+    if (!d) return '-';
+    const p = d.split('-');
+    if (p.length !== 3) return d;
+    const meses = ['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'];
+    return parseInt(p[2]) + ' ' + meses[parseInt(p[1])-1] + ' ' + p[0];
+}
+
+function daysUntil(d) {
+    if (!d) return null;
+    const t = new Date();
+    const dt = new Date(d + 'T00:00:00');
+    return Math.ceil((dt - t) / (1000*60*60*24));
+}
+
+function showToast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    clearTimeout(t._hide);
+    t._hide = setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+function openModal(title, bodyHtml) {
+    document.getElementById('modalTitle').textContent = title;
+    document.getElementById('modalBody').innerHTML = bodyHtml;
+    document.getElementById('modalSave').style.display = '';
+    document.getElementById('modalCancel').style.display = '';
+    document.getElementById('modalOverlay').classList.add('open');
+}
+
+function closeModal() {
+    document.getElementById('modalOverlay').classList.remove('open');
+}
+
+// ===== WAIT FOR EEL =====
+function waitForEel(cb, attempt) {
+    if (attempt === undefined) attempt = 0;
+    if (attempt >= 300) {
+        // 6 seconds timeout
+        document.getElementById('app').innerHTML =
+            '<div class="empty-state"><div class="empty-icon">⏱️</div><h3>Tiempo de espera agotado</h3>' +
+            '<p style="font-size:0.85rem;color:var(--text-muted)">' +
+            'eel type: ' + (typeof window.eel) + '<br>' +
+            'get_dashboard_stats: ' + (typeof (window.eel && window.eel.get_dashboard_stats)) + '<br>' +
+            'WebSocket: ' + (window.eel && window.eel._websocket ? window.eel._websocket.readyState : 'N/A') +
+            '</p></div>';
+        return;
+    }
+    if (typeof window.eel !== 'undefined' && typeof window.eel.get_dashboard_stats === 'function') {
+        console.log('Eel ready after', attempt * 20, 'ms');
+        cb();
+    } else {
+        setTimeout(() => waitForEel(cb, attempt + 1), 20);
+    }
+}
+
+// ===== INIT =====
+document.addEventListener('DOMContentLoaded', () => {
+    document.getElementById('modalClose').onclick = closeModal;
+    document.getElementById('modalCancel').onclick = closeModal;
+    document.getElementById('modalOverlay').onclick = (e) => {
+        if (e.target === e.currentTarget) closeModal();
+    };
+    document.getElementById('navLinks').addEventListener('click', (e) => {
+        const link = e.target.closest('.nav-link');
+        if (!link) return;
+        e.preventDefault();
+        navigate(link.dataset.view);
+    });
+    const now = new Date();
+    state.cal.year = now.getFullYear();
+    state.cal.month = now.getMonth() + 1;
+    waitForEel(() => {
+        navigate('dashboard');
+        startReloadPoller();
+    });
+});
+
+function startReloadPoller() {
+    setInterval(async () => {
+        try {
+            if (await api(eel.check_reload)) {
+                location.reload();
+            }
+        } catch (_) {}
+    }, 2000);
+}
+
+// ===== NAVIGATION =====
+async function navigate(view) {
+    state.view = view;
+    document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+    const link = document.querySelector(`.nav-link[data-view="${view}"]`);
+    if (link) link.classList.add('active');
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    const el = document.getElementById('view-' + view);
+    if (!el) return;
+    el.classList.add('active');
+    el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Cargando...</div>';
+    try {
+        switch (view) {
+            case 'dashboard': await renderDashboard(el); break;
+            case 'work': await renderWork(el); break;
+            case 'university': await renderUniversity(el); break;
+            case 'personal': await renderPersonal(el); break;
+            case 'health': await renderHealth(el); break;
+            case 'print3d': await renderPrint3D(el); break;
+            case 'settings': await renderSettings(el); break;
+        }
+    } catch (e) {
+        console.error('Error rendering', view, e);
+        el.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div><h3>Error al cargar</h3><p>${esc(e.message || 'Error desconocido')}</p><button class="btn btn-primary" onclick="navigate('${view}')">Reintentar</button></div>`;
+    }
+}
+
+// ===================== DASHBOARD =====================
+async function renderDashboard(el) {
+    const stats = await api(eel.get_dashboard_stats);
+    const events = await api(eel.get_calendar_events, state.cal.year, state.cal.month);
+    const tasks = await api(eel.get_soon_deadlines);
+
+    const today = new Date();
+    const greeting = today.getHours() < 12 ? 'Buenos días' : today.getHours() < 18 ? 'Buenas tardes' : 'Buenas noches';
+    const dias = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+    const meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','setiembre','octubre','noviembre','diciembre'];
+    const fechaStr = `${dias[today.getDay()]}, ${today.getDate()} de ${meses[today.getMonth()]} de ${today.getFullYear()}`;
+
+    const injDays = stats && stats.next_injection_days != null ? stats.next_injection_days : null;
+    const injOverdue = stats && stats.overdue_injection;
+    const injLabel = injDays !== null ? (injDays <= 0 ? 'Hoy/Vencida' : `En ${injDays} día${injDays !== 1 ? 's' : ''}`) : 'Sin registro';
+
+    let html = `
+        <div class="page-header">
+            <div>
+                <h1>${greeting} ✨</h1>
+                <div class="subtitle">${fechaStr}</div>
+            </div>
+        </div>
+        <div class="stats-row">
+            <div class="stat-card coral">
+                <div class="stat-icon">📋</div>
+                <div class="stat-value">${stats ? stats.overdue_tasks : 0}</div>
+                <div class="stat-label">Tareas vencidas</div>
+            </div>
+            <div class="stat-card sage">
+                <div class="stat-icon">📌</div>
+                <div class="stat-value">${stats ? stats.pending_tasks : 0}</div>
+                <div class="stat-label">Pendientes</div>
+            </div>
+            <div class="stat-card lavender">
+                <div class="stat-icon">📝</div>
+                <div class="stat-value">${stats ? stats.pending_exams : 0}</div>
+                <div class="stat-label">Exámenes</div>
+            </div>
+            <div class="stat-card rose">
+                <div class="stat-icon">⚠️</div>
+                <div class="stat-value">${stats ? stats.expired_docs : 0}</div>
+                <div class="stat-label">Docs vencidos</div>
+            </div>
+            <div class="stat-card sage">
+                <div class="stat-icon">🔔</div>
+                <div class="stat-value">${stats ? stats.expiring_soon_docs : 0}</div>
+                <div class="stat-label">Vencen pronto</div>
+            </div>
+            <div class="stat-card ${injOverdue ? 'coral' : 'lavender'}">
+                <div class="stat-icon">💉</div>
+                <div class="stat-value">${injLabel}</div>
+                <div class="stat-label">Próxima inyección</div>
+            </div>
+        </div>
+        <div class="two-col">
+            <div>${buildCalendar(events)}</div>
+            <div>${buildUpcomingTasks(tasks, stats)}</div>
+        </div>
+    `;
+    el.innerHTML = html;
+}
+
+function buildCalendar(events) {
+    const { year, month } = state.cal;
+    const today = new Date();
+    const firstDay = new Date(year, month-1, 1).getDay();
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Setiembre','Octubre','Noviembre','Diciembre'];
+    const wd = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+    const todayEvents = (events && events[today.getDate()]) || [];
+
+    let html = `<div class="card"><div class="calendar-header">
+        <h3>${meses[month-1]} ${year}</h3>
+        <div class="calendar-nav">
+            <button onclick="calMove(-1)">◀</button>
+            <button onclick="calMove(1)">▶</button>
+        </div>
+    </div><div class="calendar-grid">`;
+
+    wd.forEach(d => { html += `<div class="calendar-weekday">${d}</div>`; });
+    for (let i = 0; i < firstDay; i++) {
+        html += '<div class="calendar-day empty"></div>';
+    }
+    for (let day = 1; day <= daysInMonth; day++) {
+        const isToday = day === today.getDate() && month === today.getMonth()+1 && year === today.getFullYear();
+        const hasEvents = events && events[day] && events[day].length > 0;
+        const cls = `calendar-day${isToday ? ' today' : ''}${hasEvents ? ' has-events' : ''}`;
+        html += `<div class="${cls}" onclick="showDayEvents(${year},${month},${day})">${day}</div>`;
+    }
+    html += '</div>';
+
+    if (todayEvents.length > 0) {
+        html += '<div class="calendar-events">';
+        todayEvents.slice(0, 5).forEach(ev => {
+            const dotClass = ev.type === 'task' ? 'task' : ev.type === 'exam' ? 'exam' : ev.type === 'doc' ? 'doc' : ev.type === 'injection' ? 'injection' : 'assignment';
+            html += `<div class="calendar-event">
+                <div class="event-dot ${dotClass}"></div>
+                <div class="event-text">${esc(ev.title)}</div>
+            </div>`;
+        });
+        html += '</div>';
+    }
+    html += '</div>';
+    return html;
+}
+
+function buildUpcomingTasks(tasks, stats) {
+    let html = '<div class="card"><div class="card-title">Próximos 7 días</div>';
+
+    // Injection reminder
+    if (stats && stats.next_injection_days != null && stats.next_injection_days <= 7) {
+        const injOverdue = stats.overdue_injection;
+        const badge = injOverdue ? '<span class="task-badge overdue">Vencida</span>' :
+                      stats.next_injection_days <= 1 ? '<span class="task-badge due-soon">Hoy</span>' : '';
+        html += `<div class="task-item injection-reminder" onclick="navigate('health')">
+            <div class="task-check" style="border-color:#B388EB;background:var(--bg-lavender)"></div>
+            <div class="task-info">
+                <div class="task-title">💉 Inyección programada</div>
+                <div class="task-meta">${stats.next_injection_date ? fmtDate(stats.next_injection_date) : ''} · ${stats.next_injection_days > 0 ? `En ${stats.next_injection_days} día${stats.next_injection_days !== 1 ? 's' : ''}` : 'Hoy'}</div>
+            </div>
+            ${badge}
+        </div>`;
+    }
+
+    if (!tasks || tasks.length === 0) {
+        html += '<div class="empty-state" style="padding:24px"><p>Sin tareas pendientes esta semana</p></div>';
+    } else {
+        for (const t of tasks) {
+            const du = daysUntil(t.due_date);
+            const badge = du !== null && du < 0 ? '<span class="task-badge overdue">Vencida</span>' :
+                          du !== null && du <= 3 ? '<span class="task-badge due-soon">Pronto</span>' : '';
+            html += `<div class="task-item" onclick="showTaskForm(${t.id})">
+                <div class="task-check" onclick="event.stopPropagation();completeTask(${t.id})"></div>
+                <div class="task-info">
+                    <div class="task-title">${esc(t.title)}</div>
+                    <div class="task-meta">${esc(t.area_name || '')} · ${fmtDate(t.due_date) || 'Sin fecha'}</div>
+                </div>
+                ${badge}
+            </div>`;
+        }
+    }
+    html += '</div>';
+    return html;
+}
+
+function calMove(dir) {
+    state.cal.month += dir;
+    if (state.cal.month > 12) { state.cal.month = 1; state.cal.year++; }
+    if (state.cal.month < 1) { state.cal.month = 12; state.cal.year--; }
+    navigate('dashboard');
+}
+
+async function showDayEvents(year, month, day) {
+    const events = await api(eel.get_calendar_events, year, month);
+    const dayEvents = (events && events[day]) || [];
+    if (dayEvents.length === 0) {
+        showToast('Sin eventos este día');
+        return;
+    }
+    const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Setiembre','Octubre','Noviembre','Diciembre'];
+    const typeIcon = { task:'📋', exam:'📝', doc:'📄', assignment:'📎', injection:'💉' };
+    let html = dayEvents.map(ev =>
+        `<div class="calendar-event" style="margin-bottom:6px">
+            <span style="margin-right:6px">${typeIcon[ev.type] || '📌'}</span>
+            <div class="event-text">${esc(ev.title)}</div>
+        </div>`
+    ).join('');
+    openModal(`${day} de ${meses[month-1]}`, html);
+    document.getElementById('modalSave').style.display = 'none';
+    document.getElementById('modalCancel').style.display = 'none';
+}
+
+// ===================== WORK =====================
+async function renderWork(el) {
+    const tabs = ['tasks','clients','invoices','cotizaciones','services','dailycontrol','employees','documents','reimbursements','overtime','lindley'];
+    const labels = ['Tareas','Clientes','Facturas','Cotizaciones','Servicios','Control','Empleados','Documentos','Reembolsos','Días extra','Lindley'];
+
+    let html = `<div class="page-header">
+        <div><h1>Trabajo</h1><div class="subtitle">Control de gestión</div></div>
+    </div>
+    <div class="subnav">`;
+    tabs.forEach(t => {
+        html += `<button class="subnav-item${state.workTab === t ? ' active' : ''}" onclick="switchWorkTab('${t}')">${labels[tabs.indexOf(t)]}</button>`;
+    });
+    html += '</div><div id="workContent"></div>';
+    el.innerHTML = html;
+
+    const content = el.querySelector('#workContent');
+    switch (state.workTab) {
+        case 'tasks': await renderWorkTasks(content); break;
+        case 'clients': await renderWorkClients(content); break;
+        case 'invoices': await renderWorkInvoices(content); break;
+        case 'services': await renderWorkServices(content); break;
+        case 'dailycontrol': await renderWorkDailyControl(content); break;
+        case 'employees': await renderWorkEmployees(content); break;
+        case 'documents': await renderWorkDocuments(content); break;
+        case 'reimbursements': await renderWorkReimbursements(content); break;
+        case 'overtime': await renderWorkOvertime(content); break;
+        case 'lindley': await renderWorkLindley(content); break;
+        case 'cotizaciones': await renderWorkQuotes(content); break;
+    }
+}
+
+function switchWorkTab(tab) {
+    state.workTab = tab;
+    navigate('work');
+}
+
+// --- WORK TASKS ---
+async function renderWorkTasks(el) {
+    const all = await api(eel.get_tasks, 1) || [];
+    const tasks = all.filter(t => t.status !== 'completed');
+    const completed = await api(eel.get_completed_tasks, 1) || [];
+    let html = `<div style="display:flex;justify-content:space-between;margin-bottom:14px">
+        <div></div>
+        <div style="display:flex;gap:8px">
+            <button class="btn btn-ghost btn-sm" onclick="toggleCompletedTasks()">${state.showCompleted ? 'Ocultar' : 'Ver'} completadas (${completed.length})</button>
+            <button class="btn btn-primary" onclick="showTaskForm()">+ Nueva tarea</button>
+        </div>
+    </div>`;
+    if (tasks.length === 0) {
+        html += '<div class="empty-state"><div class="empty-icon">📋</div><h3>Sin tareas pendientes</h3><p>Agrega tu primera tarea laboral</p></div>';
+    } else {
+        for (const t of tasks) {
+            const du = daysUntil(t.due_date);
+            const badge = du !== null && du < 0 ? '<span class="task-badge overdue">Vencida</span>' :
+                          du !== null && du <= 3 ? '<span class="task-badge due-soon">Pronto</span>' : '';
+            html += `<div class="task-item">
+                <div class="task-check" onclick="completeTask(${t.id})"></div>
+                <div class="task-info" onclick="showTaskForm(${t.id})">
+                    <div class="task-title">${esc(t.title)}</div>
+                    <div class="task-meta">${fmtDate(t.due_date) || 'Sin fecha'}${t.category ? ' · '+esc(t.category) : ''}</div>
+                </div>
+                ${badge}
+                <div class="task-actions">
+                    <button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();deleteTask(${t.id})">✕</button>
+                </div>
+            </div>`;
+        }
+    }
+    if (state.showCompleted && completed.length > 0) {
+        html += `<div class="card" style="margin-top:16px"><div class="card-title">Completadas</div>`;
+        for (const t of completed) {
+            html += `<div class="task-item" style="opacity:0.6">
+                <div class="task-check" style="background:var(--sage);border-color:var(--sage)"></div>
+                <div class="task-info">
+                    <div class="task-title" style="text-decoration:line-through">${esc(t.title)}</div>
+                    <div class="task-meta">${fmtDate(t.due_date) || 'Sin fecha'}${t.category ? ' · '+esc(t.category) : ''}</div>
+                </div>
+            </div>`;
+        }
+        html += '</div>';
+    }
+    el.innerHTML = html;
+}
+
+function toggleCompletedTasks() {
+    state.showCompleted = !state.showCompleted;
+    navigate('work');
+}
+
+function showTaskForm(id) {
+    if (id) {
+        api(eel.get_tasks, 1).then(tasks => {
+            const t = tasks.find(x => x.id === id);
+            if (t) showTaskModal(t);
+        });
+    } else showTaskModal(null);
+}
+
+function showTaskModal(task) {
+    const title = task ? 'Editar tarea' : 'Nueva tarea';
+    const html = `<form id="modalForm">
+        <div class="form-group"><label>Título</label><input class="form-control" name="title" value="${esc(task ? task.title : '')}" required></div>
+        <div class="form-group"><label>Categoría</label><input class="form-control" name="category" value="${esc(task ? task.category : '')}"></div>
+        <div class="form-row">
+            <div class="form-group"><label>Fecha límite</label><input type="date" class="form-control" name="due_date" value="${task ? task.due_date : ''}"></div>
+            <div class="form-group"><label>Prioridad</label><select class="form-control" name="priority">
+                <option value="low" ${task && task.priority === 'low' ? 'selected' : ''}>Baja</option>
+                <option value="medium" ${!task || task.priority === 'medium' ? 'selected' : ''}>Media</option>
+                <option value="high" ${task && task.priority === 'high' ? 'selected' : ''}>Alta</option>
+            </select></div>
+        </div>
+        <div class="form-group"><label>Descripción</label><textarea class="form-control" name="description">${esc(task ? task.description : '')}</textarea></div>
+    </form>`;
+    openModal(title, html);
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('modalForm'));
+        const data = { area_id: 1, title: f.get('title'), category: f.get('category'),
+            due_date: f.get('due_date'), priority: f.get('priority'), description: f.get('description') };
+        if (!data.title) { showToast('El título es obligatorio'); return; }
+        const res = task ? await api(eel.update_task, task.id, data) : await api(eel.create_task, data);
+        if (res && res.ok) { showToast(task ? 'Tarea actualizada' : 'Tarea creada'); closeModal(); navigate('work'); }
+        else showToast('Error al guardar');
+    };
+}
+
+async function completeTask(id) {
+    const res = await api(eel.complete_task, id);
+    if (res && res.ok) { showToast('¡Completada!'); navigate(state.view); }
+}
+
+async function deleteTask(id) {
+    if (!confirm('¿Eliminar esta tarea?')) return;
+    const res = await api(eel.delete_task, id);
+    if (res && res.ok) { showToast('Eliminada'); navigate(state.view); }
+}
+
+// --- WORK CLIENTS (sedes agrupadas por empresa) ---
+async function renderWorkClients(el) {
+    const sites = await api(eel.get_client_sites_grouped) || [];
+    const clients = await api(eel.get_clients) || [];
+    let html = '<div style="display:flex;justify-content:space-between;margin-bottom:14px">' +
+        '<div><button class="btn btn-ghost btn-sm" onclick="showEmpresaForm()">+ Empresa</button></div>' +
+        '<div><button class="btn btn-primary" onclick="showClientSiteForm()">+ Sede</button></div></div>';
+    html += '<div id="clientSitesData" data-clients=\''+esc(JSON.stringify(clients))+'\'></div>';
+    if (sites.length === 0) {
+        html += '<div class="empty-state"><div class="empty-icon">🏢</div><h3>Sin clientes</h3><p>Agrega una empresa y luego sus sedes</p></div>';
+    } else {
+        html += '<div class="table-wrap"><table><thead><tr><th>Empresa / Sede</th><th>Distrito</th><th>Contacto</th><th>Teléfono</th><th>Regular</th><th>Monto mensual</th><th></th></tr></thead><tbody>';
+        let lastEmpresa = '';
+        for (const s of sites) {
+            const empresa = s.empresa || s.nombre_cliente;
+            if (empresa !== lastEmpresa) {
+                lastEmpresa = empresa;
+                html += '<tr class="group-header"><td colspan="7"><strong>'+esc(empresa)+'</strong> <span style="color:#999;font-size:0.8rem">'+esc(s.ruc || '')+'</span></td></tr>';
+            }
+            const regular = s.is_regular ? '<span class="tag tag-sage">Sí</span>' : '<span class="tag">No</span>';
+            const fee = s.monthly_fee ? 'S/ '+parseFloat(s.monthly_fee).toFixed(2) : '-';
+            html += '<tr><td style="padding-left:28px">'+esc(s.nombre_cliente)+' <span style="color:#999;font-size:0.75rem">('+esc(s.codigo_cliente_sede || '')+')</span></td>' +
+                '<td>'+esc(s.distrito || '-')+'</td><td>'+esc(s.contact_name || '-')+'</td><td>'+esc(s.phone || '-')+'</td>' +
+                '<td>'+regular+'</td><td>'+fee+'</td>' +
+                '<td style="text-align:right"><button class="btn btn-ghost btn-sm" onclick="showClientSiteForm('+s.id+')">✎</button>' +
+                '<button class="btn btn-ghost btn-sm" onclick="deleteClientSite('+s.id+')">✕</button></td></tr>';
+        }
+        html += '</tbody></table></div>';
+    }
+    el.innerHTML = html;
+}
+
+function showClientSiteForm(id) {
+    if (id) {
+        api(eel.get_client_sites_grouped).then(sites => {
+            const s = sites.find(x => x.id === id);
+            if (s) showClientSiteModal(s);
+        });
+    } else showClientSiteModal(null);
+}
+
+function showClientSiteModal(site) {
+    api(eel.get_clients).then(clients => {
+        clients = clients || [];
+        const clientOpts = '<option value="">— Sin empresa —</option>' + clients.map(c =>
+            '<option value="'+c.id+'"'+(site && site.parent_client_id === c.id ? ' selected' : '')+'>'+esc(c.business_name)+' ('+esc(c.ruc || '')+')</option>'
+        ).join('');
+        const html = '<form id="modalForm">' +
+            '<div class="form-group"><label>Empresa</label><select class="form-control" name="client_id">'+clientOpts+'</select></div>' +
+            '<div class="form-group"><label>Nombre de sede *</label><input class="form-control" name="nombre_cliente" value="'+esc(site ? site.nombre_cliente : '')+'"></div>' +
+            '<div class="form-row"><div class="form-group"><label>Código cliente</label><input class="form-control" name="codigo_cliente" value="'+esc(site ? site.codigo_cliente : '')+'"></div>' +
+            '<div class="form-group"><label>Código sede</label><input class="form-control" name="codigo_sede" value="'+esc(site ? site.codigo_sede : '')+'"></div></div>' +
+            '<div class="form-group"><label>Código cliente-sede</label><input class="form-control" name="codigo_cliente_sede" value="'+esc(site ? site.codigo_cliente_sede : '')+'"></div>' +
+            '<div class="form-group"><label>Distrito</label><input class="form-control" name="distrito" value="'+esc(site ? site.distrito : '')+'"></div>' +
+            '<div class="form-row"><div class="form-group"><label>Cliente regular</label><select class="form-control" name="is_regular">' +
+            '<option value="0"'+(site && site.is_regular ? '' : ' selected')+'>No</option>' +
+            '<option value="1"'+(site && site.is_regular ? ' selected' : '')+'>Sí</option></select></div>' +
+            '<div class="form-group"><label>Monto mensual (S/)</label><input type="number" step="0.01" class="form-control" name="monthly_fee" value="'+(site ? site.monthly_fee || '' : '')+'"></div></div>' +
+            '<div class="form-group"><label>Servicios que realiza</label><textarea class="form-control" name="servicios" placeholder="Separar por comas">'+esc(site ? site.servicios || '' : '')+'</textarea></div>' +
+            '<div class="form-row"><div class="form-group"><label>Contrato desde</label><input type="date" class="form-control" name="contract_start" value="'+(site ? site.contract_start || '' : '')+'"></div>' +
+            '<div class="form-group"><label>Contrato hasta</label><input type="date" class="form-control" name="contract_end" value="'+(site ? site.contract_end || '' : '')+'"></div></div>' +
+            '</form>';
+        openModal(site ? 'Editar sede' : 'Nueva sede', html);
+        document.getElementById('modalSave').onclick = async () => {
+            const f = new FormData(document.getElementById('modalForm'));
+            const data = {
+                client_id: f.get('client_id') ? parseInt(f.get('client_id')) : null,
+                nombre_cliente: f.get('nombre_cliente'),
+                codigo_cliente: f.get('codigo_cliente'),
+                codigo_sede: f.get('codigo_sede'),
+                codigo_cliente_sede: f.get('codigo_cliente_sede'),
+                distrito: f.get('distrito'),
+                is_regular: f.get('is_regular') === '1' ? 1 : 0,
+                monthly_fee: parseFloat(f.get('monthly_fee')) || null,
+                servicios: f.get('servicios'),
+                contract_start: f.get('contract_start'),
+                contract_end: f.get('contract_end'),
+            };
+            if (!data.nombre_cliente) { showToast('El nombre de sede es obligatorio'); return; }
+            const res = site ? await api(eel.update_client_site, site.id, data) : await api(eel.create_client_site, data);
+            if (res && res.ok) { showToast(site ? 'Actualizada' : 'Creada'); closeModal(); navigate('work'); }
+            else showToast('Error');
+        };
+    });
+}
+
+async function deleteClientSite(id) {
+    if (!confirm('¿Eliminar esta sede? Se perderán registros de servicio relacionados.')) return;
+    await api(eel.delete_client_site, id);
+    showToast('Eliminada');
+    navigate('work');
+}
+
+function showEmpresaForm(id) {
+    api(eel.get_clients).then(clients => {
+        const c = id ? clients.find(x => x.id === id) : null;
+        const html = '<form id="modalForm">' +
+            '<div class="form-group"><label>RUC</label><input class="form-control" name="ruc" value="'+esc(c ? c.ruc : '')+'"></div>' +
+            '<div class="form-group"><label>Razón social *</label><input class="form-control" name="business_name" value="'+esc(c ? c.business_name : '')+'"></div>' +
+            '<div class="form-row"><div class="form-group"><label>Contacto</label><input class="form-control" name="contact_name" value="'+esc(c ? c.contact_name : '')+'"></div>' +
+            '<div class="form-group"><label>Teléfono</label><input class="form-control" name="phone" value="'+esc(c ? c.phone : '')+'"></div></div>' +
+            '<div class="form-group"><label>Email</label><input class="form-control" name="email" value="'+esc(c ? c.email : '')+'"></div>' +
+            '<div class="form-group"><label>Dirección</label><input class="form-control" name="address" value="'+esc(c ? c.address : '')+'"></div>' +
+            '</form>';
+        openModal(c ? 'Editar empresa' : 'Nueva empresa', html);
+        document.getElementById('modalSave').onclick = async () => {
+            const f = new FormData(document.getElementById('modalForm'));
+            const data = { business_name: f.get('business_name'), ruc: f.get('ruc'), contact_name: f.get('contact_name'),
+                phone: f.get('phone'), email: f.get('email'), address: f.get('address') };
+            if (!data.business_name) { showToast('La razón social es obligatoria'); return; }
+            const res = c ? await api(eel.update_client, c.id, data) : await api(eel.create_client, data);
+            if (res && res.ok) { showToast(c ? 'Actualizada' : 'Creada'); closeModal(); navigate('work'); }
+            else showToast('Error');
+        };
+    });
+}
+
+// --- WORK INVOICES (facturación mensual) ---
+async function renderWorkInvoices(el) {
+    const data = await api(eel.get_monthly_billing) || { sites: [], invoices: [] };
+    const allInvoices = await api(eel.get_invoices) || [];
+    const sites = await api(eel.get_client_sites_grouped) || [];
+    // Build invoice lookup: key = siteId-month-year
+    const invMap = {};
+    for (const inv of data.invoices) {
+        const key = inv.client_site_id + '-' + (inv.month_billed||0) + '-' + (inv.year_billed||0);
+        if (!invMap[key]) invMap[key] = [];
+        invMap[key].push(inv);
+    }
+
+    // Last 12 months
+    const months = [];
+    const now = new Date();
+    for (let i = 11; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        months.push({ m: d.getMonth()+1, y: d.getFullYear(), label: d.toLocaleString('es', { month:'short', year:'2-digit' }) });
+    }
+
+    let html = '<div style="display:flex;justify-content:space-between;margin-bottom:14px">' +
+        '<h3 style="margin:0">Facturación mensual</h3>' +
+        '<div><button class="btn btn-primary" onclick="showInvoiceForm()">+ Factura</button></div></div>';
+
+    if (data.sites.length === 0) {
+        html += '<div class="empty-state"><div class="empty-icon">🧾</div><h3>Sin clientes regulares</h3><p>Marca una sede como "regular" en la pestaña Clientes</p></div>';
+    } else {
+        // Matrix table
+        html += '<div class="table-wrap" style="overflow-x:auto"><table class="matrix-table"><thead><tr><th style="min-width:160px">Sede</th>';
+        for (const m of months) {
+            html += '<th style="text-align:center;font-size:0.75rem;padding:4px 6px">'+m.label+'</th>';
+        }
+        html += '<th style="text-align:center">Total año</th><th style="text-align:center">Cuota</th><th style="text-align:center">Dif</th></tr></thead><tbody>';
+        for (const s of data.sites) {
+            const empresa = s.empresa || s.nombre_cliente;
+            let totalInvoiced = 0;
+            const fee = parseFloat(s.monthly_fee) || 0;
+            html += '<tr><td><strong>'+esc(empresa)+'</strong><br><span style="font-size:0.75rem;color:#999">'+esc(s.nombre_cliente)+'</span></td>';
+            for (const m of months) {
+                const key = s.id + '-' + m.m + '-' + m.y;
+                const invs = invMap[key] || [];
+                const total = invs.reduce((sum, inv) => sum + (inv.total || 0), 0);
+                totalInvoiced += total;
+                if (total > 0) {
+                    html += '<td style="text-align:center;background:#E8EFE8;font-size:0.8rem">S/ '+total.toFixed(0)+'</td>';
+                } else {
+                    html += '<td style="text-align:center;color:#ddd">—</td>';
+                }
+            }
+            const diff = totalInvoiced - fee;
+            const diffCls = diff >= 0 ? 'tag-sage' : 'tag-rose';
+            html += '<td style="text-align:center;font-weight:600">S/ '+totalInvoiced.toFixed(0)+'</td>' +
+                '<td style="text-align:center">S/ '+fee.toFixed(0)+'</td>' +
+                '<td style="text-align:center"><span class="tag '+diffCls+'">'+(diff >= 0 ? '+': '')+diff.toFixed(0)+'</span></td></tr>';
+        }
+        html += '</tbody></table></div>';
+    }
+
+    // Detail invoices list below
+    html += '<div style="margin-top:20px"><h4 style="margin-bottom:8px">Todas las facturas</h4>' +
+        '<div style="display:flex;justify-content:flex-end;margin-bottom:8px">' +
+        '<button class="btn btn-ghost btn-sm" onclick="showInvoiceForm(null)">+ Nueva factura</button></div>';
+    if (allInvoices.length === 0) {
+        html += '<div class="empty-state"><div class="empty-icon">🧾</div><h3>Sin facturas</h3></div>';
+    } else {
+        const stMap = { issued: {label:'Emitida',cls:'tag-primary'}, paid: {label:'Pagada',cls:'tag-sage'}, overdue: {label:'Vencida',cls:'tag-rose'} };
+        html += '<div class="table-wrap"><table><thead><tr><th>#</th><th>Cliente</th><th>Sede</th><th>Servicio</th><th>Total</th><th>Mes</th><th>Estado</th><th></th></tr></thead><tbody>';
+        for (const i of allInvoices) {
+            const s = stMap[i.status] || {label:i.status,cls:'tag-primary'};
+            const mesStr = i.year_billed && i.month_billed ? i.month_billed+'/'+i.year_billed : '';
+            html += '<tr><td>'+esc(i.series || '')+(i.number ? '-'+esc(i.number) : '')+'</td>' +
+                '<td>'+esc(i.business_name || '')+'</td><td style="font-size:0.8rem">'+esc(i.site_name || '')+'</td>' +
+                '<td>'+esc(i.service || '-')+'</td><td>S/ '+(i.total || 0).toFixed(2)+'</td>' +
+                '<td style="font-size:0.8rem">'+mesStr+'</td>' +
+                '<td><span class="tag '+s.cls+'">'+s.label+'</span></td>' +
+                '<td style="text-align:right"><button class="btn btn-ghost btn-sm" onclick="showInvoiceForm('+i.id+')">✎</button>' +
+                '<button class="btn btn-ghost btn-sm" onclick="deleteInvoice('+i.id+')">✕</button></td></tr>';
+        }
+        html += '</tbody></table></div>';
+    }
+
+    el.innerHTML = html;
+}
+
+function showInvoiceForm(id) {
+    if (id) {
+        api(eel.get_invoices).then(invs => {
+            const i = invs.find(x => x.id === id);
+            if (i) showInvoiceModal(i);
+        });
+    } else showInvoiceModal(null);
+}
+
+function showInvoiceModal(inv) {
+    api(eel.get_client_sites_grouped).then(sites => {
+        sites = sites || [];
+        const siteOpts = '<option value="">— Sin sede —</option>' + sites.map(s =>
+            '<option value="'+s.id+'"'+(inv && inv.client_site_id === s.id ? ' selected' : '')+'>'+
+            esc((s.empresa||'')+' - '+s.nombre_cliente)+'</option>'
+        ).join('');
+        // Also get parent clients for backward compat
+        api(eel.get_clients).then(clients => {
+            clients = clients || [];
+            const clientOpts = clients.map(c =>
+                '<option value="'+c.id+'"'+(inv && inv.client_id === c.id ? ' selected' : '')+'>'+esc(c.business_name)+'</option>'
+            ).join('');
+            const today = new Date().toISOString().split('T')[0];
+            const html = '<form id="modalForm">' +
+                '<div class="form-group"><label>Empresa *</label><select class="form-control" name="client_id">'+clientOpts+'</select></div>' +
+                '<div class="form-group"><label>Sede</label><select class="form-control" name="client_site_id">'+siteOpts+'</select></div>' +
+                '<div class="form-row"><div class="form-group"><label>Serie</label><input class="form-control" name="series" value="'+(inv ? esc(inv.series) : 'F001')+'"></div>' +
+                '<div class="form-group"><label>Número</label><input class="form-control" name="number" value="'+(inv ? esc(inv.number) : '')+'"></div></div>' +
+                '<div class="form-group"><label>Servicio</label><input class="form-control" name="service" value="'+(inv ? esc(inv.service) : '')+'"></div>' +
+                '<div class="form-row"><div class="form-group"><label>Monto</label><input type="number" step="0.01" class="form-control" name="amount" value="'+(inv ? inv.amount : '')+'"></div>' +
+                '<div class="form-group"><label>IGV</label><input type="number" step="0.01" class="form-control" name="igv" value="'+(inv ? inv.igv : '')+'"></div></div>' +
+                '<div class="form-row"><div class="form-group"><label>Total</label><input type="number" step="0.01" class="form-control" name="total" value="'+(inv ? inv.total : '')+'"></div>' +
+                '<div class="form-group"><label>Tipo</label><select class="form-control" name="payment_type">' +
+                '<option value="contado"'+(inv && inv.payment_type === 'contado' ? ' selected' : '')+'>Contado</option>' +
+                '<option value="credito"'+(inv && inv.payment_type === 'credito' ? ' selected' : '')+'>Crédito</option>' +
+                '</select></div></div>' +
+                '<div class="form-row"><div class="form-group"><label>Emisión</label><input type="date" class="form-control" name="issue_date" value="'+(inv ? inv.issue_date : today)+'"></div>' +
+                '<div class="form-group"><label>Vencimiento</label><input type="date" class="form-control" name="due_date" value="'+(inv ? inv.due_date : '')+'"></div></div>' +
+                '<div class="form-group"><label>Estado</label><select class="form-control" name="status">' +
+                '<option value="issued"'+(inv && inv.status === 'issued' ? ' selected' : '')+'>Emitida</option>' +
+                '<option value="paid"'+(inv && inv.status === 'paid' ? ' selected' : '')+'>Pagada</option>' +
+                '<option value="overdue"'+(inv && inv.status === 'overdue' ? ' selected' : '')+'>Vencida</option>' +
+                '</select></div></form>';
+            openModal(inv ? 'Editar factura' : 'Nueva factura', html);
+            document.getElementById('modalSave').onclick = async () => {
+                const f = new FormData(document.getElementById('modalForm'));
+                const data = {
+                    client_id: parseInt(f.get('client_id')),
+                    client_site_id: f.get('client_site_id') ? parseInt(f.get('client_site_id')) : null,
+                    series: f.get('series'), number: f.get('number'),
+                    service: f.get('service'), amount: parseFloat(f.get('amount')) || 0,
+                    igv: parseFloat(f.get('igv')) || 0, total: parseFloat(f.get('total')) || 0,
+                    payment_type: f.get('payment_type'), issue_date: f.get('issue_date'),
+                    due_date: f.get('due_date'), status: f.get('status')
+                };
+                if (!data.client_id) { showToast('Selecciona una empresa'); return; }
+                const res = inv ? await api(eel.update_invoice, inv.id, data) : await api(eel.create_invoice, data);
+                if (res && res.ok) { showToast(inv ? 'Actualizada' : 'Creada'); closeModal(); navigate('work'); }
+                else showToast('Error');
+            };
+        });
+    });
+}
+
+async function deleteInvoice(id) {
+    if (!confirm('¿Eliminar esta factura?')) return;
+    const res = await api(eel.delete_invoice, id);
+    if (res && res.ok) { showToast('Eliminada'); navigate('work'); }
+}
+
+// --- WORK COTIZACIONES ---
+async function renderWorkQuotes(el) {
+    const quotes = await api(eel.get_quotes) || [];
+    const serviceTypes = await api(eel.get_service_types) || [];
+    let html = '<div style="display:flex;justify-content:space-between;margin-bottom:14px">' +
+        '<h3 style="margin:0">Cotizaciones</h3>' +
+        '<button class="btn btn-primary" onclick="showQuoteForm()">+ Nueva cotización</button></div>';
+    html += '<div id="quoteData" data-service-types=\''+esc(JSON.stringify(serviceTypes))+'\'></div>';
+    if (quotes.length === 0) {
+        html += '<div class="empty-state"><div class="empty-icon">📄</div><h3>Sin cotizaciones</h3><p>Crea tu primera cotización</p></div>';
+    } else {
+        const stMap = { borrador:{label:'Borrador',cls:'tag'}, emitida:{label:'Emitida',cls:'tag-primary'}, aceptada:{label:'Aceptada',cls:'tag-sage'}, rechazada:{label:'Rechazada',cls:'tag-rose'} };
+        html += '<div class="table-wrap"><table><thead><tr><th>#</th><th>Cliente</th><th>Sede</th><th>Total</th><th>Fecha</th><th>Estado</th><th></th></tr></thead><tbody>';
+        for (const q of quotes) {
+            const s = stMap[q.status] || {label:q.status,cls:'tag'};
+            html += '<tr><td>'+esc(q.number)+'</td><td><strong>'+esc(q.business_name||'')+'</strong></td>' +
+                '<td style="font-size:0.8rem">'+esc(q.site_name||'-')+'</td><td>S/ '+(q.total||0).toFixed(2)+'</td>' +
+                '<td>'+fmtDate(q.issue_date)+'</td><td><span class="tag '+s.cls+'">'+s.label+'</span></td>' +
+                '<td style="text-align:right">' +
+                '<button class="btn btn-ghost btn-sm" onclick="showQuoteForm('+q.id+')">✎</button>' +
+                '<button class="btn btn-ghost btn-sm" onclick="downloadQuoteWord('+q.id+')" title="Descargar Word">📄</button>' +
+                '<button class="btn btn-ghost btn-sm" onclick="deleteQuote('+q.id+')">✕</button></td></tr>';
+        }
+        html += '</tbody></table></div>';
+    }
+    el.innerHTML = html;
+}
+
+function showQuoteForm(id) {
+    if (id) {
+        api(eel.get_quote, id).then(q => {
+            if (q) showQuoteModal(q);
+        });
+    } else showQuoteModal(null);
+}
+
+function showQuoteModal(quote) {
+    // Preload all needed data
+    Promise.all([
+        api(eel.get_clients) || [],
+        api(eel.get_client_sites_grouped) || [],
+        api(eel.get_service_types) || [],
+        api(eel.get_service_descriptions) || [],
+    ]).then(([clients, sites, serviceTypes, descriptions]) => {
+        clients = clients || []; sites = sites || []; serviceTypes = serviceTypes || []; descriptions = descriptions || [];
+        const items = (quote && quote.items) || [];
+
+        const clientOpts = '<option value="">— Seleccionar —</option>' + clients.map(c =>
+            '<option value="'+c.id+'"'+(quote && quote.client_id === c.id ? ' selected' : '')+'>'+esc(c.business_name)+'</option>'
+        ).join('');
+
+        const html = '<form id="quoteForm">' +
+            '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' +
+            '<div class="form-group" style="flex:2"><label>Empresa *</label><select class="form-control" name="client_id" onchange="updateQuoteSites()">'+clientOpts+'</select></div>' +
+            '<div class="form-group" style="flex:1"><label>Sede</label><select class="form-control" name="client_site_id" id="quoteSiteSelect"><option value="">— Sin sede —</option></select></div></div>' +
+            '<div class="form-row"><div class="form-group"><label>Fecha</label><input type="date" class="form-control" name="issue_date" value="'+(quote ? quote.issue_date : todayStr())+'"></div>' +
+            '<div class="form-group"><label>Válido hasta</label><input type="date" class="form-control" name="valid_until" value="'+(quote ? quote.valid_until : '')+'"></div>' +
+            '<div class="form-group"><label>Cond. pago</label><select class="form-control" name="payment_terms">' +
+            '<option value="CREDITO A 30 DIAS"'+(quote && quote.payment_terms === 'CREDITO A 30 DIAS' ? ' selected' : '')+'>Crédito 30 días</option>' +
+            '<option value="CREDITO A 15 DIAS"'+(quote && quote.payment_terms === 'CREDITO A 15 DIAS' ? ' selected' : '')+'>Crédito 15 días</option>' +
+            '<option value="CONTADO"'+(quote && quote.payment_terms === 'CONTADO' ? ' selected' : '')+'>Contado</option>' +
+            '<option value="CREDITO A 60 DIAS"'+(quote && quote.payment_terms === 'CREDITO A 60 DIAS' ? ' selected' : '')+'>Crédito 60 días</option>' +
+            '</select></div></div>' +
+            '<div id="quoteItemsContainer"></div>' +
+            '<div style="margin:8px 0;text-align:right">' +
+            '<button type="button" class="btn btn-ghost btn-sm" onclick="addQuoteLine()">+ Agregar servicio</button></div>' +
+            '<div style="border-top:1px solid #ddd;padding-top:8px;text-align:right;font-size:1.1rem">' +
+            'Subtotal: <strong id="qSubtotal">S/ 0.00</strong> | IGV (18%): <strong id="qIgv">S/ 0.00</strong> | ' +
+            '<span style="font-size:1.3rem">Total: <strong id="qTotal">S/ 0.00</strong></span></div>' +
+            '<input type="hidden" name="status" value="'+(quote ? quote.status : 'borrador')+'">' +
+            '</form>';
+
+        const title = quote ? 'Editar cotización ' + quote.number : 'Nueva cotización';
+        const saveLabel = quote ? 'Guardar' : 'Crear';
+        openModal(title, html + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">' +
+            '<button class="btn btn-primary" id="quoteSaveBtn">'+saveLabel+'</button>' +
+            (quote ? '<button class="btn btn-ghost" onclick="downloadQuoteWord('+quote.id+')">📄 Word</button>' : '') +
+            '</div>');
+
+        // Store data for line editor
+        window.__quoteData = { serviceTypes, descriptions, items, sites, clients, quoteId: quote ? quote.id : null };
+
+        // Populate sites dropdown based on selected client
+        window.updateQuoteSites = function() {
+            const clientId = parseInt(document.querySelector('[name=client_id]').value);
+            const siteSelect = document.getElementById('quoteSiteSelect');
+            if (!clientId) { siteSelect.innerHTML = '<option value="">— Sin sede —</option>'; return; }
+            const filtered = sites.filter(s => s.parent_client_id === clientId || s.client_id === clientId);
+            siteSelect.innerHTML = '<option value="">— Sin sede —</option>' + filtered.map(s =>
+                '<option value="'+s.id+'"'+(quote && quote.client_site_id === s.id ? ' selected' : '')+'>'+esc(s.nombre_cliente)+'</option>'
+            ).join('');
+        };
+        updateQuoteSites();
+
+        // Render existing items
+        renderQuoteLines(items, serviceTypes, descriptions);
+
+        document.getElementById('quoteSaveBtn').onclick = async () => saveQuote(quote);
+    });
+}
+
+function renderQuoteLines(items, serviceTypes, descriptions) {
+    const container = document.getElementById('quoteItemsContainer');
+    if (!container) return;
+    let html = '<div style="margin:8px 0"><h4 style="margin:0 0 8px">Servicios incluidos</h4></div>';
+    const allItems = items.length > 0 ? items : [{ id: null, service_type_id: '', description_id: '', description_text: '', quantity: 1, unit_price: 0 }];
+    allItems.forEach((item, idx) => {
+        const typeOpts = '<option value="">— Seleccionar —</option>' + serviceTypes.map(st =>
+            '<option value="'+st.id+'"'+(item.service_type_id === st.id ? ' selected' : '')+'>'+esc(st.name)+'</option>'
+        ).join('');
+        const matchingDescs = descriptions.filter(d => d.service_type_id === item.service_type_id);
+        const descOpts = '<option value="">— Descripción —</option>' + matchingDescs.map(d =>
+            '<option value="'+d.id+'" data-text="'+esc(d.description_text)+'"'+(item.description_id === d.id ? ' selected' : '')+'>'+esc(d.name)+'</option>'
+        ).join('');
+
+        html += '<div class="quote-line" style="border:1px solid #eee;border-radius:8px;padding:8px;margin-bottom:8px;background:#fafafa">' +
+            '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:end">' +
+            '<div class="form-group" style="flex:1;min-width:140px"><label>Servicio</label><select class="form-control" name="qt_type_'+idx+'" onchange="onQuoteTypeChange('+idx+')">'+typeOpts+'</select></div>' +
+            '<div class="form-group" style="flex:1;min-width:140px"><label>Descripción</label><select class="form-control" name="qt_desc_'+idx+'" onchange="onQuoteDescChange('+idx+')">'+descOpts+'</select></div>' +
+            '<div class="form-group" style="width:60px"><label>Cant.</label><input type="number" step="1" class="form-control" name="qt_qty_'+idx+'" value="'+(item.quantity||1)+'" onchange="recalcQuoteLine('+idx+')"></div>' +
+            '<div class="form-group" style="width:90px"><label>P. Unit.</label><input type="number" step="0.01" class="form-control" name="qt_price_'+idx+'" value="'+(item.unit_price||'')+'" onchange="recalcQuoteLine('+idx+')"></div>' +
+            '<div class="form-group" style="width:80px"><label>Total</label><strong class="qt-line-total" id="qt_total_'+idx+'">S/ '+((item.quantity||1)*(item.unit_price||0)).toFixed(2)+'</strong></div>' +
+            '<button type="button" class="btn btn-ghost btn-sm" style="margin-bottom:4px" onclick="removeQuoteLine(this)">✕</button></div>' +
+            '<div class="form-group" style="margin-top:4px"><label>Descripción detallada</label>' +
+            '<div style="display:flex;gap:4px"><textarea class="form-control" name="qt_text_'+idx+'" rows="3" style="font-size:0.8rem">'+esc(item.description_text||'')+'</textarea>' +
+            '<button type="button" class="btn btn-ghost btn-sm" style="align-self:end;white-space:nowrap" onclick="generateIALine('+idx+')" title="Generar con IA">✨ IA</button></div></div></div>';
+    });
+    container.innerHTML = html;
+}
+
+window.onQuoteTypeChange = function(idx) {
+    const typeSelect = document.querySelector('[name=qt_type_'+idx+']');
+    const descSelect = document.querySelector('[name=qt_desc_'+idx+']');
+    const stId = parseInt(typeSelect.value);
+    if (!stId) return;
+    const data = window.__quoteData;
+    const matching = data.descriptions.filter(d => d.service_type_id === stId);
+    descSelect.innerHTML = '<option value="">— Descripción —</option>' + matching.map(d =>
+        '<option value="'+d.id+'" data-text="'+esc(d.description_text)+'">'+esc(d.name)+'</option>'
+    ).join('');
+    // Get default unit price
+    const st = data.serviceTypes.find(s => s.id === stId);
+    if (st && st.default_price && !document.querySelector('[name=qt_price_'+idx+']').value) {
+        document.querySelector('[name=qt_price_'+idx+']').value = st.default_price;
+        recalcQuoteLine(idx);
+    }
+};
+
+window.onQuoteDescChange = function(idx) {
+    const select = document.querySelector('[name=qt_desc_'+idx+']');
+    const textarea = document.querySelector('[name=qt_text_'+idx+']');
+    const opt = select.options[select.selectedIndex];
+    if (opt && opt.dataset.text) {
+        textarea.value = opt.dataset.text;
+    }
+};
+
+window.recalcQuoteLine = function(idx) {
+    const qty = parseFloat(document.querySelector('[name=qt_qty_'+idx+']').value) || 0;
+    const price = parseFloat(document.querySelector('[name=qt_price_'+idx+']').value) || 0;
+    const total = qty * price;
+    document.getElementById('qt_total_'+idx).textContent = 'S/ '+total.toFixed(2);
+    recalcQuoteTotals();
+};
+
+function recalcQuoteTotals() {
+    const totals = document.querySelectorAll('.qt-line-total');
+    let subtotal = 0;
+    totals.forEach(el => {
+        const val = parseFloat(el.textContent.replace('S/ ','')) || 0;
+        subtotal += val;
+    });
+    const igv = subtotal * 0.18;
+    const total = subtotal + igv;
+    document.getElementById('qSubtotal').textContent = 'S/ '+subtotal.toFixed(2);
+    document.getElementById('qIgv').textContent = 'S/ '+igv.toFixed(2);
+    document.getElementById('qTotal').textContent = 'S/ '+total.toFixed(2);
+}
+
+window.addQuoteLine = function() {
+    const data = window.__quoteData;
+    const items = data.items;
+    items.push({ id: null, service_type_id: '', description_id: '', description_text: '', quantity: 1, unit_price: 0 });
+    renderQuoteLines(items, data.serviceTypes, data.descriptions);
+    recalcQuoteTotals();
+};
+
+window.removeQuoteLine = function(btn) {
+    const line = btn.closest('.quote-line');
+    if (line) line.remove();
+    recalcQuoteTotals();
+};
+
+window.generateIALine = async function(idx) {
+    const typeSelect = document.querySelector('[name=qt_type_'+idx+']');
+    const textarea = document.querySelector('[name=qt_text_'+idx+']');
+    const stName = typeSelect.options[typeSelect.selectedIndex]?.text || 'Servicio';
+    const clientSelect = document.querySelector('[name=client_id]');
+    const clientName = clientSelect.options[clientSelect.selectedIndex]?.text || 'Cliente';
+    const areaText = prompt('Áreas a tratar (ej: almacén, patio, SSHH):') || '';
+    showToast('Generando descripción con IA...');
+    const res = await api(eel.generate_description_ia, stName, clientName, areaText, '');
+    if (res && res.ok) {
+        textarea.value = res.text;
+        showToast('Descripción generada');
+    } else {
+        showToast('Error: ' + (res?.error || 'No se pudo conectar a LLaMA'));
+    }
+};
+
+async function saveQuote(existing) {
+    const form = document.getElementById('quoteForm');
+    if (!form) return;
+    const f = new FormData(form);
+    const clientId = parseInt(f.get('client_id'));
+    if (!clientId) { showToast('Selecciona una empresa'); return; }
+
+    // Collect line items from DOM
+    const lines = document.querySelectorAll('.quote-line');
+    const items = [];
+    lines.forEach((line, idx) => {
+        const typeVal = line.querySelector('[name=qt_type_'+idx+']')?.value;
+        const descVal = line.querySelector('[name=qt_desc_'+idx+']')?.value;
+        const qty = parseFloat(line.querySelector('[name=qt_qty_'+idx+']')?.value) || 1;
+        const price = parseFloat(line.querySelector('[name=qt_price_'+idx+']')?.value) || 0;
+        const text = line.querySelector('[name=qt_text_'+idx+']')?.value || '';
+        if (typeVal) {
+            items.push({ service_type_id: parseInt(typeVal), description_id: descVal ? parseInt(descVal) : null,
+                description_text: text, quantity: qty, unit_price: price });
+        }
+    });
+
+    const totals = recalcQuoteTotalsFromItems(items);
+    const data = {
+        client_id: clientId,
+        client_site_id: f.get('client_site_id') ? parseInt(f.get('client_site_id')) : null,
+        issue_date: f.get('issue_date'),
+        valid_until: f.get('valid_until'),
+        payment_terms: f.get('payment_terms'),
+        subtotal: totals.subtotal,
+        igv: totals.igv,
+        total: totals.total,
+        status: f.get('status'),
+    };
+
+    const qData = window.__quoteData;
+    let res;
+    if (qData.quoteId) {
+        res = await api(eel.update_quote, qData.quoteId, data);
+    } else {
+        res = await api(eel.create_quote, data);
+    }
+    if (!res || !res.ok) { showToast('Error al guardar'); return; }
+
+    const quoteId = qData.quoteId || res.id;
+
+    // Save items: delete all and re-add
+    if (qData.quoteId) {
+        // For existing quote, delete old items
+        for (const oldItem of qData.items) {
+            if (oldItem.id) await api(eel.delete_quote_item, oldItem.id);
+        }
+    }
+    for (const item of items) {
+        await api(eel.add_quote_item, quoteId, item);
+    }
+    await api(eel.recalc_quote_totals, quoteId);
+
+    showToast(existing ? 'Actualizada' : 'Creada: ' + (res.number || ''));
+    closeModal();
+    navigate('work');
+}
+
+function recalcQuoteTotalsFromItems(items) {
+    let subtotal = 0;
+    items.forEach(it => { subtotal += (it.quantity || 1) * (it.unit_price || 0); });
+    const igv = subtotal * 0.18;
+    const total = subtotal + igv;
+    return { subtotal: Math.round(subtotal * 100) / 100, igv: Math.round(igv * 100) / 100, total: Math.round(total * 100) / 100 };
+}
+
+async function deleteQuote(id) {
+    if (!confirm('¿Eliminar esta cotización?')) return;
+    const res = await api(eel.delete_quote, id);
+    if (res && res.ok) { showToast('Eliminada'); navigate('work'); }
+}
+
+async function downloadQuoteWord(id) {
+    showToast('Generando Word...');
+    const res = await api(eel.generate_quote_word, id);
+    if (!res || !res.ok) { showToast('Error: ' + (res?.error || '')); return; }
+    const a = document.createElement('a');
+    a.href = 'data:' + (res.file_type || 'application/octet-stream') + ';base64,' + res.file_b64;
+    a.download = res.file_name || 'cotizacion.docx';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    showToast('Word descargado');
+}
+
+// --- WORK EMPLOYEES ---
+async function renderWorkEmployees(el) {
+    const employees = await api(eel.get_employees, false) || [];
+    let html = `<div style="display:flex;justify-content:flex-end;margin-bottom:14px"><button class="btn btn-primary" onclick="showEmployeeForm()">+ Nuevo empleado</button></div>`;
+    if (employees.length === 0) {
+        html += '<div class="empty-state"><div class="empty-icon">👤</div><h3>Sin empleados</h3></div>';
+    } else {
+        html += '<div class="table-wrap"><table><thead><tr><th>Nombre</th><th>Documento</th><th>Cargo</th><th>Teléfono</th><th>Estado</th><th></th></tr></thead><tbody>';
+        for (const e of employees) {
+            html += `<tr><td><strong>${esc(e.full_name)}</strong></td><td>${esc(e.document_number || '-')}</td>
+                <td>${esc(e.position || '-')}</td><td>${esc(e.phone || '-')}</td>
+                <td><span class="tag ${e.is_active ? 'tag-sage' : 'tag-rose'}">${e.is_active ? 'Activo' : 'Inactivo'}</span></td>
+                <td style="text-align:right">
+                    <button class="btn btn-ghost btn-sm" onclick="showEmployeeForm(${e.id})">✎</button>
+                    <button class="btn btn-ghost btn-sm" onclick="toggleEmployee(${e.id})">${e.is_active ? '🚫' : '✓'}</button>
+                    <button class="btn btn-ghost btn-sm" onclick="deleteEmployee(${e.id})">✕</button>
+                </td></tr>`;
+        }
+        html += '</tbody></table></div>';
+    }
+    el.innerHTML = html;
+}
+
+function showEmployeeForm(id) {
+    if (id) {
+        api(eel.get_employees, false).then(emps => {
+            const e = emps.find(x => x.id === id);
+            if (e) showEmployeeModal(e);
+        });
+    } else showEmployeeModal(null);
+}
+
+function showEmployeeModal(emp) {
+    const html = `<form id="modalForm">
+        <div class="form-group"><label>Nombre completo *</label><input class="form-control" name="full_name" value="${esc(emp ? emp.full_name : '')}"></div>
+        <div class="form-row"><div class="form-group"><label>DNI</label><input class="form-control" name="document_number" value="${esc(emp ? emp.document_number : '')}"></div>
+        <div class="form-group"><label>Teléfono</label><input class="form-control" name="phone" value="${esc(emp ? emp.phone : '')}"></div></div>
+        <div class="form-group"><label>Email</label><input class="form-control" name="email" value="${esc(emp ? emp.email : '')}"></div>
+        <div class="form-group"><label>Cargo</label><input class="form-control" name="position" value="${esc(emp ? emp.position : '')}"></div>
+    </form>`;
+    openModal(emp ? 'Editar empleado' : 'Nuevo empleado', html);
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('modalForm'));
+        const data = { full_name: f.get('full_name'), document_number: f.get('document_number'),
+            phone: f.get('phone'), email: f.get('email'), position: f.get('position') };
+        if (!data.full_name) { showToast('El nombre es obligatorio'); return; }
+        const res = emp ? await api(eel.update_employee, emp.id, data) : await api(eel.create_employee, data);
+        if (res && res.ok) { showToast(emp ? 'Actualizado' : 'Creado'); closeModal(); navigate('work'); }
+        else showToast('Error');
+    };
+}
+
+async function toggleEmployee(id) {
+    await api(eel.toggle_employee_active, id);
+    navigate('work');
+}
+
+async function deleteEmployee(id) {
+    if (!confirm('¿Eliminar este empleado?')) return;
+    await api(eel.delete_employee, id);
+    showToast('Eliminado');
+    navigate('work');
+}
+
+// --- WORK DOCUMENTS ---
+async function renderWorkDocuments(el) {
+    const docs = await api(eel.get_employee_documents) || [];
+    const employees = await api(eel.get_employees, true) || [];
+    let html = `<div style="display:flex;justify-content:flex-end;margin-bottom:14px">
+        <button class="btn btn-primary" onclick="showDocForm(null)">+ Nuevo documento</button>
+    </div><div id="docData" data-employees='${esc(JSON.stringify(employees))}'></div>`;
+    if (docs.length === 0) {
+        html += '<div class="empty-state"><div class="empty-icon">📄</div><h3>Sin documentos</h3></div>';
+    } else {
+        html += '<div class="table-wrap"><table><thead><tr><th>Empleado</th><th>Tipo</th><th>N° Doc</th><th>Vencimiento</th><th>Estado</th><th>Archivo</th><th></th></tr></thead><tbody>';
+        for (const d of docs) {
+            const du = daysUntil(d.expiry_date);
+            const cls = du !== null && du < 0 ? 'tag-rose' : du !== null && du <= 30 ? 'tag-gold' : 'tag-sage';
+            const label = du !== null && du < 0 ? 'Vencido' : du !== null ? `${du}d` : '-';
+            const fileIcon = d.file_name ? '<span style="cursor:pointer" onclick="downloadDocFile('+d.id+')" title="'+esc(d.file_name)+'">📎</span>' : '-';
+            html += `<tr><td><strong>${esc(d.full_name)}</strong></td><td>${esc(d.doc_type)}</td>
+                <td>${esc(d.doc_number || '-')}</td><td>${fmtDate(d.expiry_date)}</td>
+                <td><span class="tag ${cls}">${label}</span></td>
+                <td>${fileIcon}</td>
+                <td style="text-align:right">
+                    <button class="btn btn-ghost btn-sm" onclick="showDocForm(${d.id})">✎</button>
+                    <button class="btn btn-ghost btn-sm" onclick="deleteDoc(${d.id})">✕</button>
+                </td></tr>`;
+        }
+        html += '</tbody></table></div>';
+    }
+    el.innerHTML = html;
+}
+
+const DOC_TYPES = ['MATPEL','EMO','Inducción','Licencia','Certificado','Otro'];
+
+function showDocForm(id) {
+    if (id) {
+        api(eel.get_employee_documents).then(docs => {
+            const d = docs.find(x => x.id === id);
+            if (d) showDocModal(d);
+        });
+    } else {
+        const empDiv = document.getElementById('docData');
+        const employees = empDiv ? JSON.parse(empDiv.dataset.employees || '[]') : [];
+        showDocModal(null, employees);
+    }
+}
+
+function showDocModal(doc, employees) {
+    if (!employees) {
+        api(eel.get_employees, true).then(emps => showDocModal(doc, emps || []));
+        return;
+    }
+    const empOpts = employees.map(e =>
+        `<option value="${e.id}" ${doc && doc.employee_id === e.id ? 'selected' : ''}>${esc(e.full_name)}</option>`
+    ).join('');
+    const typeOpts = DOC_TYPES.map(t =>
+        `<option value="${t}" ${doc && doc.doc_type === t ? 'selected' : ''}>${t}</option>`
+    ).join('');
+    const hasFile = doc && doc.file_name;
+    const html = `<form id="modalForm">
+        <div class="form-group"><label>Empleado *</label><select class="form-control" name="employee_id">${empOpts}</select></div>
+        <div class="form-group"><label>Tipo *</label><select class="form-control" name="doc_type">${typeOpts}</select></div>
+        <div class="form-group"><label>N° Documento</label><input class="form-control" name="doc_number" value="${esc(doc ? doc.doc_number : '')}"></div>
+        <div class="form-row"><div class="form-group"><label>Emisión</label><input type="date" class="form-control" name="issue_date" value="${doc ? doc.issue_date : ''}"></div>
+        <div class="form-group"><label>Vencimiento *</label><input type="date" class="form-control" name="expiry_date" value="${doc ? doc.expiry_date : ''}"></div></div>
+        <div class="form-group"><label>Archivo</label>
+            <input type="file" class="form-control" name="file_input" id="docFileInput" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
+            ${hasFile ? '<div style="margin-top:4px;font-size:0.8rem;color:#888">Archivo actual: '+esc(doc.file_name)+'</div>' : ''}
+        </div>
+        <div class="form-group"><label>Notas</label><textarea class="form-control" name="notes">${esc(doc ? doc.notes : '')}</textarea></div>
+    </form>`;
+    openModal(doc ? 'Editar documento' : 'Nuevo documento', html);
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('modalForm'));
+        const data = { employee_id: parseInt(f.get('employee_id')), doc_type: f.get('doc_type'),
+            doc_number: f.get('doc_number'), issue_date: f.get('issue_date'),
+            expiry_date: f.get('expiry_date'), notes: f.get('notes') };
+        if (!data.employee_id || !data.doc_type) { showToast('Completa los campos obligatorios'); return; }
+        let res = doc ? await api(eel.update_employee_document, doc.id, data) : await api(eel.create_employee_document, data);
+        if (!res || !res.ok) { showToast('Error'); return; }
+        const newId = doc ? doc.id : res.id;
+        // Upload file if selected
+        const fileInput = document.getElementById('docFileInput');
+        if (fileInput && fileInput.files && fileInput.files[0]) {
+            const file = fileInput.files[0];
+            const reader = new FileReader();
+            reader.onload = async function(e2) {
+                const b64 = e2.target.result.split(',')[1];
+                await api(eel.upload_employee_document_file, newId, b64, file.name, file.type);
+                showToast(doc ? 'Actualizado' : 'Creado'); closeModal(); navigate('work');
+            };
+            reader.readAsDataURL(file);
+        } else {
+            showToast(doc ? 'Actualizado' : 'Creado'); closeModal(); navigate('work');
+        }
+    };
+}
+
+async function deleteDoc(id) {
+    if (!confirm('¿Eliminar este documento?')) return;
+    await api(eel.delete_employee_document, id);
+    showToast('Eliminado');
+    navigate('work');
+}
+
+async function downloadDocFile(id) {
+    const res = await api(eel.get_employee_document_file, id);
+    if (!res || !res.ok) { showToast('Sin archivo'); return; }
+    const a = document.createElement('a');
+    a.href = 'data:' + (res.file_type || 'application/octet-stream') + ';base64,' + res.file_b64;
+    a.download = res.file_name || 'documento';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
+// --- WORK REIMBURSEMENTS ---
+async function renderWorkReimbursements(el) {
+    const reimbs = await api(eel.get_reimbursements) || [];
+    const employees = await api(eel.get_employees, true) || [];
+    let html = `<div style="display:flex;justify-content:flex-end;margin-bottom:14px"><button class="btn btn-primary" onclick="showReimbForm()">+ Nuevo reembolso</button></div>`;
+    html += `<div id="reimbData" data-employees='${esc(JSON.stringify(employees))}'></div>`;
+    if (reimbs.length === 0) {
+        html += '<div class="empty-state"><div class="empty-icon">💰</div><h3>Sin reembolsos</h3></div>';
+    } else {
+        const stMap = { pending: {label:'Pendiente',cls:'tag-gold'}, approved: {label:'Aprobado',cls:'tag-primary'}, paid: {label:'Pagado',cls:'tag-sage'} };
+        html += '<div class="table-wrap"><table><thead><tr><th>Empleado</th><th>Concepto</th><th>Monto</th><th>Fecha</th><th>Estado</th><th></th></tr></thead><tbody>';
+        for (const r of reimbs) {
+            const s = stMap[r.status] || {label:r.status,cls:'tag-primary'};
+            html += `<tr><td><strong>${esc(r.full_name)}</strong></td><td>${esc(r.concept || '-')}</td>
+                <td>S/ ${(r.amount || 0).toFixed(2)}</td><td>${fmtDate(r.date)}</td>
+                <td><span class="tag ${s.cls}">${s.label}</span></td>
+                <td style="text-align:right">
+                    <button class="btn btn-ghost btn-sm" onclick="showReimbForm(${r.id})">✎</button>
+                    <button class="btn btn-ghost btn-sm" onclick="deleteReimb(${r.id})">✕</button>
+                </td></tr>`;
+        }
+        html += '</tbody></table></div>';
+    }
+    el.innerHTML = html;
+}
+
+function showReimbForm(id) {
+    if (id) {
+        api(eel.get_reimbursements).then(reimbs => {
+            const r = reimbs.find(x => x.id === id);
+            if (r) showReimbModal(r);
+        });
+    } else showReimbModal(null);
+}
+
+function showReimbModal(reimb) {
+    api(eel.get_employees, true).then(employees => {
+        employees = employees || [];
+        const empOpts = employees.map(e =>
+            `<option value="${e.id}" ${reimb && reimb.employee_id === e.id ? 'selected' : ''}>${esc(e.full_name)}</option>`
+        ).join('');
+        const html = `<form id="modalForm">
+            <div class="form-group"><label>Empleado *</label><select class="form-control" name="employee_id">${empOpts}</select></div>
+            <div class="form-group"><label>Concepto</label><input class="form-control" name="concept" value="${esc(reimb ? reimb.concept : '')}"></div>
+            <div class="form-row"><div class="form-group"><label>Monto *</label><input type="number" step="0.01" class="form-control" name="amount" value="${reimb ? reimb.amount : ''}"></div>
+            <div class="form-group"><label>Fecha</label><input type="date" class="form-control" name="date" value="${reimb ? reimb.date : todayStr()}"></div></div>
+            ${reimb ? `<div class="form-group"><label>Estado</label><select class="form-control" name="status">
+                <option value="pending" ${reimb.status === 'pending' ? 'selected' : ''}>Pendiente</option>
+                <option value="approved" ${reimb.status === 'approved' ? 'selected' : ''}>Aprobado</option>
+                <option value="paid" ${reimb.status === 'paid' ? 'selected' : ''}>Pagado</option>
+            </select></div>` : ''}
+        </form>`;
+        openModal(reimb ? 'Editar reembolso' : 'Nuevo reembolso', html);
+        document.getElementById('modalSave').onclick = async () => {
+            const f = new FormData(document.getElementById('modalForm'));
+            const data = { employee_id: parseInt(f.get('employee_id')), concept: f.get('concept'),
+                amount: parseFloat(f.get('amount')) || 0, date: f.get('date') };
+            if (reimb) data.status = f.get('status');
+            if (!data.employee_id || !data.amount) { showToast('Completa los campos'); return; }
+            const res = reimb ? await api(eel.update_reimbursement, reimb.id, data) : await api(eel.create_reimbursement, data);
+            if (res && res.ok) { showToast(reimb ? 'Actualizado' : 'Creado'); closeModal(); navigate('work'); }
+            else showToast('Error');
+        };
+    });
+}
+
+async function deleteReimb(id) {
+    if (!confirm('¿Eliminar este reembolso?')) return;
+    await api(eel.delete_reimbursement, id);
+    showToast('Eliminado');
+    navigate('work');
+}
+
+// --- WORK OVERTIME ---
+async function renderWorkOvertime(el) {
+    const overtime = await api(eel.get_overtime) || [];
+    const employees = await api(eel.get_employees, true) || [];
+    let html = `<div style="display:flex;justify-content:flex-end;margin-bottom:14px"><button class="btn btn-primary" onclick="showOvertimeForm()">+ Nuevo día extra</button></div>`;
+    html += `<div id="otData" data-employees='${esc(JSON.stringify(employees))}'></div>`;
+    if (overtime.length === 0) {
+        html += '<div class="empty-state"><div class="empty-icon">⏰</div><h3>Sin días extra</h3></div>';
+    } else {
+        html += '<div class="table-wrap"><table><thead><tr><th>Empleado</th><th>Fecha</th><th>Días</th><th>Motivo</th><th>Estado</th><th></th></tr></thead><tbody>';
+        for (const o of overtime) {
+            html += `<tr><td><strong>${esc(o.full_name)}</strong></td><td>${fmtDate(o.date)}</td>
+                <td>${o.days}</td><td>${esc(o.reason || '-')}</td>
+                <td><span class="tag ${o.approved ? 'tag-sage' : 'tag-gold'}">${o.approved ? 'Aprobado' : 'Pendiente'}</span></td>
+                <td style="text-align:right">
+                    <button class="btn btn-ghost btn-sm" onclick="showOvertimeForm(${o.id})">✎</button>
+                    <button class="btn btn-ghost btn-sm" onclick="deleteOvertime(${o.id})">✕</button>
+                </td></tr>`;
+        }
+        html += '</tbody></table></div>';
+    }
+    el.innerHTML = html;
+}
+
+function showOvertimeForm(id) {
+    if (id) {
+        api(eel.get_overtime).then(ovs => {
+            const o = ovs.find(x => x.id === id);
+            if (o) showOvertimeModal(o);
+        });
+    } else showOvertimeModal(null);
+}
+
+function showOvertimeModal(overtime) {
+    api(eel.get_employees, true).then(employees => {
+        employees = employees || [];
+        const empOpts = employees.map(e =>
+            `<option value="${e.id}" ${overtime && overtime.employee_id === e.id ? 'selected' : ''}>${esc(e.full_name)}</option>`
+        ).join('');
+        const html = `<form id="modalForm">
+            <div class="form-group"><label>Empleado *</label><select class="form-control" name="employee_id">${empOpts}</select></div>
+            <div class="form-row"><div class="form-group"><label>Fecha</label><input type="date" class="form-control" name="date" value="${overtime ? overtime.date : todayStr()}"></div>
+            <div class="form-group"><label>Días *</label><input type="number" step="0.5" class="form-control" name="days" value="${overtime ? overtime.days : '1'}"></div></div>
+            <div class="form-group"><label>Motivo</label><input class="form-control" name="reason" value="${esc(overtime ? overtime.reason : '')}"></div>
+            ${overtime ? `<div class="form-group"><label><input type="checkbox" name="approved" value="1" ${overtime.approved ? 'checked' : ''}> Aprobado</label></div>` : ''}
+        </form>`;
+        openModal(overtime ? 'Editar día extra' : 'Nuevo día extra', html);
+        document.getElementById('modalSave').onclick = async () => {
+            const f = new FormData(document.getElementById('modalForm'));
+            const data = { employee_id: parseInt(f.get('employee_id')), date: f.get('date'),
+                days: parseFloat(f.get('days')) || 0, reason: f.get('reason') };
+            if (overtime) data.approved = f.get('approved') ? 1 : 0;
+            if (!data.employee_id || !data.days) { showToast('Completa los campos'); return; }
+            const res = overtime ? await api(eel.update_overtime, overtime.id, data) : await api(eel.create_overtime, data);
+            if (res && res.ok) { showToast(overtime ? 'Actualizado' : 'Creado'); closeModal(); navigate('work'); }
+            else showToast('Error');
+        };
+    });
+}
+
+async function deleteOvertime(id) {
+    if (!confirm('¿Eliminar este registro?')) return;
+    await api(eel.delete_overtime, id);
+    showToast('Eliminado');
+    navigate('work');
+}
+
+// --- WORK LINDLEY ---
+async function renderWorkLindley(el) {
+    const contacts = await api(eel.get_lindley_contacts) || [];
+    const forms = await api(eel.get_lindley_forms) || [];
+    const now = new Date();
+    const curMonth = now.getMonth() + 1;
+    const curYear = now.getFullYear();
+    const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Setiembre','Octubre','Noviembre','Diciembre'];
+
+    let html = `<div class="two-col">
+        <div class="card">
+            <div class="card-title">Contactos por planta</div>
+            <div style="margin-bottom:12px"><button class="btn btn-primary btn-sm" onclick="showContactForm()">+ Contacto</button></div>`;
+    if (contacts.length === 0) {
+        html += '<p style="color:var(--text-muted);font-size:0.85rem">Sin contactos</p>';
+    } else {
+        for (const c of contacts) {
+            html += `<div class="contact-card" style="margin-bottom:8px">
+                <div class="contact-avatar">🏭</div>
+                <div class="contact-info">
+                    <div class="contact-name">${esc(c.plant)}</div>
+                    <div class="contact-detail">${esc(c.contact_name || '')} · ${esc(c.email || '')}${c.phone ? ' · '+esc(c.phone) : ''}</div>
+                </div>
+                <button class="btn btn-ghost btn-sm" onclick="showContactForm(${c.id})">✎</button>
+                <button class="btn btn-ghost btn-sm" onclick="deleteContact(${c.id})">✕</button>
+            </div>`;
+        }
+    }
+    html += `</div>
+        <div>
+            <div class="card" style="margin-bottom:14px">
+                <div class="card-title">Plan de trabajo mensual</div>
+                <p style="margin-bottom:12px;font-size:0.85rem;color:var(--text-muted)">${meses[curMonth-1]} ${curYear}</p>
+                <button class="btn btn-primary" onclick="completeForm(${curMonth}, ${curYear})">Completar este mes</button>
+            </div>
+            <div class="card"><div class="card-title">Historial</div>`;
+    if (forms.length === 0) {
+        html += '<p style="color:var(--text-muted);font-size:0.85rem">Ninguno aún</p>';
+    } else {
+        for (const f of forms) {
+            html += `<div class="calendar-event"><div class="event-dot ${f.status === 'completed' ? 'task' : 'doc'}"></div>
+                <div class="event-text">${meses[f.month-1]} ${f.year} · <span style="color:var(--text-muted)">${f.status === 'completed' ? 'Completado' : 'Pendiente'}</span></div>
+            </div>`;
+        }
+    }
+    html += '</div></div></div>';
+    el.innerHTML = html;
+}
+
+function showContactForm(id) {
+    if (id) {
+        api(eel.get_lindley_contacts).then(contacts => {
+            const c = contacts.find(x => x.id === id);
+            if (c) showContactModal(c);
+        });
+    } else showContactModal(null);
+}
+
+function showContactModal(contact) {
+    const html = `<form id="modalForm">
+        <div class="form-group"><label>Planta *</label><input class="form-control" name="plant" value="${esc(contact ? contact.plant : '')}"></div>
+        <div class="form-group"><label>Nombre contacto</label><input class="form-control" name="contact_name" value="${esc(contact ? contact.contact_name : '')}"></div>
+        <div class="form-row"><div class="form-group"><label>Email</label><input class="form-control" name="email" value="${esc(contact ? contact.email : '')}"></div>
+        <div class="form-group"><label>Teléfono</label><input class="form-control" name="phone" value="${esc(contact ? contact.phone : '')}"></div></div>
+        <div class="form-group"><label>Notas</label><textarea class="form-control" name="notes">${esc(contact ? contact.notes : '')}</textarea></div>
+    </form>`;
+    openModal(contact ? 'Editar contacto' : 'Nuevo contacto', html);
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('modalForm'));
+        const data = { plant: f.get('plant'), contact_name: f.get('contact_name'),
+            email: f.get('email'), phone: f.get('phone'), notes: f.get('notes') };
+        if (!data.plant) { showToast('La planta es obligatoria'); return; }
+        const res = contact ? await api(eel.update_lindley_contact, contact.id, data) : await api(eel.create_lindley_contact, data);
+        if (res && res.ok) { showToast(contact ? 'Actualizado' : 'Creado'); closeModal(); navigate('work'); }
+        else showToast('Error');
+    };
+}
+
+async function deleteContact(id) {
+    if (!confirm('¿Eliminar este contacto?')) return;
+    await api(eel.delete_lindley_contact, id);
+    showToast('Eliminado');
+    navigate('work');
+}
+
+async function completeForm(month, year) {
+    const res = await api(eel.create_lindley_form, { month, year, status: 'completed' });
+    if (res && res.ok) { showToast('¡Plan registrado!'); navigate('work'); }
+    else showToast('Error');
+}
+
+// --- WORK SERVICES ---
+async function renderWorkServices(el) {
+    const records = await api(eel.get_service_records) || [];
+    const employees = await api(eel.get_employees) || [];
+    const sites = await api(eel.get_client_sites) || [];
+
+    let html = `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <div><span class="tag tag-primary" style="font-size:0.85rem">${records.filter(r=>r.status==='active').length} activos</span></div>
+        <button class="btn btn-primary" onclick="showClockIn(${esc(JSON.stringify(employees))}, ${esc(JSON.stringify(sites))})">⏱ Marcar entrada</button>
+    </div>`;
+
+    if (records.length === 0) {
+        html += '<div class="empty-state"><div class="empty-icon">📋</div><h3>Sin registros</h3><p>Marca la entrada del día</p></div>';
+    } else {
+        html += '<div class="table-wrap" style="max-height:500px;overflow-y:auto"><table><thead><tr>' +
+            '<th>Fecha</th><th>Técnico</th><th>Cliente</th><th>Entrada</th><th>Salida</th><th>Hrs</th><th>Estado</th><th></th></tr></thead><tbody>';
+        for (const r of records) {
+            const isActive = r.status === 'active';
+            const stl = isActive ? ' style="background:#FFF0E6"' : '';
+            const badge = isActive ? '<span class="task-badge due-soon">Activo</span>' : '<span class="tag tag-sage" style="font-size:0.75rem">Completado</span>';
+            const evIcon = r.evidencia ? '📸' : '';
+            html += `<tr${stl}>
+                <td>${fmtDate(r.fecha)}</td>
+                <td>${esc(r.employee_name || '')}</td>
+                <td>${esc(r.nombre_cliente || (r.client_site_id ? esc(r.nombre_cliente || '') : '-'))}</td>
+                <td>${r.hora_ingreso || '-'}</td>
+                <td>${r.hora_salida || '-'}</td>
+                <td>${r.horas_trabajadas || (isActive ? '\u2014' : 0)}</td>
+                <td>${badge} ${evIcon}</td>
+                <td style="text-align:right;white-space:nowrap">
+                    ${isActive ? '<button class="btn btn-sm btn-primary" onclick="showClockOut('+r.id+','+esc(JSON.stringify(sites))+')">Marcar salida</button>' : ''}
+                    <button class="btn btn-ghost btn-sm" onclick="deleteServiceRecord(${r.id})">✕</button>
+                </td></tr>`;
+        }
+        html += '</tbody></table></div>';
+    }
+    el.innerHTML = html;
+}
+
+function showClockIn(employees, sites) {
+    const now = new Date();
+    const timeStr = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
+    const empOpts = employees.map(e => '<option value="'+e.id+'">'+esc(e.full_name)+'</option>').join('');
+    const siteOpts = sites.map(s => '<option value="'+s.id+'">'+esc(s.nombre_cliente)+' - '+esc(s.sede_cliente)+' ('+s.codigo_cliente_sede+')</option>').join('');
+
+    const html = '<form id="modalForm">'+
+        '<div class="form-group"><label>Tecnico *</label><select class="form-control" name="employee_id">'+empOpts+'</select></div>'+
+        '<div class="form-row">'+
+            '<div class="form-group"><label>Fecha</label><input type="date" class="form-control" name="fecha" value="'+todayStr()+'"></div>'+
+            '<div class="form-group"><label>Hora entrada</label><input type="time" class="form-control" name="hora_ingreso" value="'+timeStr+'"></div>'+
+        '</div>'+
+        '<div class="form-group"><label>Cliente/Sede (opcional)</label><select class="form-control" name="client_site_id"><option value="">\u2014 Sin asignar \u2014</option>'+siteOpts+'</select></div>'+
+    '</form>';
+    openModal('Marcar entrada', html);
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('modalForm'));
+        if (!f.get('employee_id') || !f.get('fecha') || !f.get('hora_ingreso')) { showToast('Completa todos los campos'); return; }
+        const res = await api(eel.clock_in, {
+            employee_id: parseInt(f.get('employee_id')),
+            fecha: f.get('fecha'),
+            hora_ingreso: f.get('hora_ingreso'),
+            client_site_id: f.get('client_site_id') ? parseInt(f.get('client_site_id')) : null,
+        });
+        if (res && res.ok) { showToast('Entrada registrada'); closeModal(); navigate('work'); }
+        else showToast('Error');
+    };
+}
+
+function showClockOut(recordId, sites) {
+    api(eel.get_service_records).then(records => {
+        const r = records.find(x => x.id === recordId);
+        if (!r) return;
+        const now = new Date();
+        const timeStr = String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0');
+        const siteOpts = sites.map(s => '<option value="'+s.id+'"'+(r.client_site_id === s.id ? ' selected' : '')+'>'+esc(s.nombre_cliente)+' - '+esc(s.sede_cliente)+' ('+s.codigo_cliente_sede+')</option>').join('');
+
+        const html = '<form id="modalForm">'+
+            '<div style="margin-bottom:14px;padding:10px;background:var(--bg-lavender);border-radius:8px">'+
+                '<strong>'+esc(r.employee_name)+'</strong> \u00b7 Entrada: '+r.hora_ingreso+
+            '</div>'+
+            '<div class="form-row">'+
+                '<div class="form-group"><label>Fecha</label><input type="date" class="form-control" name="fecha" value="'+r.fecha+'"></div>'+
+                '<div class="form-group"><label>Hora entrada</label><input type="time" class="form-control" name="hora_ingreso" value="'+(r.hora_ingreso||'')+'"></div>'+
+            '</div>'+
+            '<div class="form-row">'+
+                '<div class="form-group"><label>Hora salida *</label><input type="time" class="form-control" name="hora_salida" value="'+(r.hora_salida||timeStr)+'"></div>'+
+                '<div class="form-group"><label>Traslado (min)</label><input type="number" class="form-control" name="traslado_min" value="'+(r.traslado_min||0)+'" min="0" step="5"></div>'+
+            '</div>'+
+            '<div class="form-group"><label>Cliente/Sede</label><select class="form-control" name="client_site_id"><option value="">\u2014 Sin asignar \u2014</option>'+siteOpts+'</select></div>'+
+            '<div class="form-group"><label>Evidencia</label><select class="form-control" name="evidencia"><option value="1">Si</option><option value="0" selected>No</option></select></div>'+
+            '<div class="form-group"><label>Observaciones</label><textarea class="form-control" name="observaciones"></textarea></div>'+
+        '</form>';
+        openModal('Completar servicio', html);
+        document.getElementById('modalSave').onclick = async () => {
+            const f = new FormData(document.getElementById('modalForm'));
+            if (!f.get('hora_salida')) { showToast('La hora de salida es obligatoria'); return; }
+            const res = await api(eel.complete_service_record, recordId, {
+                hora_ingreso: f.get('hora_ingreso'),
+                hora_salida: f.get('hora_salida'),
+                traslado_min: parseFloat(f.get('traslado_min')) || 0,
+                client_site_id: f.get('client_site_id') ? parseInt(f.get('client_site_id')) : null,
+                evidencia: f.get('evidencia') === '1',
+                observaciones: f.get('observaciones'),
+            });
+            if (res && res.ok) { showToast('Servicio completado \u00b7 '+res.horas_trabajadas+'h'); closeModal(); navigate('work'); }
+            else showToast('Error');
+        };
+    });
+}
+
+async function deleteServiceRecord(id) {
+    if (!confirm('\u00bfEliminar este registro?')) return;
+    const res = await api(eel.delete_service_record, id);
+    if (res && res.ok) { showToast('Eliminado'); navigate('work'); }
+}
+
+// --- WORK DAILY CONTROL ---
+async function renderWorkDailyControl(el) {
+    const today = todayStr();
+    const control = await api(eel.get_daily_control, today) || [];
+    const employees = await api(eel.get_employees) || [];
+
+    // Auto-sync: asegura daily_control actualizado para hoy
+    for (const emp of employees) {
+        await api(eel.sync_daily_control, today, emp.id);
+    }
+    const updatedControl = await api(eel.get_daily_control, today) || [];
+
+    let html = '<div class="card"><div class="card-title">Control del dia \u00b7 '+fmtDate(today)+'</div>';
+
+    if (employees.length === 0) {
+        html += '<div class="empty-state"><p>Sin empleados activos</p></div>';
+    } else {
+        html += '<div class="table-wrap"><table><thead><tr><th>Tecnico</th><th>Sede</th><th>\u00bfAsistio?</th><th>Horas</th><th>Evidencia</th><th>Pendientes</th></tr></thead><tbody>';
+        for (const emp of employees) {
+            const ctrl = updatedControl.find(c => c.employee_id === emp.id);
+            const checked = ctrl ? ctrl.se_presento : false;
+            html += '<tr>'+
+                '<td>'+esc(emp.full_name)+'</td>'+
+                '<td>'+esc(emp.sede_operativa||'-')+'</td>'+
+                '<td><input type="checkbox" '+(checked?'checked':'')+' onchange="updateCtrlField('+emp.id+',\'se_presento\',this.checked)"></td>'+
+                '<td><strong>'+(ctrl ? ctrl.horas_dia.toFixed(2) : '0.00')+'</strong> h</td>'+
+                '<td><input type="checkbox" '+(ctrl && ctrl.evidencia_dia ? 'checked' : '')+' onchange="updateCtrlField('+emp.id+',\'evidencia_dia\',this.checked)"></td>'+
+                '<td><input type="checkbox" '+(ctrl && ctrl.pendientes_sin_salida ? 'checked' : '')+' onchange="updateCtrlField('+emp.id+',\'pendientes_sin_salida\',this.checked)"></td>'+
+            '</tr>';
+        }
+        html += '</tbody></table></div><div style="margin-top:6px;font-size:0.8rem;color:var(--text-muted)">\u23f1 Las horas se actualizan automaticamente al completar servicios</div>';
+    }
+    html += '</div>';
+
+    // Weekly KPI summary
+    html += '<div class="card" style="margin-top:14px"><div class="card-title">KPI Semanal</div>';
+    const now = new Date();
+    const weekRes = await api(eel.get_week_semana, now.toISOString().split('T')[0]);
+    const kpi = await api(eel.get_weekly_kpi, weekRes.semana, weekRes.año) || [];
+    if (kpi.length === 0) {
+        html += '<div class="empty-state"><p>Sin datos esta semana</p></div>';
+    } else {
+        html += '<div class="table-wrap"><table><thead><tr><th>#</th><th>Teecnico</th><th>Horas</th><th>Servicios</th><th>Evidencia</th><th>Score</th></tr></thead><tbody>';
+        for (const k of kpi) {
+            const cls = k.ranking <= 3 ? ' style="background:var(--bg-sage)"' : '';
+            html += '<tr'+cls+'><td>'+k.ranking+'</td><td>'+esc(k.employee_name)+'</td><td>'+k.total_horas+'</td><td>'+k.servicios+'</td><td>'+k.evidencia_pct+'%</td><td><strong>'+k.score+'</strong></td></tr>';
+        }
+        html += '</tbody></table></div>';
+    }
+    html += '</div>';
+
+    el.innerHTML = html;
+}
+
+async function updateCtrlField(employee_id, field, value) {
+    const today = todayStr();
+    const ctrl = (await api(eel.get_daily_control, today) || []).find(c => c.employee_id === employee_id);
+    const emp = (await api(eel.get_employees)).find(e => e.id === employee_id);
+    if (!ctrl) {
+        await api(eel.sync_daily_control, today, employee_id);
+    }
+    const updatedCtrl = (await api(eel.get_daily_control, today) || []).find(c => c.employee_id === employee_id);
+    if (updatedCtrl) {
+        const data = {
+            fecha_revision: today,
+            sede_operativa: emp ? emp.sede_operativa : null,
+            responsable: emp ? emp.responsable : null,
+            se_presento: field === 'se_presento' ? value : updatedCtrl.se_presento,
+            horas_dia: field === 'horas_dia' ? parseFloat(value) || 0 : updatedCtrl.horas_dia,
+            evidencia_dia: field === 'evidencia_dia' ? value : updatedCtrl.evidencia_dia,
+            pendientes_sin_salida: field === 'pendientes_sin_salida' ? value : updatedCtrl.pendientes_sin_salida,
+            observaciones: updatedCtrl.observaciones || '',
+        };
+        const res = await api(eel.update_daily_control, updatedCtrl.id, data);
+        if (!res || !res.ok) showToast('Error al guardar');
+    }
+}
+
+// ===================== UNIVERSITY =====================
+async function renderUniversity(el) {
+    const subjects = await api(eel.get_subjects) || [];
+    const allExams = await api(eel.get_exams) || [];
+    const allAssignments = await api(eel.get_assignments) || [];
+
+    let html = `<div class="page-header">
+        <div><h1>Universidad</h1><div class="subtitle">Ingeniería Industrial · UTN Avellaneda</div></div>
+        <div class="page-actions"><button class="btn btn-primary" onclick="showSubjectForm()">+ Materia</button></div>
+    </div>`;
+
+    if (subjects.length === 0) {
+        html += '<div class="empty-state"><div class="empty-icon">🎓</div><h3>Sin materias</h3><p>Agrega tus materias del año</p></div>';
+        el.innerHTML = html;
+        return;
+    }
+
+    for (const s of subjects) {
+        const exams = allExams.filter(e => e.subject_id === s.id);
+        const assignments = allAssignments.filter(a => a.subject_id === s.id);
+        const stCls = s.status === 'current' ? 'current' : s.status === 'passed' ? 'passed' : 'failed';
+
+        html += `<div class="subject-card" style="margin-bottom:14px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                <div>
+                    <div class="subject-name"><span class="status-dot ${stCls}" style="margin-right:8px"></span>${esc(s.name)}</div>
+                    <div class="subject-meta">${esc(s.professor || '')}${s.schedule ? ' · '+esc(s.schedule) : ''}</div>
+                </div>
+                <div style="display:flex;gap:4px">
+                    <button class="btn btn-ghost btn-sm" onclick="showExamForm(${s.id})">+ Examen</button>
+                    <button class="btn btn-ghost btn-sm" onclick="showAssignmentForm(${s.id})">+ TP</button>
+                    <button class="btn btn-ghost btn-sm" onclick="showSubjectForm(${s.id})">✎</button>
+                    <button class="btn btn-ghost btn-sm" onclick="deleteSubject(${s.id})">✕</button>
+                </div>
+            </div>
+            <div class="two-col">
+                <div><div style="font-size:0.75rem;font-weight:600;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">Exámenes</div>`;
+        if (exams.length === 0) {
+            html += '<span style="font-size:0.8rem;color:var(--text-light)">Sin exámenes</span>';
+        } else {
+            for (const e of exams) {
+                html += `<div class="calendar-event"><div class="event-dot exam"></div>
+                    <div class="event-text">${esc(e.type || 'Examen')}: ${fmtDate(e.date)}${e.grade ? ' · Nota: '+e.grade : ''}</div>
+                </div>`;
+            }
+        }
+        html += `</div><div><div style="font-size:0.75rem;font-weight:600;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">Trabajos Prácticos</div>`;
+        if (assignments.length === 0) {
+            html += '<span style="font-size:0.8rem;color:var(--text-light)">Sin TPs</span>';
+        } else {
+            for (const a of assignments) {
+                html += `<div class="calendar-event"><div class="event-dot assignment"></div>
+                    <div class="event-text">${esc(a.title)}${a.due_date ? ' · Entrega: '+fmtDate(a.due_date) : ''}${a.group_name ? ' · '+esc(a.group_name) : ''}</div>
+                </div>`;
+            }
+        }
+        html += '</div></div></div>';
+    }
+    el.innerHTML = html;
+}
+
+function showSubjectForm(id) {
+    if (id) {
+        api(eel.get_subjects).then(subs => {
+            const s = subs.find(x => x.id === id);
+            if (s) showSubjectModal(s);
+        });
+    } else showSubjectModal(null);
+}
+
+function showSubjectModal(subj) {
+    const html = `<form id="modalForm">
+        <div class="form-group"><label>Nombre *</label><input class="form-control" name="name" value="${esc(subj ? subj.name : '')}"></div>
+        <div class="form-row"><div class="form-group"><label>Profesor</label><input class="form-control" name="professor" value="${esc(subj ? subj.professor : '')}"></div>
+        <div class="form-group"><label>Horario</label><input class="form-control" name="schedule" value="${esc(subj ? subj.schedule : '')}"></div></div>
+        <div class="form-row"><div class="form-group"><label>Año</label><input type="number" class="form-control" name="year" value="${subj ? subj.year : new Date().getFullYear()}"></div>
+        <div class="form-group"><label>Estado</label><select class="form-control" name="status">
+            <option value="current" ${!subj || subj.status === 'current' ? 'selected' : ''}>En curso</option>
+            <option value="passed" ${subj && subj.status === 'passed' ? 'selected' : ''}>Aprobada</option>
+            <option value="failed" ${subj && subj.status === 'failed' ? 'selected' : ''}>Desaprobada</option>
+        </select></div></div>
+    </form>`;
+    openModal(subj ? 'Editar materia' : 'Nueva materia', html);
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('modalForm'));
+        const data = { name: f.get('name'), professor: f.get('professor'),
+            schedule: f.get('schedule'), year: parseInt(f.get('year')) || new Date().getFullYear(), status: f.get('status') };
+        if (!data.name) { showToast('El nombre es obligatorio'); return; }
+        const res = subj ? await api(eel.update_subject, subj.id, data) : await api(eel.create_subject, data);
+        if (res && res.ok) { showToast(subj ? 'Actualizada' : 'Creada'); closeModal(); navigate('university'); }
+        else showToast('Error');
+    };
+}
+
+async function deleteSubject(id) {
+    if (!confirm('¿Eliminar esta materia y todo su contenido?')) return;
+    await api(eel.delete_subject, id);
+    showToast('Eliminada');
+    navigate('university');
+}
+
+function showExamForm(subjectId) {
+    showExamModal(null, subjectId);
+}
+
+function showExamModal(exam, subjectId) {
+    const html = `<form id="modalForm">
+        <div class="form-group"><label>Tipo</label><select class="form-control" name="type">
+            <option value="Parcial" ${exam && exam.type === 'Parcial' ? 'selected' : ''}>Parcial</option>
+            <option value="Recuperatorio" ${exam && exam.type === 'Recuperatorio' ? 'selected' : ''}>Recuperatorio</option>
+            <option value="Final" ${exam && exam.type === 'Final' ? 'selected' : ''}>Final</option>
+            <option value="Otro" ${exam && exam.type === 'Otro' ? 'selected' : ''}>Otro</option>
+        </select></div>
+        <div class="form-row"><div class="form-group"><label>Fecha *</label><input type="date" class="form-control" name="date" value="${exam ? exam.date : ''}"></div>
+        <div class="form-group"><label>Hora</label><input type="time" class="form-control" name="time" value="${exam ? exam.time : ''}"></div></div>
+        <div class="form-group"><label>Tema</label><input class="form-control" name="topic" value="${esc(exam ? exam.topic : '')}"></div>
+        <div class="form-row"><div class="form-group"><label>Nota</label><input type="number" step="0.5" class="form-control" name="grade" value="${exam ? exam.grade : ''}"></div>
+        <div class="form-group"><label>Estado</label><select class="form-control" name="status">
+            <option value="pending" ${!exam || exam.status === 'pending' ? 'selected' : ''}>Pendiente</option>
+            <option value="passed" ${exam && exam.status === 'passed' ? 'selected' : ''}>Aprobado</option>
+            <option value="failed" ${exam && exam.status === 'failed' ? 'selected' : ''}>Desaprobado</option>
+        </select></div></div>
+    </form>`;
+    openModal(exam ? 'Editar examen' : 'Nuevo examen', html);
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('modalForm'));
+        const data = { subject_id: exam ? exam.subject_id : subjectId,
+            type: f.get('type'), date: f.get('date'), time: f.get('time'),
+            topic: f.get('topic'), grade: parseFloat(f.get('grade')) || null, status: f.get('status') };
+        if (!data.date) { showToast('La fecha es obligatoria'); return; }
+        const res = exam ? await api(eel.update_exam, exam.id, data) : await api(eel.create_exam, data);
+        if (res && res.ok) { showToast(exam ? 'Actualizado' : 'Creado'); closeModal(); navigate('university'); }
+        else showToast('Error');
+    };
+}
+
+function showAssignmentForm(subjectId) {
+    showAssignmentModal(null, subjectId);
+}
+
+function showAssignmentModal(assign, subjectId) {
+    const html = `<form id="modalForm">
+        <div class="form-group"><label>Título *</label><input class="form-control" name="title" value="${esc(assign ? assign.title : '')}"></div>
+        <div class="form-group"><label>Descripción</label><textarea class="form-control" name="description">${esc(assign ? assign.description : '')}</textarea></div>
+        <div class="form-row"><div class="form-group"><label>Entrega</label><input type="date" class="form-control" name="due_date" value="${assign ? assign.due_date : ''}"></div>
+        <div class="form-group"><label>Grupo</label><input class="form-control" name="group_name" value="${esc(assign ? assign.group_name : '')}"></div></div>
+        <div class="form-row"><div class="form-group"><label>Nota</label><input type="number" step="0.5" class="form-control" name="grade" value="${assign ? assign.grade : ''}"></div>
+        <div class="form-group"><label>Estado</label><select class="form-control" name="status">
+            <option value="pending" ${!assign || assign.status === 'pending' ? 'selected' : ''}>Pendiente</option>
+            <option value="submitted" ${assign && assign.status === 'submitted' ? 'selected' : ''}>Entregado</option>
+            <option value="graded" ${assign && assign.status === 'graded' ? 'selected' : ''}>Corregido</option>
+        </select></div></div>
+    </form>`;
+    openModal(assign ? 'Editar TP' : 'Nuevo TP', html);
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('modalForm'));
+        const data = { subject_id: assign ? assign.subject_id : subjectId,
+            title: f.get('title'), description: f.get('description'),
+            due_date: f.get('due_date'), group_name: f.get('group_name'),
+            grade: parseFloat(f.get('grade')) || null, status: f.get('status') };
+        if (!data.title) { showToast('El título es obligatorio'); return; }
+        const res = assign ? await api(eel.update_assignment, assign.id, data) : await api(eel.create_assignment, data);
+        if (res && res.ok) { showToast(assign ? 'Actualizado' : 'Creado'); closeModal(); navigate('university'); }
+        else showToast('Error');
+    };
+}
+
+// ===================== PERSONAL =====================
+async function renderPersonal(el) {
+    const all = await api(eel.get_tasks, 3) || [];
+    const tasks = all.filter(t => t.status !== 'completed');
+    const habits = await api(eel.get_habits) || [];
+    const now = new Date();
+    const logs = await api(eel.get_habit_logs, now.getFullYear()) || [];
+
+    let html = `<div class="page-header">
+        <div><h1>Personal</h1><div class="subtitle">Tareas y hábitos</div></div>
+        <div class="page-actions">
+            <button class="btn btn-primary" onclick="showPersonalTaskForm()">+ Tarea</button>
+            <button class="btn btn-secondary" onclick="showHabitForm()">+ Hábito</button>
+        </div>
+    </div>
+    <div class="two-col">
+        <div class="card"><div class="card-title">Tareas personales</div>`;
+    if (tasks.length === 0) {
+        html += '<div class="empty-state" style="padding:20px"><p>Sin tareas pendientes</p></div>';
+    } else {
+        for (const t of tasks) {
+            html += `<div class="task-item">
+                <div class="task-check" onclick="completeTask(${t.id})"></div>
+                <div class="task-info"><div class="task-title">${esc(t.title)}</div>
+                <div class="task-meta">${fmtDate(t.due_date) || 'Sin fecha'}</div></div>
+                <button class="btn btn-ghost btn-sm" onclick="deleteTask(${t.id})">✕</button>
+            </div>`;
+        }
+    }
+    html += `</div>`;
+
+    // === HABITS + GRAPH ===
+    html += `<div><div class="card"><div class="card-title">Hábitos</div>`;
+    if (habits.length === 0) {
+        html += '<div class="empty-state" style="padding:20px"><p>Sin hábitos</p></div>';
+    } else {
+        for (const h of habits) {
+            const status = await api(eel.get_habit_status, h.id);
+            const done = status && status.done;
+            html += `<div class="habit-item">
+                <div class="habit-check${done ? ' done' : ''}" onclick="toggleHabit(${h.id})"></div>
+                <div class="habit-name">${esc(h.name)}</div>
+                <div class="habit-streak">🔥 ${h.streak || 0} días</div>
+                <button class="btn btn-ghost btn-sm" onclick="deleteHabit(${h.id})">✕</button>
+            </div>`;
+        }
+        html += buildHabitGraph(logs, habits.length);
+    }
+    html += '</div>';
+
+    html += '</div></div>';
+
+    el.innerHTML = html;
+}
+
+// ===================== HEALTH =====================
+async function renderHealth(el) {
+    const injections = await api(eel.get_injections) || [];
+    const measurements = await api(eel.get_body_measurements) || [];
+    const proj = await api(eel.get_estradiol_projection) || {};
+
+    const tabs = ['injections', 'measurements'];
+    const labels = ['Inyecciones', 'Medidas'];
+    const tab = state.healthTab || 'injections';
+
+    let html = `<div class="page-header">
+        <div><h1>Salud</h1><div class="subtitle">Transición · bienestar</div></div>
+    </div>
+    <div class="subnav">`;
+    tabs.forEach(t => {
+        html += `<button class="subnav-item${tab === t ? ' active' : ''}" onclick="switchHealthTab('${t}')">${labels[tabs.indexOf(t)]}</button>`;
+    });
+    html += '</div><div id="healthContent"></div>';
+    el.innerHTML = html;
+
+    const content = el.querySelector('#healthContent');
+    if (tab === 'injections') renderHealthInjections(content, injections, proj);
+    else if (tab === 'measurements') renderHealthMeasurements(content, measurements);
+}
+
+function switchHealthTab(t) {
+    state.healthTab = t;
+    navigate('health');
+}
+
+// --- HEALTH: INJECTIONS ---
+function renderHealthInjections(el, injections, proj) {
+    let html = '';
+
+    // Reminder card
+    if (injections.length > 0) {
+        const ds = proj.days_since_last;
+        const nd = proj.next_dose_days;
+        let statusIcon, statusText, statusColor;
+        if (ds <= 7) {
+            statusIcon = '✅';
+            statusText = `Al día · próxima en ${nd > 0 ? nd + ' días' : 'hoy'}`;
+            statusColor = 'var(--sage)';
+        } else if (ds <= 10) {
+            statusIcon = '⚠️';
+            statusText = `Hace ${ds} días · atrasada ${ds - 7} días`;
+            statusColor = 'var(--gold)';
+        } else {
+            statusIcon = '🔴';
+            statusText = `Hace ${ds} días · muy atrasada`;
+            statusColor = 'var(--rose)';
+        }
+        html += `<div class="card" style="margin-bottom:14px;padding:14px 18px;border-left:4px solid ${statusColor}">
+            <div style="display:flex;align-items:center;gap:12px">
+                <span style="font-size:1.5rem">${statusIcon}</span>
+                <div>
+                    <div style="font-size:0.85rem;font-weight:500">${statusText}</div>
+                    <div style="font-size:0.8rem;color:var(--text-muted)">Enantato de estradiol · 4 mg/semana · IM</div>
+                </div>
+                <div style="margin-left:auto;text-align:right">
+                    <div style="font-size:0.8rem;color:var(--text-muted)">Última: ${fmtDate(injections[0].date)}</div>
+                </div>
+            </div>
+        </div>`;
+
+        // Estradiol chart
+        if (proj.days && proj.levels && proj.levels.length > 0) {
+            html += `<div class="card" style="margin-bottom:14px">
+                <div class="card-title">Estradiol estimado (E₂)</div>
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:8px">
+                    Modelo farmacocinético de 1 compartimento · Solo referencia · Vía SC
+                    ${proj.next_dose_date ? '· Próxima dosis estimada: ' + fmtDate(proj.next_dose_date) : ''}
+                </div>
+                <div id="estradiolRangeBtns" style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap"></div>
+                <canvas id="estradiolChart" style="width:100%;height:220px"></canvas>
+            </div>`;
+        }
+    }
+
+    // Add button
+    html += `<div style="display:flex;justify-content:flex-end;margin-bottom:14px">
+        <button class="btn btn-primary" onclick="showInjectionForm()">+ Registrar inyección</button>
+    </div>`;
+
+    if (injections.length === 0) {
+        html += '<div class="empty-state"><div class="empty-icon">💉</div><h3>Sin registros</h3><p>Registra tu primera inyección</p></div>';
+        el.innerHTML = html;
+        return;
+    }
+
+    html += '<div class="table-wrap" style="max-height:300px;overflow-y:auto"><table><thead><tr><th>Fecha</th><th>Dosis</th><th>Zona</th><th>Notas</th><th></th></tr></thead><tbody>';
+    for (const inj of injections) {
+        const daysAgo = daysUntil(inj.date);
+        const badge = daysAgo !== null && daysAgo > -7 ? '<span class="tag tag-sage" style="margin-left:6px">Reciente</span>' :
+                     daysAgo !== null && daysAgo <= -7 && daysAgo > -14 ? '' :
+                     daysAgo !== null && daysAgo <= -14 ? '<span class="tag tag-rose" style="margin-left:6px">Hace +14d</span>' : '';
+        html += `<tr><td><strong>${fmtDate(inj.date)}</strong>${badge}</td>
+            <td>${inj.dose_mg} mg</td>
+            <td style="color:var(--text-muted);font-size:0.85rem">${esc(inj.injection_site || '-')}</td>
+            <td style="color:var(--text-muted);font-size:0.85rem">${esc(inj.notes || '-')}</td>
+            <td style="text-align:right"><button class="btn btn-ghost btn-sm" onclick="deleteInjection(${inj.id})">✕</button></td></tr>`;
+    }
+    html += '</tbody></table></div>';
+    el.innerHTML = html;
+
+    // Build range selector buttons
+    const rangeBtns = document.getElementById('estradiolRangeBtns');
+    if (rangeBtns) {
+        const ranges = [
+            {days:30,label:'1 mes'}, {days:90,label:'3 meses'},
+            {days:180,label:'6 meses'}, {days:365,label:'1 a\u00f1o'}, {days:0,label:'Todo'}
+        ];
+        rangeBtns.innerHTML = ranges.map(r =>
+            '<button class="btn btn-ghost btn-sm chart-range-btn'+(state.estradiolRange===r.days?' active':'')+'" onclick="setEstradiolRange('+r.days+')">'+r.label+'</button>'
+        ).join('');
+    }
+
+    // Draw estradiol chart after render
+    if (proj.days && proj.levels && proj.levels.length > 0) {
+        drawEstradiolChart(proj);
+    }
+}
+
+function setupCanvas(canvas) {
+    const rect = canvas.parentElement.getBoundingClientRect();
+    const w = rect.width || 700;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = w * dpr;
+    canvas.height = 220 * dpr;
+    canvas.style.width = w + 'px';
+    canvas.style.height = '220px';
+    const ctx = canvas.getContext('2d');
+    ctx.scale(dpr, dpr);
+    return { ctx, W: w, H: 220 };
+}
+
+function drawEstradiolChart(proj) {
+    setTimeout(() => {
+        const canvas = document.getElementById('estradiolChart');
+        if (!canvas) return;
+
+        // Filter by selected range
+        let range = state.estradiolRange || 365;
+        const todayStr = new Date().toISOString().split('T')[0];
+        let filteredDays = proj.days;
+        let filteredLevels = proj.levels;
+        if (range > 0 && proj.days && proj.days.length > 0) {
+            const cutDate = new Date();
+            cutDate.setDate(cutDate.getDate() - range);
+            const cutStr = cutDate.toISOString().split('T')[0];
+            const idx = proj.days.findIndex(d => d >= cutStr);
+            if (idx > 0) {
+                filteredDays = proj.days.slice(idx);
+                filteredLevels = proj.levels.slice(idx);
+            }
+        }
+        const tooltip = document.getElementById('chartTooltip') || (() => {
+            const el = document.createElement('div');
+            el.id = 'chartTooltip';
+            el.style.cssText = 'position:absolute;background:#fff;border:1px solid #ddd;border-radius:6px;padding:4px 8px;font-size:0.8rem;pointer-events:none;display:none;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,0.1)';
+            canvas.parentElement.style.position = 'relative';
+            canvas.parentElement.appendChild(el);
+            return el;
+        })();
+
+        const setupSc = setupCanvas(canvas);
+        const ctx = setupSc.ctx;
+        const dpr = setupSc.dpr;
+        const W = setupSc.W, H = setupSc.H;
+        const PAD = { top: 16, bottom: 24, left: 40, right: 30 };
+        const plotW = W - PAD.left - PAD.right;
+        const plotH = H - PAD.top - PAD.bottom;
+
+        const data = filteredLevels;
+        const count = data.length;
+        if (count < 2) return;
+
+        const todayIdx = filteredDays.findIndex(d => d >= todayStr);
+        const futureIdx = filteredDays.findIndex(d => d >= todayStr);
+
+        let min = 0, max = Math.max(...data) * 1.15;
+        if (max < 10) max = 200;
+
+        drawEstradiolChartFull(ctx, dpr, filteredDays, data, max, min, count, futureIdx, todayIdx, PAD, W, H, plotW, plotH, proj);
+
+        // Tooltip on hover
+        canvas.onmousemove = function(e) {
+            const r = this.getBoundingClientRect();
+            const mx = e.clientX - r.left;
+            if (mx < PAD.left || mx > W - PAD.right) {
+                tooltip.style.display = 'none';
+                drawEstradiolChartFull(ctx, dpr, filteredDays, data, max, min, count, futureIdx, todayIdx, PAD, W, H, plotW, plotH, proj);
+                return;
+            }
+            const i = Math.round((mx - PAD.left) / plotW * (count - 1));
+            if (i < 0 || i >= count) {
+                tooltip.style.display = 'none';
+                drawEstradiolChartFull(ctx, dpr, filteredDays, data, max, min, count, futureIdx, todayIdx, PAD, W, H, plotW, plotH, proj);
+                return;
+            }
+            const x = PAD.left + plotW * (i / (count - 1));
+            const y = PAD.top + plotH * (1 - (data[i] / max));
+            drawEstradiolChartFull(ctx, dpr, filteredDays, data, max, min, count, futureIdx, todayIdx, PAD, W, H, plotW, plotH, proj);
+            ctx.beginPath();
+            ctx.arc(x, y, 4, 0, 2 * Math.PI);
+            ctx.fillStyle = '#E85D75';
+            ctx.fill();
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            tooltip.style.display = 'block';
+            tooltip.style.left = Math.min(x + 12, W - 80) + 'px';
+            tooltip.style.top = y - 24 + 'px';
+            tooltip.textContent = data[i].toFixed(1) + ' pg/mL — ' + filteredDays[i];
+        };
+        canvas.onmouseleave = function() {
+            tooltip.style.display = 'none';
+            drawEstradiolChartFull(ctx, dpr, filteredDays, data, max, min, count, futureIdx, todayIdx, PAD, W, H, plotW, plotH, proj);
+        };
+    }, 50);
+}
+
+function drawEstradiolChartFull(ctx, dpr, filteredDays, data, max, min, count, futureIdx, todayIdx, PAD, W, H, plotW, plotH, proj) {
+    ctx.clearRect(0, 0, W, H);
+    ctx.strokeStyle = '#F0E6E2';
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 4; i++) {
+        const y = PAD.top + plotH * (1 - i/4);
+        ctx.beginPath();
+        ctx.moveTo(PAD.left, y);
+        ctx.lineTo(W - PAD.right, y);
+        ctx.stroke();
+        const val = min + max * (i/4);
+        ctx.fillStyle = '#9C8B8D';
+        ctx.font = '9px Outfit';
+        ctx.textAlign = 'right';
+        ctx.fillText(Math.round(val) + '', PAD.left - 4, y + 3);
+    }
+    const rangeLow = Math.max(0, Math.min(1, (100 - min) / max));
+    const rangeHigh = Math.max(0, Math.min(1, (250 - min) / max));
+    ctx.fillStyle = 'rgba(212, 224, 212, 0.15)';
+    const yLow = PAD.top + plotH * (1 - rangeLow);
+    const yHigh = PAD.top + plotH * (1 - rangeHigh);
+    ctx.fillRect(PAD.left, yHigh, plotW, yLow - yHigh);
+    if (futureIdx > 0 && futureIdx < count) {
+        ctx.fillStyle = 'rgba(240, 230, 226, 0.4)';
+        const xFuture = PAD.left + plotW * (futureIdx / (count - 1));
+        ctx.fillRect(xFuture, PAD.top, W - PAD.right - xFuture, plotH);
+        ctx.fillStyle = '#9C8B8D';
+        ctx.font = '8px Outfit';
+        ctx.textAlign = 'center';
+        ctx.fillText('\u2b05 pasado', xFuture, H - 4);
+    }
+    ctx.strokeStyle = '#FFB7B2';
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    data.forEach((v, i) => {
+        const x = PAD.left + plotW * (i / (count - 1));
+        const y = PAD.top + plotH * (1 - (v / max));
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    ctx.lineTo(PAD.left + plotW, PAD.top + plotH);
+    ctx.lineTo(PAD.left, PAD.top + plotH);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(255, 183, 178, 0.1)';
+    ctx.fill();
+    const lastDoseIdx = filteredDays.indexOf(proj.last_dose_date);
+    if (lastDoseIdx >= 0 && lastDoseIdx < count) {
+        const x = PAD.left + plotW * (lastDoseIdx / (count - 1));
+        const y = PAD.top + plotH * (1 - (data[lastDoseIdx] / max));
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.fillStyle = '#FFB7B2';
+        ctx.fill();
+        ctx.fillStyle = '#FFB7B2';
+        ctx.font = '8px Outfit';
+        ctx.textAlign = 'center';
+        ctx.fillText('\ud83d\udc89', x, y - 8);
+    }
+    if (todayIdx >= 0 && todayIdx < count) {
+        const x = PAD.left + plotW * (todayIdx / (count - 1));
+        ctx.beginPath();
+        ctx.moveTo(x, PAD.top);
+        ctx.lineTo(x, PAD.top + plotH);
+        ctx.strokeStyle = 'rgba(45,35,39,0.15)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+    ctx.fillStyle = '#9C8B8D';
+    ctx.font = '8px Outfit';
+    ctx.textAlign = 'center';
+    ctx.fillText('pg/mL', 14, 12);
+    ctx.fillStyle = 'rgba(100, 140, 100, 0.5)';
+    ctx.font = '8px Outfit';
+    ctx.textAlign = 'left';
+    ctx.fillText('Rango terap\u00e9utico 100-250', PAD.left + 4, 12);
+}
+
+function setEstradiolRange(days) {
+    state.estradiolRange = days;
+    // Re-render health tab
+    navigate('health');
+}
+
+// --- HEALTH: MEASUREMENTS WITH CHART ---
+function renderHealthMeasurements(el, measurements) {
+    let html = `<div style="display:flex;justify-content:flex-end;margin-bottom:14px">
+        <button class="btn btn-primary" onclick="showMeasurementForm()">+ Registrar medidas</button>
+    </div>`;
+    if (measurements.length === 0) {
+        html += '<div class="empty-state"><div class="empty-icon">📏</div><h3>Sin medidas</h3><p>Registra tu peso y medidas corporales</p></div>';
+        el.innerHTML = html;
+        return;
+    }
+
+    html += `<div class="card" style="margin-bottom:14px">
+        <div class="card-title">Evolución</div>
+        <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">`;
+    const metrics = [
+        {key:'weight',label:'Peso (kg)',color:'#FFB7B2'},
+        {key:'bust_cm',label:'Busto (cm)',color:'#D4A0D4'},
+        {key:'waist_cm',label:'Cintura (cm)',color:'#D4E0D4'},
+        {key:'hips_cm',label:'Cadera (cm)',color:'#A0C4D4'},
+    ];
+    metrics.forEach(m => {
+        html += `<label style="font-size:0.8rem;display:flex;align-items:center;gap:4px;cursor:pointer">
+            <input type="checkbox" class="metric-toggle" data-key="${m.key}" data-color="${m.color}" checked> ${m.label}
+        </label>`;
+    });
+    html += `</div>
+        <canvas id="measurementChart" style="width:100%;height:220px"></canvas>
+    </div>`;
+
+    // Table of measurements
+    html += '<div class="table-wrap" style="max-height:300px;overflow-y:auto"><table><thead><tr><th>Fecha</th><th>Peso</th><th>Busto</th><th>Cintura</th><th>Cadera</th><th></th></tr></thead><tbody>';
+    const reversed = [...measurements].reverse();
+    for (const m of reversed) {
+        html += `<tr><td><strong>${fmtDate(m.date)}</strong></td>
+            <td>${m.weight ? m.weight+' kg' : '-'}</td>
+            <td>${m.bust_cm ? m.bust_cm+' cm' : '-'}</td>
+            <td>${m.waist_cm ? m.waist_cm+' cm' : '-'}</td>
+            <td>${m.hips_cm ? m.hips_cm+' cm' : '-'}</td>
+            <td style="text-align:right"><button class="btn btn-ghost btn-sm" onclick="deleteMeasurement(${m.id})">✕</button></td></tr>`;
+    }
+    html += '</tbody></table></div>';
+    el.innerHTML = html;
+
+    // Draw chart after element is rendered
+    drawMeasurementChart(measurements, metrics);
+}
+
+function drawMeasurementChart(data, metrics) {
+    setTimeout(() => {
+        const canvas = document.getElementById('measurementChart');
+        if (!canvas) return;
+        const setup = setupCanvas(canvas);
+        const ctx = setup.ctx;
+        const W = setup.W, H = setup.H;
+        const PAD = { top: 20, bottom: 30, left: 45, right: 20 };
+        const plotW = W - PAD.left - PAD.right;
+        const plotH = H - PAD.top - PAD.bottom;
+
+        ctx.clearRect(0, 0, W, H);
+
+        // Find selected metrics
+        const toggles = document.querySelectorAll('.metric-toggle:checked');
+        const active = Array.from(toggles).map(t => ({
+            key: t.dataset.key,
+            color: t.dataset.color,
+        }));
+        if (active.length === 0 || data.length < 2) {
+            ctx.fillStyle = '#9C8B8D';
+            ctx.font = '14px Outfit';
+            ctx.textAlign = 'center';
+            ctx.fillText(active.length === 0 ? 'Seleccioná una métrica' : 'Se necesitan al menos 2 registros', W/2, H/2);
+            return;
+        }
+
+        // Find value range
+        let min = Infinity, max = -Infinity;
+        for (const m of active) {
+            for (const d of data) {
+                const v = parseFloat(d[m.key]);
+                if (!isNaN(v)) { min = Math.min(min, v); max = Math.max(max, v); }
+            }
+        }
+        if (min === Infinity) return;
+        const range = max - min || 1; // Prevent division by zero
+        const pad = range * 0.1;
+
+        // X axis: dates as indices
+        const count = data.length;
+
+        // Draw grid lines
+        ctx.strokeStyle = '#F0E6E2';
+        ctx.lineWidth = 1;
+        for (let i = 0; i <= 4; i++) {
+            const y = PAD.top + plotH * (1 - i/4);
+            ctx.beginPath();
+            ctx.moveTo(PAD.left, y);
+            ctx.lineTo(W - PAD.right, y);
+            ctx.stroke();
+            const val = (min - pad) + (range + 2*pad) * (i/4);
+            ctx.fillStyle = '#9C8B8D';
+            ctx.font = '10px Outfit';
+            ctx.textAlign = 'right';
+            ctx.fillText(val.toFixed(1), PAD.left - 6, y + 3);
+        }
+
+        // Draw lines for each metric
+        active.forEach((m, mi) => {
+            const pts = [];
+            for (let i = 0; i < count; i++) {
+                const v = parseFloat(data[i][m.key]);
+                if (isNaN(v)) continue;
+                const x = PAD.left + plotW * (i / Math.max(count - 1, 1));
+                const y = PAD.top + plotH * (1 - (v - (min - pad)) / (range + 2*pad));
+                pts.push({x, y});
+            }
+            if (pts.length < 2) return;
+
+            // Shadow
+            ctx.strokeStyle = m.color;
+            ctx.lineWidth = 2.5;
+            ctx.lineJoin = 'round';
+            ctx.beginPath();
+            pts.forEach((p, pi) => {
+                if (pi === 0) ctx.moveTo(p.x, p.y);
+                else ctx.lineTo(p.x, p.y);
+            });
+            ctx.stroke();
+
+            // Dots
+            pts.forEach(p => {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+                ctx.fillStyle = m.color;
+                ctx.fill();
+            });
+
+            // Label at last point
+            const last = pts[pts.length - 1];
+            ctx.fillStyle = m.color;
+            ctx.font = '10px Outfit';
+            ctx.textAlign = 'left';
+            ctx.fillText(m.label, last.x + 6, last.y + 3);
+        });
+
+        // X labels (show every few dates)
+        ctx.fillStyle = '#9C8B8D';
+        ctx.font = '9px Outfit';
+        ctx.textAlign = 'center';
+        const step = Math.max(1, Math.floor(count / 8));
+        for (let i = 0; i < count; i += step) {
+            const x = PAD.left + plotW * (i / Math.max(count - 1, 1));
+            const label = data[i].date ? data[i].date.slice(5) : '';
+            ctx.fillText(label, x, H - 6);
+        }
+
+        // Re-draw on toggle change
+        document.querySelectorAll('.metric-toggle').forEach(t => {
+            t.onchange = () => drawMeasurementChart(data, metrics);
+        });
+    }, 50);
+}
+
+function showMeasurementForm() {
+    const html = `<form id="modalForm">
+        <div class="form-group"><label>Fecha *</label><input type="date" class="form-control" name="date" value="${todayStr()}"></div>
+        <div class="form-row"><div class="form-group"><label>Peso (kg)</label><input type="number" step="0.1" class="form-control" name="weight"></div>
+        <div class="form-group"><label>Busto (cm)</label><input type="number" step="0.5" class="form-control" name="bust_cm"></div></div>
+        <div class="form-row"><div class="form-group"><label>Cintura (cm)</label><input type="number" step="0.5" class="form-control" name="waist_cm"></div>
+        <div class="form-group"><label>Cadera (cm)</label><input type="number" step="0.5" class="form-control" name="hips_cm"></div></div>
+        <div class="form-row"><div class="form-group"><label>Muslo (cm)</label><input type="number" step="0.5" class="form-control" name="thigh_cm"></div>
+        <div class="form-group"><label>Brazo (cm)</label><input type="number" step="0.5" class="form-control" name="arm_cm"></div></div>
+        <div class="form-group"><label>Notas</label><textarea class="form-control" name="notes" placeholder="Ej: después de la dosis semanal..."></textarea></div>
+    </form>`;
+    openModal('Registrar medidas', html);
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('modalForm'));
+        const data = { date: f.get('date'), weight: parseFloat(f.get('weight')) || null,
+            bust_cm: parseFloat(f.get('bust_cm')) || null, waist_cm: parseFloat(f.get('waist_cm')) || null,
+            hips_cm: parseFloat(f.get('hips_cm')) || null, thigh_cm: parseFloat(f.get('thigh_cm')) || null,
+            arm_cm: parseFloat(f.get('arm_cm')) || null, notes: f.get('notes') };
+        if (!data.date) { showToast('La fecha es obligatoria'); return; }
+        const res = await api(eel.create_body_measurement, data);
+        if (res && res.ok) { showToast('Registrado'); closeModal(); navigate('health'); }
+        else showToast('Error');
+    };
+}
+
+async function deleteMeasurement(id) {
+    if (!confirm('¿Eliminar este registro?')) return;
+    await api(eel.delete_body_measurement, id);
+    showToast('Eliminado');
+    navigate('health');
+}
+
+function buildHabitGraph(logs, habitCount) {
+    const now = new Date();
+    const start = new Date(now.getFullYear(), 0, 1);
+    const end = new Date(now.getFullYear(), 11, 31);
+    const dayCount = Math.ceil((end - start) / 86400000) + 1;
+
+    const logMap = {};
+    for (const l of logs) {
+        if (!logMap[l.date]) logMap[l.date] = 0;
+        logMap[l.date]++;
+    }
+
+    const weeks = [];
+    let currentWeek = [];
+    // Pad before Jan 1
+    const firstDow = start.getDay();
+    for (let i = 0; i < firstDow; i++) currentWeek.push(null);
+
+    for (let d = 0; d < dayCount; d++) {
+        const dt = new Date(start);
+        dt.setDate(start.getDate() + d);
+        const key = dt.toISOString().split('T')[0];
+        const count = logMap[key] || 0;
+        const level = habitCount > 0 ? Math.min(Math.floor(count / habitCount * 4), 4) : 0;
+        currentWeek.push(level);
+        if (currentWeek.length === 7) {
+            weeks.push(currentWeek);
+            currentWeek = [];
+        }
+    }
+    if (currentWeek.length > 0) weeks.push(currentWeek);
+
+    const months = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Set','Oct','Nov','Dic'];
+    const monthLabels = [];
+    let lastMonth = -1;
+    weeks.forEach((week, wi) => {
+        const firstDay = week.findIndex(d => d !== null);
+        if (firstDay >= 0) {
+            const m = new Date(start.getTime() + wi * 7 * 86400000 + firstDay * 86400000).getMonth();
+            if (m !== lastMonth) {
+                monthLabels.push({ month: months[m], col: wi });
+                lastMonth = m;
+            }
+        }
+    });
+
+    const colors = ['var(--bg-card)', '#e8f5e9', '#a5d6a7', '#66bb6a', '#2e7d32'];
+    let html = `<div class="habit-graph" style="margin-top:16px">
+        <div style="font-size:0.75rem;font-weight:600;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">Registro anual</div>
+        <div style="display:flex;gap:2px;overflow-x:auto;padding-bottom:4px">`;
+    monthLabels.forEach(ml => {
+        html += `<div style="font-size:0.6rem;color:var(--text-light);width:0;position:relative;left:${ml.col * 12}px">${ml.month}</div>`;
+    });
+    html += '</div><div style="display:flex;gap:2px">';
+    for (const week of weeks) {
+        html += '<div style="display:flex;flex-direction:column;gap:2px">';
+        for (const day of week) {
+            const color = day === null ? 'transparent' : colors[day];
+            html += `<div style="width:10px;height:10px;border-radius:2px;background:${color}"></div>`;
+        }
+        html += '</div>';
+    }
+    html += '</div></div>';
+    return html;
+}
+
+function showInjectionForm() {
+    const sites = ['Glúteo derecho', 'Glúteo izquierdo', 'Muslo derecho', 'Muslo izquierdo', 'Abdomen', 'Otro'];
+    const siteOpts = sites.map(s => `<option value="${s}">${s}</option>`).join('');
+    const html = `<form id="modalForm">
+        <div class="form-group"><label>Fecha *</label><input type="date" class="form-control" name="date" value="${todayStr()}"></div>
+        <div class="form-row"><div class="form-group"><label>Dosis (mg) *</label><input type="number" step="0.5" class="form-control" name="dose_mg" value="4.0"></div>
+        <div class="form-group"><label>Zona</label><select class="form-control" name="injection_site">${siteOpts}</select></div></div>
+        <div class="form-group"><label>Notas</label><textarea class="form-control" name="notes" placeholder="Ej: 1/2 aguja, sin dolor..."></textarea></div>
+    </form>`;
+    openModal('Registrar inyección', html);
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('modalForm'));
+        const data = { date: f.get('date'), dose_mg: parseFloat(f.get('dose_mg')) || 4.0, injection_site: f.get('injection_site') || null, notes: f.get('notes') };
+        if (!data.date) { showToast('La fecha es obligatoria'); return; }
+        const res = await api(eel.create_injection, data);
+        if (res && res.ok) { showToast('Registrada'); closeModal(); navigate('health'); }
+        else showToast('Error');
+    };
+}
+
+async function deleteInjection(id) {
+    if (!confirm('¿Eliminar este registro?')) return;
+    const res = await api(eel.delete_injection, id);
+    if (res && res.ok) { showToast('Eliminado'); navigate('health'); }
+}
+
+function showPersonalTaskForm() {
+    const html = `<form id="modalForm">
+        <div class="form-group"><label>Título *</label><input class="form-control" name="title"></div>
+        <div class="form-group"><label>Fecha</label><input type="date" class="form-control" name="due_date" value="${todayStr()}"></div>
+        <div class="form-group"><label>Descripción</label><textarea class="form-control" name="description"></textarea></div>
+    </form>`;
+    openModal('Nueva tarea personal', html);
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('modalForm'));
+        const data = { area_id: 3, title: f.get('title'), due_date: f.get('due_date'), description: f.get('description') };
+        if (!data.title) { showToast('El título es obligatorio'); return; }
+        const res = await api(eel.create_task, data);
+        if (res && res.ok) { showToast('Creada'); closeModal(); navigate('personal'); }
+        else showToast('Error');
+    };
+}
+
+function showHabitForm() {
+    const html = `<form id="modalForm">
+        <div class="form-group"><label>Nombre del hábito *</label><input class="form-control" name="name"></div>
+    </form>`;
+    openModal('Nuevo hábito', html);
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('modalForm'));
+        const name = f.get('name');
+        if (!name) { showToast('El nombre es obligatorio'); return; }
+        const res = await api(eel.create_habit, { name });
+        if (res && res.ok) { showToast('Creado'); closeModal(); navigate('personal'); }
+        else showToast('Error');
+    };
+}
+
+async function toggleHabit(id) {
+    await api(eel.toggle_habit_today, id);
+    navigate('personal');
+}
+
+async function deleteHabit(id) {
+    if (!confirm('¿Eliminar este hábito?')) return;
+    await api(eel.delete_habit, id);
+    showToast('Eliminado');
+    navigate('personal');
+}
+
+// ===================== PRINT 3D =====================
+const STATUS_CYCLE = ['pending', 'printing', 'done', 'delivered'];
+const STATUS_LABELS = { pending:'Pendiente', printing:'Imprimiendo', done:'Terminado', delivered:'Entregado' };
+const STATUS_CLASSES = { pending:'tag-gold', printing:'tag-primary', done:'tag-sage', delivered:'tag-lavender' };
+
+async function renderPrint3D(el) {
+    const orders = await api(eel.get_print_orders) || [];
+    let html = `<div class="page-header">
+        <div><h1>Impresiones 3D</h1><div class="subtitle">Micro negocio · pedidos</div></div>
+        <div class="page-actions"><button class="btn btn-primary" onclick="showPrintOrderForm()">+ Nuevo pedido</button></div>
+    </div>`;
+    if (orders.length === 0) {
+        html += '<div class="empty-state"><div class="empty-icon">🖨️</div><h3>Sin pedidos</h3><p>Registra tu primer pedido de impresión 3D</p></div>';
+    } else {
+        html += '<div class="table-wrap"><table><thead><tr><th>Cliente</th><th>Pieza</th><th>Material</th><th>Cant.</th><th>Total</th><th>Entrega</th><th>Estado</th><th></th></tr></thead><tbody>';
+        for (const o of orders) {
+            const s = {label:STATUS_LABELS[o.status] || o.status, cls:STATUS_CLASSES[o.status] || 'tag-primary'};
+            html += `<tr>
+                <td><strong>${esc(o.customer_name)}</strong></td>
+                <td>${esc(o.piece_name)}</td>
+                <td>${esc(o.material || '-')}${o.color ? ' / '+esc(o.color) : ''}</td>
+                <td>${o.quantity}</td>
+                <td>$ ${(o.price || 0).toFixed(2)}</td>
+                <td>${fmtDate(o.delivery_date)}</td>
+                <td><span class="tag ${s.cls}" style="cursor:pointer" onclick="cyclePrintStatus(${o.id})" title="Click para cambiar estado">${s.label}</span></td>
+                <td style="text-align:right;white-space:nowrap">
+                    <button class="btn btn-ghost btn-sm" onclick="showPrintOrderForm(${o.id})">✎</button>
+                    <button class="btn btn-ghost btn-sm" onclick="deletePrintOrder(${o.id})">✕</button>
+                </td>
+            </tr>`;
+        }
+        html += '</tbody></table></div>';
+    }
+    el.innerHTML = html;
+}
+
+async function cyclePrintStatus(id) {
+    const orders = await api(eel.get_print_orders);
+    const o = orders.find(x => x.id === id);
+    if (!o) return;
+    const idx = STATUS_CYCLE.indexOf(o.status);
+    const nextStatus = idx >= 0 ? STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length] : 'pending';
+    // Fetch full order data to preserve all fields
+    const full = orders.find(x => x.id === id);
+    if (!full) return;
+    const data = {
+        customer_name: full.customer_name, piece_name: full.piece_name,
+        material: full.material, color: full.color, quantity: full.quantity,
+        price: full.price, filament_grams: full.filament_grams,
+        print_hours: full.print_hours, order_date: full.order_date,
+        delivery_date: full.delivery_date, status: nextStatus, notes: full.notes
+    };
+    const res = await api(eel.update_print_order, id, data);
+    if (res && res.ok) { showToast('Estado: ' + STATUS_LABELS[nextStatus]); navigate('print3d'); }
+}
+
+function showPrintOrderForm(id) {
+    if (id) {
+        api(eel.get_print_orders).then(orders => {
+            const o = orders.find(x => x.id === id);
+            if (o) showPrintOrderModal(o);
+        });
+    } else showPrintOrderModal(null);
+}
+
+function showPrintOrderModal(order) {
+    const materials = ['PLA','ABS','PETG','TPU','Resina','Otro'];
+    const matOpts = materials.map(m =>
+        `<option value="${m}" ${order && order.material === m ? 'selected' : ''}>${m}</option>`
+    ).join('');
+    const isEdit = !!order;
+
+    // Get config and render form
+    api(eel.get_all_config).then(config => {
+        config = config || {};
+        const perGram = parseFloat(config.print3d_price_per_gram) || 1.5;
+        const perHour = parseFloat(config.print3d_price_per_hour) || 5.0;
+
+        const html = `<form id="modalForm">
+            <div class="form-row"><div class="form-group"><label>Cliente *</label><input class="form-control" name="customer_name" value="${esc(order ? order.customer_name : '')}"></div>
+            <div class="form-group"><label>Pieza *</label><input class="form-control" name="piece_name" value="${esc(order ? order.piece_name : '')}"></div></div>
+            <div class="form-row">
+                <div class="form-group"><label>Material</label><select class="form-control" name="material">${matOpts}</select></div>
+                <div class="form-group"><label>Color</label><input class="form-control" name="color" value="${esc(order ? order.color : '')}"></div>
+            </div>
+            <div class="form-row">
+                <div class="form-group"><label>Cantidad</label><input type="number" class="form-control" name="quantity" value="${order ? order.quantity : 1}"></div>
+                <div class="form-group"><label>Precio $</label><input type="number" step="0.01" class="form-control" name="price" id="printPrice" value="${order ? order.price : ''}"></div>
+            </div>
+            <div class="form-row">
+                <div class="form-group"><label>Gramos filamento</label><input type="number" class="form-control" name="filament_grams" id="printGrams" value="${order ? order.filament_grams : ''}" onchange="calcPrintPrice(${perGram}, ${perHour})" onkeyup="calcPrintPrice(${perGram}, ${perHour})"></div>
+                <div class="form-group"><label>Horas impresión</label><input type="number" step="0.5" class="form-control" name="print_hours" id="printHours" value="${order ? order.print_hours : ''}" onchange="calcPrintPrice(${perGram}, ${perHour})" onkeyup="calcPrintPrice(${perGram}, ${perHour})"></div>
+            </div>
+            <div style="font-size:0.8rem;color:var(--text-muted);margin:-8px 0 12px;text-align:right">
+                Precio ref: $${perGram.toFixed(2)}/g · $${perHour.toFixed(2)}/h
+                <button type="button" class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="calcPrintPrice(${perGram}, ${perHour})">Calcular</button>
+            </div>
+            <div class="form-row">
+                <div class="form-group"><label>Fecha pedido</label><input type="date" class="form-control" name="order_date" value="${order ? order.order_date : todayStr()}"></div>
+                <div class="form-group"><label>Fecha entrega</label><input type="date" class="form-control" name="delivery_date" value="${order ? order.delivery_date : ''}"></div>
+            </div>
+            <div class="form-group"><label>Estado</label><select class="form-control" name="status">
+                <option value="pending" ${!order || order.status === 'pending' ? 'selected' : ''}>Pendiente</option>
+                <option value="printing" ${order && order.status === 'printing' ? 'selected' : ''}>Imprimiendo</option>
+                <option value="done" ${order && order.status === 'done' ? 'selected' : ''}>Terminado</option>
+                <option value="delivered" ${order && order.status === 'delivered' ? 'selected' : ''}>Entregado</option>
+            </select></div>
+            <div class="form-group"><label>Notas</label><textarea class="form-control" name="notes">${esc(order ? order.notes : '')}</textarea></div>
+        </form>`;
+        openModal(order ? 'Editar pedido' : 'Nuevo pedido', html);
+        if (!order && perGram && perHour) setTimeout(() => calcPrintPrice(perGram, perHour), 100);
+        document.getElementById('modalSave').onclick = async () => {
+            const f = new FormData(document.getElementById('modalForm'));
+            const data = {
+                customer_name: f.get('customer_name'), piece_name: f.get('piece_name'),
+                material: f.get('material'), color: f.get('color'),
+                quantity: parseInt(f.get('quantity')) || 1, price: parseFloat(f.get('price')) || 0,
+                filament_grams: parseFloat(f.get('filament_grams')) || null,
+                print_hours: parseFloat(f.get('print_hours')) || null,
+                order_date: f.get('order_date'), delivery_date: f.get('delivery_date'),
+                status: f.get('status'), notes: f.get('notes')
+            };
+            if (!data.customer_name || !data.piece_name) { showToast('Cliente y pieza son obligatorios'); return; }
+            const res = order ? await api(eel.update_print_order, order.id, data) : await api(eel.create_print_order, data);
+            if (res && res.ok) { showToast(order ? 'Actualizado' : 'Creado'); closeModal(); navigate('print3d'); }
+            else showToast('Error');
+        };
+    });
+}
+
+function calcPrintPrice(perGram, perHour) {
+    const grams = parseFloat(document.getElementById('printGrams').value) || 0;
+    const hours = parseFloat(document.getElementById('printHours').value) || 0;
+    const price = grams * perGram + hours * perHour;
+    document.getElementById('printPrice').value = price > 0 ? price.toFixed(2) : '';
+}
+
+async function deletePrintOrder(id) {
+    if (!confirm('¿Eliminar este pedido?')) return;
+    const res = await api(eel.delete_print_order, id);
+    if (res && res.ok) { showToast('Eliminado'); navigate('print3d'); }
+}
+
+// ===================== SETTINGS =====================
+async function renderSettings(el) {
+    const config = await api(eel.get_all_config) || {};
+    const perGram = config.print3d_price_per_gram || '1.5';
+    const perHour = config.print3d_price_per_hour || '5.0';
+
+    el.innerHTML = `<div class="page-header">
+        <div><h1>Ajustes</h1><div class="subtitle">Configuración</div></div>
+    </div>
+    <div class="settings-section">
+        <h3>Impresión 3D · Precios</h3>
+        <div class="card">
+            <div class="form-row">
+                <div class="form-group"><label>$ por gramo de filamento</label><input class="form-control" id="cfgPerGram" value="${esc(perGram)}"></div>
+                <div class="form-group"><label>$ por hora de impresión</label><input class="form-control" id="cfgPerHour" value="${esc(perHour)}"></div>
+            </div>
+            <div style="margin-top:12px"><button class="btn btn-primary" onclick="savePrint3dConfig()">Guardar</button></div>
+        </div>
+    </div>
+    <div class="settings-section">
+        <h3>Datos</h3>
+        <div class="card">
+            <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px">Exporta o respalda tu información.</p>
+            <button class="btn btn-secondary" onclick="showToast('Próximamente')">Exportar datos</button>
+        </div>
+    </div>`;
+}
+
+async function savePrint3dConfig() {
+    const perGram = document.getElementById('cfgPerGram').value.trim();
+    const perHour = document.getElementById('cfgPerHour').value.trim();
+    if (!perGram || !perHour || isNaN(perGram) || isNaN(perHour)) {
+        showToast('Ingresa valores numéricos válidos');
+        return;
+    }
+    await api(eel.set_config, 'print3d_price_per_gram', perGram);
+    await api(eel.set_config, 'print3d_price_per_hour', perHour);
+    showToast('Configuración guardada');
+    navigate('settings');
+}
+
+// ===== GLOBAL: expose functions to HTML onclick =====
+window.navigate = navigate;
+window.switchWorkTab = switchWorkTab;
+window.calMove = calMove;
+window.showTaskForm = showTaskForm;
+window.completeTask = completeTask;
+window.deleteTask = deleteTask;
+window.showEmpresaForm = showEmpresaForm;
+window.showClientSiteForm = showClientSiteForm;
+window.deleteClientSite = deleteClientSite;
+window.showInvoiceForm = showInvoiceForm;
+window.deleteInvoice = deleteInvoice;
+window.showQuoteForm = showQuoteForm;
+window.deleteQuote = deleteQuote;
+window.downloadQuoteWord = downloadQuoteWord;
+window.addQuoteLine = addQuoteLine;
+window.removeQuoteLine = removeQuoteLine;
+window.generateIALine = generateIALine;
+window.recalcQuoteLine = recalcQuoteLine;
+window.recalcQuoteTotals = recalcQuoteTotals;
+window.onQuoteTypeChange = onQuoteTypeChange;
+window.onQuoteDescChange = onQuoteDescChange;
+window.showEmployeeForm = showEmployeeForm;
+window.toggleEmployee = toggleEmployee;
+window.deleteEmployee = deleteEmployee;
+window.showDocForm = showDocForm;
+window.deleteDoc = deleteDoc;
+window.showReimbForm = showReimbForm;
+window.deleteReimb = deleteReimb;
+window.showOvertimeForm = showOvertimeForm;
+window.deleteOvertime = deleteOvertime;
+window.showContactForm = showContactForm;
+window.deleteContact = deleteContact;
+window.completeForm = completeForm;
+window.showSubjectForm = showSubjectForm;
+window.deleteSubject = deleteSubject;
+window.showExamForm = showExamForm;
+window.showAssignmentForm = showAssignmentForm;
+window.showPersonalTaskForm = showPersonalTaskForm;
+window.showHabitForm = showHabitForm;
+window.toggleHabit = toggleHabit;
+window.deleteHabit = deleteHabit;
+window.showPrintOrderForm = showPrintOrderForm;
+window.deletePrintOrder = deletePrintOrder;
+window.cyclePrintStatus = cyclePrintStatus;
+window.calcPrintPrice = calcPrintPrice;
+window.savePrint3dConfig = savePrint3dConfig;
+window.showDayEvents = showDayEvents;
+window.toggleCompletedTasks = toggleCompletedTasks;
+window.showInjectionForm = showInjectionForm;
+window.deleteInjection = deleteInjection;
+window.switchHealthTab = switchHealthTab;
+window.showMeasurementForm = showMeasurementForm;
+window.deleteMeasurement = deleteMeasurement;

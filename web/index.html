@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nicole</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Reenie+Beanie&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+    <div class="grain"></div>
+
+    <nav class="top-nav" id="topNav">
+        <div class="nav-pill">
+            <div class="nav-brand">
+                <span class="brand-icon">🌸</span>
+                <span class="brand-text">Nicole</span>
+            </div>
+            <div class="nav-links" id="navLinks">
+                <a data-view="dashboard" class="nav-link active">
+                    <span class="nav-icon">&#9679;</span>
+                    <span>Dashboard</span>
+                </a>
+                <a data-view="work" class="nav-link">
+                    <span class="nav-icon">&#9679;</span>
+                    <span>Trabajo</span>
+                </a>
+                <a data-view="university" class="nav-link">
+                    <span class="nav-icon">&#9679;</span>
+                    <span>Universidad</span>
+                </a>
+                <a data-view="personal" class="nav-link">
+                    <span class="nav-icon">&#9679;</span>
+                    <span>Personal</span>
+                </a>
+                <a data-view="health" class="nav-link">
+                    <span class="nav-icon">&#9679;</span>
+                    <span>Salud</span>
+                </a>
+                <a data-view="print3d" class="nav-link">
+                    <span class="nav-icon">&#9679;</span>
+                    <span>3D</span>
+                </a>
+                <a data-view="settings" class="nav-link">
+                    <span class="nav-icon">&#9679;</span>
+                    <span>Ajustes</span>
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <main id="app">
+        <div id="view-dashboard" class="view active"></div>
+        <div id="view-work" class="view"></div>
+        <div id="view-university" class="view"></div>
+        <div id="view-personal" class="view"></div>
+        <div id="view-health" class="view"></div>
+        <div id="view-print3d" class="view"></div>
+        <div id="view-settings" class="view"></div>
+    </main>
+
+    <div class="modal-overlay" id="modalOverlay">
+        <div class="modal" id="modal">
+            <div class="modal-header">
+                <h3 class="modal-title" id="modalTitle"></h3>
+                <button class="modal-close" id="modalClose">&times;</button>
+            </div>
+            <div class="modal-body" id="modalBody"></div>
+            <div class="modal-footer" id="modalFooter">
+                <button class="btn btn-secondary" id="modalCancel">Cancelar</button>
+                <button class="btn btn-primary" id="modalSave">Guardar</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script src="/eel.js"></script>
+    <script src="js/app.js?v=2"></script>
+</body>
+</html>

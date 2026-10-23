@@ -2528,6 +2528,76 @@ async function renderPersonalRoutine(el) {
     el.innerHTML = html;
 }
 
+function summarizeStretchNames(rawText, type) {
+    if (!rawText) return '';
+    const lines = String(rawText).split('\n').map(l => l.trim()).filter(Boolean);
+    // Extract lines that are movement titles (not bullets starting with • or - and not timing footer starting with ⏱)
+    const titles = [];
+    for (const line of lines) {
+        if (line.startsWith('•') || line.startsWith('-') || line.startsWith('⏱') || line.toLowerCase().startsWith('realiza estos')) continue;
+        if (line.toLowerCase().startsWith('estiramientos post-entrenamiento')) continue;
+        const cleanTitle = line.replace(/\s*\(.*?\)\s*$/, '').replace(/:$/, '').trim();
+        if (cleanTitle && cleanTitle.length < 65) {
+            titles.push(cleanTitle);
+        }
+    }
+    if (titles.length > 0) {
+        const suffix = type === 'warmup' ? ' (5 - 10 min)' : '';
+        return titles.join(' · ') + suffix;
+    }
+    // Fallback if custom single-line note
+    return lines[0];
+}
+
+function formatStretchGuideHTML(rawText, accentColor = 'var(--primary)') {
+    if (!rawText) return '';
+    const blocks = String(rawText).trim().split(/\n\s*\n/);
+    let out = '<div style="display:flex;flex-direction:column;gap:12px">';
+    for (const block of blocks) {
+        const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+        if (lines.length === 0) continue;
+        if (lines.length === 1 && (lines[0].startsWith('⏱') || lines[0].toLowerCase().startsWith('realiza estos'))) {
+            out += `<div style="padding:10px 14px;border-radius:10px;background:var(--primary-light);color:var(--text);font-size:0.88rem;font-weight:600">${esc(lines[0])}</div>`;
+            continue;
+        }
+        const title = lines[0];
+        const steps = lines.slice(1);
+        out += `<div style="padding:14px 16px;border-radius:12px;background:var(--card);border:1px solid var(--border-light);border-left:4px solid ${accentColor}">
+            <div style="font-weight:700;font-size:0.98rem;margin-bottom:${steps.length ? '8px' : '0'};color:var(--text)">${esc(title)}</div>`;
+        if (steps.length > 0) {
+            out += `<div style="display:flex;flex-direction:column;gap:6px;font-size:0.88rem;color:var(--text-secondary);line-height:1.45">`;
+            for (const s of steps) {
+                const cleanStep = s.replace(/^[•\-]\s*/, '');
+                out += `<div style="display:flex;gap:8px;align-items:flex-start"><span style="color:${accentColor};font-weight:700">•</span><span>${esc(cleanStep)}</span></div>`;
+            }
+            out += `</div>`;
+        }
+        out += `</div>`;
+    }
+    out += '</div>';
+    return out;
+}
+
+const EXERCISE_HOWTO_GUIDES = {
+    'flow de isquiotibiales': [
+        'Párate con los pies separados al ancho de tus hombros.',
+        'Agáchate en una sentadilla profunda y sujeta las puntas de tus pies (o tus tobillos si no llegas).',
+        'Manteniendo las manos en tus pies, levanta la cadera hacia el techo e intenta estirar las rodillas lo máximo posible. Mantén la cabeza hacia abajo.',
+        'Sostén esa posición estirada por 2 segundos.',
+        'Vuelve a bajar la cadera hacia la posición de sentadilla profunda, levanta el pecho y mira hacia adelante.'
+    ],
+    'lunges para el psoas': [
+        'Apoya una rodilla en el piso y pisa con el otro pie hacia adelante (ambas rodillas a 90 grados).',
+        'Mantén la espalda completamente recta y contrae el abdomen.',
+        'Empuja tu cadera suavemente hacia adelante, sin arquear la espalda baja ni inclinar el torso.',
+        'Sostén la máxima tensión por 2 segundos y retrocede suavemente a la posición inicial.'
+    ],
+    'estiramiento 90-90': [
+        'Siéntate en el piso con la pierna delantera flexionada a 90° frente a ti y la trasera a 90° hacia el costado.',
+        'Mantén la espalda larga e inclina suavemente el torso hacia la pierna delantera (30 seg por lado).'
+    ]
+};
+
 function buildRoutineDayViewHTML(days, selectedDayId, suggestedDayId) {
     const activeDay = days.find(d => d.id === selectedDayId) || days[0];
     if (!activeDay) return '';
@@ -2579,7 +2649,8 @@ function buildRoutineDayViewHTML(days, selectedDayId, suggestedDayId) {
         </div>`;
 
     if (activeDay.warmup_notes) {
-        html += `<div class="stretch-banner"><strong>🔥 Calentamiento:</strong>\n${esc(activeDay.warmup_notes)}</div>`;
+        const shortWarmup = summarizeStretchNames(activeDay.warmup_notes, 'warmup');
+        html += `<div class="stretch-banner" style="padding:10px 14px;white-space:normal"><strong>🔥 Calentamiento:</strong> ${esc(shortWarmup)}</div>`;
     }
 
     if (exs.length === 0) {
@@ -2613,7 +2684,8 @@ function buildRoutineDayViewHTML(days, selectedDayId, suggestedDayId) {
     }
 
     if (activeDay.cooldown_notes) {
-        html += `<div class="stretch-banner" style="background:var(--lavender-light);border-left-color:#C9B3F9"><strong>🧘‍♀️ Estiramientos:</strong>\n${esc(activeDay.cooldown_notes)}</div>`;
+        const shortCooldown = summarizeStretchNames(activeDay.cooldown_notes, 'cooldown');
+        html += `<div class="stretch-banner" style="background:var(--lavender-light);border-left-color:#C9B3F9;padding:10px 14px;white-space:normal"><strong>🧘‍♀️ Estiramientos:</strong> ${esc(shortCooldown)}</div>`;
     }
 
     html += `</div>`;
@@ -2670,7 +2742,7 @@ function buildActiveWorkoutPlayer(aw) {
     if (aw.cooldown) steps.push({ key: 'cooldown', label: '🧘‍♀️ Estiramiento' });
 
     if (aw.currentStep === undefined || !steps.some(s => String(s.key) === String(aw.currentStep))) {
-        aw.currentStep = aw.exercises.length > 0 ? 0 : (steps[0]?.key ?? 0);
+        aw.currentStep = aw.warmup ? 'warmup' : (aw.exercises.length > 0 ? 0 : (steps[0]?.key ?? 0));
     }
 
     const curStepPos = steps.findIndex(s => String(s.key) === String(aw.currentStep));
@@ -2726,14 +2798,26 @@ function buildActiveWorkoutPlayer(aw) {
 
     // Render ONLY the currently selected step
     if (String(aw.currentStep) === 'warmup') {
-        html += `<div class="card" style="background:var(--bg);padding:20px">
-            <h3 style="font-size:1.2rem;margin-bottom:10px">🔥 Calentamiento</h3>
-            <div class="stretch-banner" style="margin:0;font-size:0.95rem">${esc(aw.warmup)}</div>
+        html += `<div class="card" style="background:var(--bg);padding:18px">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+                <h3 style="font-size:1.15rem;margin:0">🔥 Calentamiento Pre-Ejercicio</h3>
+                <div style="display:flex;gap:6px">
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="startRestTimer(300, 'Calentamiento')">⏱ 5 min</button>
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="startRestTimer(480, 'Calentamiento')">⏱ 8 min</button>
+                </div>
+            </div>
+            ${formatStretchGuideHTML(aw.warmup, 'var(--primary)')}
         </div>`;
     } else if (String(aw.currentStep) === 'cooldown') {
-        html += `<div class="card" style="background:var(--bg);padding:20px">
-            <h3 style="font-size:1.2rem;margin-bottom:10px">🧘‍♀️ Estiramientos</h3>
-            <div class="stretch-banner" style="background:var(--lavender-light);border-left-color:#C9B3F9;margin:0;font-size:0.95rem">${esc(aw.cooldown)}</div>
+        html += `<div class="card" style="background:var(--bg);padding:18px">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+                <h3 style="font-size:1.15rem;margin:0">🧘‍♀️ Estiramientos Post-Ejercicio</h3>
+                <div style="display:flex;gap:6px">
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="startRestTimer(30, 'Estiramiento')">⏱ 30s</button>
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="startRestTimer(45, 'Estiramiento')">⏱ 45s</button>
+                </div>
+            </div>
+            ${formatStretchGuideHTML(aw.cooldown, '#C9B3F9')}
         </div>`;
     } else {
         const exIdx = parseInt(aw.currentStep) || 0;
@@ -2742,6 +2826,7 @@ function buildActiveWorkoutPlayer(aw) {
             const isTimed = (ex.reps_text || '').toLowerCase().includes('seg');
             const exDoneCount = ex.setRows.filter(sr => sr.done).length;
             const exAllDone = exDoneCount === ex.setRows.length && ex.setRows.length > 0;
+            const howToSteps = EXERCISE_HOWTO_GUIDES[(ex.name || '').toLowerCase().trim()] || null;
 
             html += `<div class="card" style="margin-bottom:10px;padding:18px;background:var(--bg);border:1.5px solid ${exAllDone ? 'var(--sage)' : 'var(--border)'}">
                 <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;flex-wrap:wrap;gap:10px">
@@ -2760,6 +2845,10 @@ function buildActiveWorkoutPlayer(aw) {
                         ${isTimed ? `<button type="button" class="btn btn-secondary btn-sm" onclick="startRestTimer(${parseInt(ex.reps_text)||15})">⏱ ${parseInt(ex.reps_text)||15}s</button>` : ''}
                     </div>
                 </div>
+                ${howToSteps ? `<div style="margin-bottom:14px;padding:12px 14px;border-radius:10px;background:var(--card);border-left:3px solid var(--primary);font-size:0.85rem;color:var(--text-secondary)">
+                    <div style="font-weight:700;color:var(--text);margin-bottom:4px">💡 Cómo hacerlo:</div>
+                    ${howToSteps.map(st => `<div style="margin-top:3px">• ${esc(st)}</div>`).join('')}
+                </div>` : ''}
                 <div style="display:grid;grid-template-columns:44px 1fr 1fr 1fr 48px;gap:10px;padding:0 10px 6px;font-size:0.74rem;font-weight:600;color:var(--text-muted);text-transform:uppercase">
                     <div>Serie</div>
                     <div>Peso (kg)</div>
@@ -2845,7 +2934,7 @@ function startLiveWorkout(dayId) {
         dayName: day.name,
         warmup: day.warmup_notes,
         cooldown: day.cooldown_notes,
-        currentStep: 0,
+        currentStep: day.warmup_notes ? 'warmup' : 0,
         startedAtMs: startMs,
         elapsedSec: 0,
         restSec: 0,

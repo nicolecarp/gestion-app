@@ -559,6 +559,39 @@ def apply_cleanups_and_seeds(conn):
     except Exception:
         pass
 
+    # 5. One-time update of warmup_notes and cooldown_notes with full step-by-step guides
+    updated_guides = conn.execute("SELECT value FROM config WHERE key='update_warmup_cooldown_guides_v1'").fetchone()
+    if not updated_guides:
+        warmup_full = (
+            "Flow de Isquiotibiales (Repetir 5 a 8 veces)\n"
+            "• Párate con los pies separados al ancho de tus hombros.\n"
+            "• Agáchate en una sentadilla profunda y sujeta las puntas de tus pies (o tus tobillos si no llegas).\n"
+            "• Manteniendo las manos en tus pies, levanta la cadera hacia el techo e intenta estirar las rodillas lo máximo posible. Mantén la cabeza hacia abajo. Sentirás el estirón en la parte trasera de los muslos.\n"
+            "• Sostén esa posición estirada por 2 segundos.\n"
+            "• Vuelve a bajar la cadera hacia la posición de sentadilla profunda, levanta el pecho y mira hacia adelante.\n\n"
+            "Lunges para el Psoas (Repetir 5 a 8 veces por pierna)\n"
+            "• Apoya una rodilla en el piso y pisa con el otro pie hacia adelante (como si te estuvieras arrodillando para pedir matrimonio). Ambas rodillas deben formar un ángulo de 90 grados.\n"
+            "• Mantén la espalda completamente recta y contrae el abdomen.\n"
+            "• Empuja tu cadera suavemente hacia adelante, sin arquear la espalda baja ni inclinar el torso. Debes sentir el estiramiento en la parte frontal de la cadera de la pierna que está apoyada en el piso.\n"
+            "• Sostén la máxima tensión por 2 segundos.\n"
+            "• Retrocede suavemente la cadera a la posición inicial.\n\n"
+            "⏱ Realiza estos dos movimientos de forma continua, alternando entre ellos, hasta cumplir entre 5 y 10 minutos en total antes de tocar las pesas."
+        )
+        cooldown_full = (
+            "Estiramiento de Mariposa (45 segundos)\n"
+            "• Siéntate en el piso, junta las plantas de tus pies y acerca los talones hacia tu pelvis.\n"
+            "• Sujeta tus pies con las manos, mantén la espalda derecha y empuja suavemente las rodillas hacia el piso para elongar los aductores.\n\n"
+            "Figura de 4 con pie base en el piso (30 segundos por pierna)\n"
+            "• Acuéstate boca arriba con las rodillas flexionadas y los pies apoyados en el piso.\n"
+            "• Cruza un tobillo sobre la rodilla opuesta formando un 4 y empuja suavemente la rodilla cruzada o acerca el muslo base hacia el pecho para estirar el glúteo profundo y piriforme.\n\n"
+            "Estiramiento 90-90 (30 segundos por lado)\n"
+            "• Siéntate en el piso con la pierna delantera flexionada a 90° frente a ti (rotación externa) y la pierna trasera flexionada a 90° hacia el costado (rotación interna).\n"
+            "• Mantén la espalda larga e inclina suavemente el torso hacia la pierna delantera, luego cambia de lado."
+        )
+        conn.execute("UPDATE workout_days SET warmup_notes=? WHERE warmup_notes IS NOT NULL AND TRIM(warmup_notes) != ''", (warmup_full,))
+        conn.execute("UPDATE workout_days SET cooldown_notes=? WHERE cooldown_notes IS NOT NULL AND TRIM(cooldown_notes) != ''", (cooldown_full,))
+        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('update_warmup_cooldown_guides_v1', '1')")
+
     conn.commit()
 
 
@@ -568,12 +601,31 @@ def seed_default_workouts(conn):
         return
 
     post_stretch = (
-        "Estiramientos Post-Entrenamiento (Obligatorio para proteger postura y elongar aductores):\n"
-        "• Estiramiento de Mariposa: Sentada con plantas de los pies juntas, empujando suavemente rodillas hacia el piso (45 seg).\n"
-        "• Figura de 4 (Pie base en el piso): Acostada boca arriba, cruzando un tobillo sobre la rodilla opuesta (30 seg por pierna).\n"
-        "• Estiramiento 90-90: Sentada en el piso con ambas piernas flexionadas a 90°, una rotada hacia afuera y otra hacia adentro (30 seg por lado)."
+        "Estiramiento de Mariposa (45 segundos)\n"
+        "• Siéntate en el piso, junta las plantas de tus pies y acerca los talones hacia tu pelvis.\n"
+        "• Sujeta tus pies con las manos, mantén la espalda derecha y empuja suavemente las rodillas hacia el piso para elongar los aductores.\n\n"
+        "Figura de 4 con pie base en el piso (30 segundos por pierna)\n"
+        "• Acuéstate boca arriba con las rodillas flexionadas y los pies apoyados en el piso.\n"
+        "• Cruza un tobillo sobre la rodilla opuesta formando un 4 y empuja suavemente la rodilla cruzada o acerca el muslo base hacia el pecho para estirar el glúteo profundo y piriforme.\n\n"
+        "Estiramiento 90-90 (30 segundos por lado)\n"
+        "• Siéntate en el piso con la pierna delantera flexionada a 90° frente a ti (rotación externa) y la pierna trasera flexionada a 90° hacia el costado (rotación interna).\n"
+        "• Mantén la espalda larga e inclina suavemente el torso hacia la pierna delantera, luego cambia de lado."
     )
-    warmup_std = "Flow de isquiotibiales + Lunges para el psoas (5 - 10 minutos · Peso corporal)"
+    warmup_std = (
+        "Flow de Isquiotibiales (Repetir 5 a 8 veces)\n"
+        "• Párate con los pies separados al ancho de tus hombros.\n"
+        "• Agáchate en una sentadilla profunda y sujeta las puntas de tus pies (o tus tobillos si no llegas).\n"
+        "• Manteniendo las manos en tus pies, levanta la cadera hacia el techo e intenta estirar las rodillas lo máximo posible. Mantén la cabeza hacia abajo. Sentirás el estirón en la parte trasera de los muslos.\n"
+        "• Sostén esa posición estirada por 2 segundos.\n"
+        "• Vuelve a bajar la cadera hacia la posición de sentadilla profunda, levanta el pecho y mira hacia adelante.\n\n"
+        "Lunges para el Psoas (Repetir 5 a 8 veces por pierna)\n"
+        "• Apoya una rodilla en el piso y pisa con el otro pie hacia adelante (como si te estuvieras arrodillando para pedir matrimonio). Ambas rodillas deben formar un ángulo de 90 grados.\n"
+        "• Mantén la espalda completamente recta y contrae el abdomen.\n"
+        "• Empuja tu cadera suavemente hacia adelante, sin arquear la espalda baja ni inclinar el torso. Debes sentir el estiramiento en la parte frontal de la cadera de la pierna que está apoyada en el piso.\n"
+        "• Sostén la máxima tensión por 2 segundos.\n"
+        "• Retrocede suavemente la cadera a la posición inicial.\n\n"
+        "⏱ Realiza estos dos movimientos de forma continua, alternando entre ellos, hasta cumplir entre 5 y 10 minutos en total antes de tocar las pesas."
+    )
 
     days_data = [
         (1, "Día 1: Ensanchamiento Lateral y Zancadas", "Glúteo medio, abducción y piernas", warmup_std, post_stretch, 1, [

@@ -70,6 +70,8 @@ def _pull_and_reload():
 
 # Exponer también como función de api_module para poder llamarla desde Ajustes en la app
 api_module.sync_cloud_from_github = _pull_and_reload
+api_module.check_reload = lambda: False
+api_module.get_lan_info = lambda: {"ip": "cloud", "port": 443, "url": "https://nicolecarp.pythonanywhere.com"}
 
 
 @app.route("/webhook/github", methods=["GET", "POST"])

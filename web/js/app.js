@@ -162,10 +162,14 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function startReloadPoller() {
+    const host = window.location.hostname;
+    if (host !== 'localhost' && host !== '127.0.0.1') return;
     setInterval(async () => {
         try {
-            if (await api(eel.check_reload)) {
-                location.reload();
+            if (window.eel && typeof window.eel.check_reload === 'function') {
+                if (await window.eel.check_reload()()) {
+                    location.reload();
+                }
             }
         } catch (_) {}
     }, 5000);

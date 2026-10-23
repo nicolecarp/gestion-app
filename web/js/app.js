@@ -72,8 +72,15 @@ function esc(v) {
     return String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+function localDateStr(d = new Date()) {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+}
+
 function todayStr() {
-    return new Date().toISOString().split('T')[0];
+    return localDateStr(new Date());
 }
 
 function fmtDate(d) {
@@ -831,7 +838,7 @@ function showInvoiceModal(inv) {
             const clientOpts = clients.map(c =>
                 '<option value="'+c.id+'"'+(inv && inv.client_id === c.id ? ' selected' : '')+'>'+esc(c.business_name)+'</option>'
             ).join('');
-            const today = new Date().toISOString().split('T')[0];
+            const today = todayStr();
             const html = '<form id="modalForm">' +
                 '<div class="form-group"><label>Empresa *</label><select class="form-control" name="client_id">'+clientOpts+'</select></div>' +
                 '<div class="form-group"><label>Sede</label><select class="form-control" name="client_site_id">'+siteOpts+'</select></div>' +
@@ -1830,7 +1837,7 @@ async function renderWorkDailyControl(el) {
     // Weekly KPI summary
     html += '<div class="card" style="margin-top:14px"><div class="card-title">KPI Semanal</div>';
     const now = new Date();
-    const weekRes = await api(eel.get_week_semana, now.toISOString().split('T')[0]);
+    const weekRes = await api(eel.get_week_semana, localDateStr(now));
     const kpi = await api(eel.get_weekly_kpi, weekRes.semana, weekRes.año) || [];
     if (kpi.length === 0) {
         html += '<div class="empty-state"><p>Sin datos esta semana</p></div>';
@@ -2189,15 +2196,13 @@ async function renderPersonalRoutine(el) {
     const trainedDates = new Set(hist.map(h => h.date));
     const now = new Date();
     const dow = (now.getDay() + 6) % 7; // 0 = Mon .. 6 = Sun
-    const mon = new Date(now);
-    mon.setDate(now.getDate() - dow);
+    const mon = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dow);
     const dayLabels = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
     let weekTrainedCount = 0;
     let weekCellsHtml = '';
     for (let i = 0; i < 7; i++) {
-        const d = new Date(mon);
-        d.setDate(mon.getDate() + i);
-        const ds = d.toISOString().split('T')[0];
+        const d = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + i);
+        const ds = localDateStr(d);
         const isTrained = trainedDates.has(ds);
         const isToday = ds === todayStr();
         if (isTrained) weekTrainedCount++;
@@ -2676,7 +2681,7 @@ async function finishLiveWorkout() {
     state.activeWorkout = null;
 
     if (res && res.ok) {
-        showToast('🎉 ¡Entrenamiento guardado!');
+        showToast('🎉 ¡Entrenamiento guardado y hábito marcado!');
         state.personalTab = 'progress';
         navigate('personal');
     } else {
@@ -2798,7 +2803,7 @@ async function renderPersonalProgress(el) {
 
     let html = `<div class="two-col" style="margin-bottom:18px">
         <div class="card">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px">
                 <div class="card-title" style="margin:0">📌 Tareas personales</div>
                 <button class="btn btn-ghost btn-sm" onclick="showPersonalTaskForm()">+ Tarea</button>
             </div>`;
@@ -2815,9 +2820,9 @@ async function renderPersonalProgress(el) {
         }
     }
     html += `</div>
-        <div>
+        <div style="min-width:0;max-width:100%">
             <div class="card">
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px">
                     <div class="card-title" style="margin:0">✨ Hábitos</div>
                     <button class="btn btn-ghost btn-sm" onclick="showHabitForm()">+ Hábito</button>
                 </div>`;
@@ -2859,9 +2864,9 @@ async function renderPersonalProgress(el) {
     <div class="card" style="margin-bottom:18px">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
             <div class="card-title" style="margin:0">📈 Evolución por Ejercicio</div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap">
-                <select class="form-control" style="width:220px;padding:6px 10px;font-size:0.85rem" onchange="changeWorkoutProgressEx(this.value)">${exOpts}</select>
-                <select class="form-control" style="width:160px;padding:6px 10px;font-size:0.85rem" onchange="changeWorkoutProgressMetric(this.value)">
+            <div style="display:flex;gap:8px;flex-wrap:wrap;width:100%;max-width:540px">
+                <select class="form-control" style="flex:1;min-width:150px;padding:6px 10px;font-size:0.85rem" onchange="changeWorkoutProgressEx(this.value)">${exOpts}</select>
+                <select class="form-control" style="flex:1;min-width:130px;padding:6px 10px;font-size:0.85rem" onchange="changeWorkoutProgressMetric(this.value)">
                     <option value="max_weight" ${metric === 'max_weight' ? 'selected' : ''}>Peso máx (kg)</option>
                     <option value="volume" ${metric === 'volume' ? 'selected' : ''}>Volumen (kg × reps)</option>
                     <option value="max_reps" ${metric === 'max_reps' ? 'selected' : ''}>Reps / Seg máx</option>
@@ -2888,7 +2893,11 @@ async function renderPersonalProgress(el) {
             });
             const summary = Object.entries(byEx).map(([k, v]) => `<strong>${esc(k)}:</strong> ${v.join(', ')}`).join(' · ');
             html += `<tr>
-                <td><strong>${fmtDate(sess.date)}</strong></td>
+                <td style="white-space:nowrap">
+                    <span style="cursor:pointer;border-bottom:1px dashed var(--border)" title="Cambiar fecha" onclick="editWorkoutSessionDate(${sess.id}, '${esc(sess.date)}')">
+                        <strong>${fmtDate(sess.date)}</strong> <span style="font-size:0.72rem;opacity:0.7">✏️</span>
+                    </span>
+                </td>
                 <td>${esc(sess.day_name || 'Sesión')}</td>
                 <td>${sess.duration_minutes ? sess.duration_minutes + ' min' : '-'}</td>
                 <td style="font-size:0.8rem;color:var(--text-muted)">${summary || '-'}</td>
@@ -2901,6 +2910,27 @@ async function renderPersonalProgress(el) {
     el.innerHTML = html;
 
     drawWorkoutProgressChart(prog.series[state.progressExercise] || [], metric, state.progressExercise);
+}
+
+function editWorkoutSessionDate(sessionId, currentDate) {
+    const html = `<form id="modalForm">
+        <div class="form-group">
+            <label>Fecha del entrenamiento *</label>
+            <input type="date" class="form-control" name="date" value="${esc(currentDate || todayStr())}">
+        </div>
+    </form>`;
+    openModal('Cambiar fecha de entrenamiento', html);
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('modalForm'));
+        const newDate = f.get('date');
+        if (!newDate) { showToast('Selecciona una fecha'); return; }
+        const res = await api(eel.update_workout_session_date, sessionId, newDate);
+        if (res && res.ok) {
+            showToast('Fecha actualizada');
+            closeModal();
+            navigate('personal');
+        }
+    };
 }
 
 function changeWorkoutProgressEx(exName) {
@@ -3244,13 +3274,13 @@ function drawEstradiolChart(proj) {
 
         // Filter by selected range
         let range = state.estradiolRange || 365;
-        const todayStr = new Date().toISOString().split('T')[0];
+        const todayStr = localDateStr(new Date());
         let filteredDays = proj.days;
         let filteredLevels = proj.levels;
         if (range > 0 && proj.days && proj.days.length > 0) {
             const cutDate = new Date();
             cutDate.setDate(cutDate.getDate() - range);
-            const cutStr = cutDate.toISOString().split('T')[0];
+            const cutStr = localDateStr(cutDate);
             const idx = proj.days.findIndex(d => d >= cutStr);
             if (idx > 0) {
                 filteredDays = proj.days.slice(idx);
@@ -3787,7 +3817,7 @@ function drawMeasurementChart(rawData, metrics, goals = {}) {
         if (rangeDays > 0 && data.length > 0) {
             const cut = new Date();
             cut.setDate(cut.getDate() - rangeDays);
-            const cutStr = cut.toISOString().split('T')[0];
+            const cutStr = localDateStr(cut);
             const filtered = data.filter(d => d.date >= cutStr);
             if (filtered.length > 0) data = filtered;
         }
@@ -4114,9 +4144,8 @@ function buildHabitGraph(logs, habitCount) {
     for (let i = 0; i < firstDow; i++) currentWeek.push(null);
 
     for (let d = 0; d < dayCount; d++) {
-        const dt = new Date(start);
-        dt.setDate(start.getDate() + d);
-        const key = dt.toISOString().split('T')[0];
+        const dt = new Date(now.getFullYear(), 0, 1 + d);
+        const key = localDateStr(dt);
         const count = logMap[key] || 0;
         const level = habitCount > 0 ? Math.min(Math.floor(count / habitCount * 4), 4) : 0;
         currentWeek.push(level);
@@ -4144,22 +4173,23 @@ function buildHabitGraph(logs, habitCount) {
     const colors = isDark
         ? ['var(--border-light)', '#4A2533', '#7A354E', '#B85478', '#F28BA8']
         : ['var(--border-light)', '#FFE4E1', '#F7C2BE', '#EE9E97', '#E07A72'];
-    let html = `<div class="habit-graph" style="margin-top:16px">
+    let html = `<div class="habit-graph" style="margin-top:16px;max-width:100%;overflow:hidden">
         <div style="font-size:0.75rem;font-weight:600;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">Registro anual</div>
-        <div style="display:flex;gap:2px;overflow-x:auto;padding-bottom:4px">`;
+        <div style="overflow-x:auto;max-width:100%;padding-bottom:6px;-webkit-overflow-scrolling:touch">
+            <div style="position:relative;height:14px;min-width:${weeks.length * 12}px">`;
     monthLabels.forEach(ml => {
-        html += `<div style="font-size:0.6rem;color:var(--text-light);width:0;position:relative;left:${ml.col * 12}px">${ml.month}</div>`;
+        html += `<span style="font-size:0.6rem;color:var(--text-light);position:absolute;left:${ml.col * 12}px;top:0">${ml.month}</span>`;
     });
-    html += '</div><div style="display:flex;gap:2px;overflow-x:auto;padding-bottom:4px">';
+    html += `</div><div style="display:flex;gap:2px;min-width:${weeks.length * 12}px">`;
     for (const week of weeks) {
-        html += '<div style="display:flex;flex-direction:column;gap:2px">';
+        html += '<div style="display:flex;flex-direction:column;gap:2px;flex-shrink:0">';
         for (const day of week) {
             const color = day === null ? 'transparent' : colors[day];
             html += `<div style="width:10px;height:10px;border-radius:2px;background:${color}"></div>`;
         }
         html += '</div>';
     }
-    html += '</div></div>';
+    html += '</div></div></div>';
     return html;
 }
 

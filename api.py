@@ -7,11 +7,16 @@ except ImportError:
             return fn
     eel = _DummyEel()
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from database import get_connection
 
+AR_TZ = timezone(timedelta(hours=-3))
+
+def local_date():
+    return datetime.now(AR_TZ).date()
+
 def today():
-    return date.today().isoformat()
+    return local_date().isoformat()
 
 # ===================== TASKS =====================
 
@@ -1008,7 +1013,7 @@ def get_dashboard_stats():
         docs_soon = conn.execute("""
             SELECT COUNT(*) as c FROM employee_documents
             WHERE expiry_date>=? AND expiry_date<=?
-        """, (today(), (date.today() + timedelta(days=30)).isoformat())).fetchone()['c']
+        """, (today(), (local_date() + timedelta(days=30)).isoformat())).fetchone()['c']
 
         # Injection stats
         last_inj = conn.execute("""
@@ -1020,7 +1025,7 @@ def get_dashboard_stats():
         if last_inj:
             last_date = date.fromisoformat(last_inj['date'])
             next_due = last_date + timedelta(days=7)
-            next_injection_days = (next_due - date.today()).days
+            next_injection_days = (next_due - local_date()).days
             next_injection_date = next_due.isoformat()
             overdue_injection = next_injection_days < 0
 
@@ -1186,7 +1191,7 @@ def get_soon_deadlines():
             FROM tasks t JOIN areas a ON t.area_id=a.id
             WHERE t.status='pending' AND t.due_date>=? AND t.due_date<=?
             ORDER BY t.due_date ASC LIMIT 10
-        """, (today(), (date.today() + timedelta(days=7)).isoformat())).fetchall()
+        """, (today(), (local_date() + timedelta(days=7)).isoformat())).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
@@ -2093,7 +2098,7 @@ def get_estradiol_projection():
         return {'days': [], 'levels': [], 'next_dose_days': None, 'days_since_last': None}
 
     last_dose_date = date.fromisoformat(doses[-1]['date'])
-    days_since_last = (date.today() - last_dose_date).days
+    days_since_last = (local_date() - last_dose_date).days
 
     # PK parameters for estradiol enantate SC
     ka = 0.35     # absorption rate (1/day) — slightly slower SC
@@ -2103,9 +2108,9 @@ def get_estradiol_projection():
 
     # Generate from 180 days before first dose to 30 days after last
     first_dose_date = date.fromisoformat(doses[0]['date'])
-    today = date.today()
-    start = min(first_dose_date, today - timedelta(days=180))
-    end = max(today + timedelta(days=60), last_dose_date + timedelta(days=30))
+    today_dt = local_date()
+    start = min(first_dose_date, today_dt - timedelta(days=180))
+    end = max(today_dt + timedelta(days=60), last_dose_date + timedelta(days=30))
     days_list = []
     levels = []
 
@@ -2132,7 +2137,7 @@ def get_estradiol_projection():
         d += timedelta(days=1)
 
     next_due = last_dose_date + timedelta(days=7)
-    next_dose_days = (next_due - today).days
+    next_dose_days = (next_due - today_dt).days
 
     return {
         'days': days_list,
@@ -3070,11 +3075,42 @@ def delete_workout_exercise(ex_id):
     finally:
         conn.close()
 
+def _sync_exercise_habits_for_date(conn, session_date, old_date=None):
+    """Marca automáticamente el hábito de ejercicio (ej. 'Hacer ejercicio') en la fecha del entrenamiento."""
+    try:
+        ex_habits = conn.execute("""
+            SELECT id FROM habits
+            WHERE LOWER(name) LIKE '%ejercicio%' OR LOWER(name) LIKE '%entren%' OR LOWER(name) LIKE '%rutina%' OR LOWER(name) LIKE '%gym%'
+        """).fetchall()
+        for h in ex_habits:
+            hid = h['id']
+            if old_date and old_date != session_date:
+                other_on_old = conn.execute(
+                    "SELECT COUNT(*) FROM workout_sessions WHERE date=?", (old_date,)
+                ).fetchone()[0]
+                if other_on_old == 0:
+                    conn.execute("DELETE FROM habit_logs WHERE habit_id=? AND date=?", (hid, old_date))
+            if session_date:
+                existing = conn.execute(
+                    "SELECT id FROM habit_logs WHERE habit_id=? AND date=?", (hid, session_date)
+                ).fetchone()
+                if not existing:
+                    conn.execute(
+                        "INSERT INTO habit_logs (habit_id, date, completed) VALUES (?, ?, 1)",
+                        (hid, session_date)
+                    )
+            streak = conn.execute(
+                "SELECT COUNT(DISTINCT date) FROM habit_logs WHERE habit_id=?", (hid,)
+            ).fetchone()[0]
+            conn.execute("UPDATE habits SET streak=? WHERE id=?", (streak, hid))
+    except Exception:
+        pass
+
 @eel.expose
 def log_workout_session(data):
     """
     Guarda una sesión de entrenamiento completada y todos sus sets.
-    Además actualiza default_weight_kg del ejercicio si el usuario subió de peso.
+    Además actualiza default_weight_kg del ejercicio y marca automáticamente el hábito de ejercicio.
     """
     conn = get_connection()
     try:
@@ -3100,8 +3136,25 @@ def log_workout_session(data):
             if w > 0:
                 conn.execute("UPDATE workout_exercises SET default_weight_kg=? WHERE name=?", (w, ex_name))
 
+        _sync_exercise_habits_for_date(conn, session_date)
         conn.commit()
         return {'ok': True, 'id': session_id}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+@eel.expose
+def update_workout_session_date(session_id, new_date):
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT date FROM workout_sessions WHERE id=?", (session_id,)).fetchone()
+        old_date = row['date'] if row else None
+        conn.execute("UPDATE workout_sessions SET date=? WHERE id=?", (new_date, session_id))
+        conn.execute("UPDATE workout_set_logs SET date=? WHERE session_id=?", (new_date, session_id))
+        _sync_exercise_habits_for_date(conn, new_date, old_date=old_date)
+        conn.commit()
+        return {'ok': True}
     except Exception as e:
         return {'ok': False, 'error': str(e)}
     finally:
@@ -3137,8 +3190,12 @@ def get_workout_history():
 def delete_workout_session(session_id):
     conn = get_connection()
     try:
+        row = conn.execute("SELECT date FROM workout_sessions WHERE id=?", (session_id,)).fetchone()
+        old_date = row['date'] if row else None
         conn.execute("DELETE FROM workout_set_logs WHERE session_id=?", (session_id,))
         conn.execute("DELETE FROM workout_sessions WHERE id=?", (session_id,))
+        if old_date:
+            _sync_exercise_habits_for_date(conn, None, old_date=old_date)
         conn.commit()
         return {'ok': True}
     except Exception as e:

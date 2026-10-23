@@ -523,6 +523,42 @@ def apply_cleanups_and_seeds(conn):
             conn.execute("INSERT INTO body_measurements (date, weight) VALUES (?, ?)", (dt, w))
         elif row["weight"] is None:
             conn.execute("UPDATE body_measurements SET weight=? WHERE id=?", (w, row["id"]))
+
+    # 3. One-time fix for workout sessions & habit logs shifted +1 day due to UTC after 21:00 Argentina time
+    fixed_utc = conn.execute("SELECT value FROM config WHERE key='fix_utc_workout_dates_v1'").fetchone()
+    if not fixed_utc:
+        try:
+            shifted = conn.execute("""
+                SELECT id, date, date(created_at, '-3 hours') as ar_date
+                FROM workout_sessions
+                WHERE created_at IS NOT NULL AND date(created_at, '-3 hours') < date
+            """).fetchall()
+            for s in shifted:
+                conn.execute("UPDATE workout_sessions SET date=? WHERE id=?", (s["ar_date"], s["id"]))
+                conn.execute("UPDATE workout_set_logs SET date=? WHERE session_id=?", (s["ar_date"], s["id"]))
+                conn.execute("UPDATE habit_logs SET date=? WHERE date=?", (s["ar_date"], s["date"]))
+        except Exception:
+            pass
+        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('fix_utc_workout_dates_v1', '1')")
+
+    # 4. Sync all workout session dates with any exercise habit (e.g. 'Hacer ejercicio')
+    try:
+        ex_habits = conn.execute("""
+            SELECT id FROM habits
+            WHERE LOWER(name) LIKE '%ejercicio%' OR LOWER(name) LIKE '%entren%' OR LOWER(name) LIKE '%rutina%' OR LOWER(name) LIKE '%gym%'
+        """).fetchall()
+        w_dates = [r[0] for r in conn.execute("SELECT DISTINCT date FROM workout_sessions WHERE date IS NOT NULL").fetchall()]
+        for h in ex_habits:
+            hid = h["id"]
+            for wd in w_dates:
+                exists = conn.execute("SELECT id FROM habit_logs WHERE habit_id=? AND date=?", (hid, wd)).fetchone()
+                if not exists:
+                    conn.execute("INSERT INTO habit_logs (habit_id, date, completed) VALUES (?, ?, 1)", (hid, wd))
+            streak = conn.execute("SELECT COUNT(DISTINCT date) FROM habit_logs WHERE habit_id=?", (hid,)).fetchone()[0]
+            conn.execute("UPDATE habits SET streak=? WHERE id=?", (streak, hid))
+    except Exception:
+        pass
+
     conn.commit()
 
 

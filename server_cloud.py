@@ -181,10 +181,14 @@ def index():
 @app.route("/<path:path>")
 def static_files(path):
     if APP_PASSWORD and not session.get("authenticated"):
-        allowed_public = {"apple-touch-icon.png", "apple-touch-icon-precomposed.png", "favicon.png", "favicon.ico", "manifest.json"}
+        allowed_public = {"apple-touch-icon.png", "apple-touch-icon-precomposed.png", "favicon.png", "favicon.ico", "manifest.json", "sw.js"}
         if path not in allowed_public:
             return redirect(url_for("login_page"))
-    return send_from_directory(WEB_DIR, path)
+    resp = send_from_directory(WEB_DIR, path)
+    if path == "sw.js":
+        resp.headers["Cache-Control"] = "no-cache"
+        resp.headers["Service-Worker-Allowed"] = "/"
+    return resp
 
 
 if __name__ == "__main__":

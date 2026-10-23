@@ -149,6 +149,7 @@ function waitForEel(cb, attempt) {
 document.addEventListener('DOMContentLoaded', () => {
     const savedTheme = localStorage.getItem('nicole_theme') || 'dark';
     applyTheme(savedTheme);
+    initAudioAndNotifications();
     document.getElementById('modalClose').onclick = closeModal;
     document.getElementById('modalCancel').onclick = closeModal;
     document.getElementById('modalOverlay').onclick = (e) => {
@@ -170,6 +171,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         navigate('dashboard');
         startReloadPoller();
+        setTimeout(() => checkSmartDailyNotifications(), 2500);
     });
 });
 
@@ -2143,26 +2145,397 @@ function fmtSec(sec) {
     return String(m).padStart(2, '0') + ':' + String(r).padStart(2, '0');
 }
 
-function playBeep() {
+// --- AUDIO, HAPTICS & NOTIFICATIONS (iPhone / PWA / Desktop) ---
+let __sharedAudioCtx = null;
+let __chimeAudioEl = null;
+let __audioUnlocked = false;
+let __swRegistration = null;
+
+function buildChimeWavDataUri() {
+    const sampleRate = 22050;
+    const durationSec = 0.65;
+    const numSamples = Math.floor(sampleRate * durationSec);
+    const buffer = new ArrayBuffer(44 + numSamples * 2);
+    const view = new DataView(buffer);
+    const writeStr = (offset, str) => {
+        for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    };
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + numSamples * 2, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, 1, true); // Mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeStr(36, 'data');
+    view.setUint32(40, numSamples * 2, true);
+
+    // 3-note ascending chime: A5 (880Hz) -> D6 (1174.66Hz) -> F#6 (1479.98Hz)
+    const notes = [
+        { start: 0.00, end: 0.17, freq: 880.0 },
+        { start: 0.18, end: 0.36, freq: 1174.66 },
+        { start: 0.37, end: 0.64, freq: 1479.98 },
+    ];
+    for (let i = 0; i < numSamples; i++) {
+        const t = i / sampleRate;
+        let sample = 0;
+        for (const n of notes) {
+            if (t >= n.start && t <= n.end) {
+                const localT = t - n.start;
+                const len = n.end - n.start;
+                const env = Math.sin(Math.min(1, localT / 0.015) * (Math.PI / 2)) * Math.exp(-localT * (4.5 / len));
+                sample = (Math.sin(2 * Math.PI * n.freq * localT) * 0.75 + Math.sin(4 * Math.PI * n.freq * localT) * 0.25) * env;
+                break;
+            }
+        }
+        const pcm = Math.max(-1, Math.min(1, sample));
+        view.setInt16(44 + i * 2, pcm < 0 ? pcm * 0x8000 : pcm * 0x7FFF, true);
+    }
+
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+    return 'data:audio/wav;base64,' + btoa(binary);
+}
+
+function initAudioAndNotifications() {
     try {
-        if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+        // Force iOS 17+ Safari/PWA to play sound even when the physical Silent switch is muted
+        if (navigator.audioSession) {
+            navigator.audioSession.type = 'playback';
+        }
+    } catch (_) {}
+
+    // Create hidden iOS 17.4+ / iOS 18 Taptic Engine switch element for native iPhone vibration
+    if (!document.getElementById('iosHapticLabel')) {
+        const lbl = document.createElement('label');
+        lbl.id = 'iosHapticLabel';
+        lbl.setAttribute('aria-hidden', 'true');
+        lbl.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none';
+        const inp = document.createElement('input');
+        inp.type = 'checkbox';
+        inp.setAttribute('switch', '');
+        lbl.appendChild(inp);
+        document.body.appendChild(lbl);
+    }
+
+    // Prepare reusable HTML5 <audio> element with synthesized WAV chime
+    if (!__chimeAudioEl) {
+        __chimeAudioEl = new Audio(buildChimeWavDataUri());
+        __chimeAudioEl.preload = 'auto';
+        __chimeAudioEl.playsInline = true;
+    }
+
+    // Unlock audio on first touch/click anywhere in the app
+    const onceUnlock = () => {
+        unlockAudioOnUserTap();
+    };
+    document.addEventListener('touchstart', onceUnlock, { passive: true, once: true });
+    document.addEventListener('click', onceUnlock, { passive: true, once: true });
+
+    // Register Service Worker for native iOS / Android / Desktop notifications
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js', { scope: '/' }).then(reg => {
+            __swRegistration = reg;
+        }).catch(() => {});
+    }
+
+    // Keep workout timer & rest countdown synced when returning from background/lockscreen
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible' && state.activeWorkout) {
+            syncActiveWorkoutTimers();
+        }
+    });
+}
+
+function unlockAudioOnUserTap() {
+    try {
+        if (navigator.audioSession) {
+            navigator.audioSession.type = 'playback';
+        }
     } catch (_) {}
     try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const playTone = (freq, startOffset, duration) => {
-            const osc = ctx.createOscillator();
-            const gain = ctx.createGain();
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(freq, ctx.currentTime + startOffset);
-            gain.gain.setValueAtTime(0.22, ctx.currentTime + startOffset);
-            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + startOffset + duration);
-            osc.connect(gain);
-            gain.connect(ctx.destination);
-            osc.start(ctx.currentTime + startOffset);
-            osc.stop(ctx.currentTime + startOffset + duration);
-        };
-        playTone(880, 0, 0.18);
-        playTone(1174.66, 0.2, 0.28);
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) {
+            if (!__sharedAudioCtx) __sharedAudioCtx = new AudioCtx();
+            if (__sharedAudioCtx.state === 'suspended') {
+                __sharedAudioCtx.resume();
+            }
+            if (!__audioUnlocked) {
+                const buf = __sharedAudioCtx.createBuffer(1, 1, 22050);
+                const src = __sharedAudioCtx.createBufferSource();
+                src.buffer = buf;
+                src.connect(__sharedAudioCtx.destination);
+                src.start(0);
+            }
+        }
+    } catch (_) {}
+    try {
+        if (__chimeAudioEl && !__audioUnlocked) {
+            __chimeAudioEl.volume = 0.01;
+            const p = __chimeAudioEl.play();
+            if (p && typeof p.then === 'function') {
+                p.then(() => {
+                    __chimeAudioEl.pause();
+                    __chimeAudioEl.currentTime = 0;
+                    __chimeAudioEl.volume = 1.0;
+                    __audioUnlocked = true;
+                }).catch(() => {});
+            }
+        }
+    } catch (_) {}
+}
+
+function triggerHaptic(doublePulse = false) {
+    // 1. Standard Vibration API (Android)
+    try {
+        if (navigator.vibrate) {
+            navigator.vibrate(doublePulse ? [220, 100, 260] : [60]);
+        }
+    } catch (_) {}
+    // 2. iOS 17.4+ / iOS 18 Taptic Engine Switch Haptic (iPhone)
+    try {
+        const lbl = document.getElementById('iosHapticLabel');
+        if (lbl) {
+            lbl.click();
+            if (doublePulse) {
+                setTimeout(() => { try { lbl.click(); } catch (_) {} }, 180);
+                setTimeout(() => { try { lbl.click(); } catch (_) {} }, 360);
+            }
+        }
+    } catch (_) {}
+}
+
+function playBeep(withRestNotification = false) {
+    triggerHaptic(true);
+
+    try {
+        if (navigator.audioSession) {
+            navigator.audioSession.type = 'playback';
+        }
+    } catch (_) {}
+
+    // Play HTML5 WAV Chime (works on iPhone even with Silent Switch when playback session or unlocked)
+    let playedWav = false;
+    try {
+        if (!__chimeAudioEl) {
+            __chimeAudioEl = new Audio(buildChimeWavDataUri());
+        }
+        __chimeAudioEl.volume = 1.0;
+        __chimeAudioEl.currentTime = 0;
+        const playPromise = __chimeAudioEl.play();
+        if (playPromise && typeof playPromise.catch === 'function') {
+            playPromise.catch(() => {});
+        }
+        playedWav = true;
+    } catch (_) {}
+
+    // Also play on shared WebAudio context as reinforcement
+    try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) {
+            if (!__sharedAudioCtx) __sharedAudioCtx = new AudioCtx();
+            if (__sharedAudioCtx.state === 'suspended') __sharedAudioCtx.resume();
+            const playTone = (freq, startOffset, duration) => {
+                const osc = __sharedAudioCtx.createOscillator();
+                const gain = __sharedAudioCtx.createGain();
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(freq, __sharedAudioCtx.currentTime + startOffset);
+                gain.gain.setValueAtTime(playedWav ? 0.15 : 0.35, __sharedAudioCtx.currentTime + startOffset);
+                gain.gain.exponentialRampToValueAtTime(0.008, __sharedAudioCtx.currentTime + startOffset + duration);
+                osc.connect(gain);
+                gain.connect(__sharedAudioCtx.destination);
+                osc.start(__sharedAudioCtx.currentTime + startOffset);
+                osc.stop(__sharedAudioCtx.currentTime + startOffset + duration);
+            };
+            playTone(880, 0, 0.18);
+            playTone(1174.66, 0.19, 0.22);
+            playTone(1479.98, 0.38, 0.28);
+        }
+    } catch (_) {}
+
+    if (withRestNotification && localStorage.getItem('nicole_notif_rest') !== '0') {
+        sendLocalNotification(
+            '⏰ ¡Descanso terminado!',
+            '¡Tiempo cumplido! A por la siguiente serie 💪',
+            'workout-rest-timer',
+            '/?view=personal'
+        );
+    }
+}
+
+async function sendLocalNotification(title, body, tag = 'nicole-general', url = '/') {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return false;
+    try {
+        const reg = __swRegistration || (navigator.serviceWorker ? await navigator.serviceWorker.getRegistration() : null);
+        if (reg && reg.active) {
+            reg.active.postMessage({ type: 'SHOW_NOTIFICATION', title, body, tag, url });
+            return true;
+        }
+        if (reg && typeof reg.showNotification === 'function') {
+            await reg.showNotification(title, {
+                body,
+                icon: '/apple-touch-icon.png',
+                badge: '/apple-touch-icon.png',
+                tag,
+                renotify: true,
+                vibrate: [250, 100, 250],
+                silent: false,
+                data: { url }
+            });
+            return true;
+        }
+        new Notification(title, { body, icon: '/apple-touch-icon.png', tag });
+        return true;
+    } catch (_) {
+        return false;
+    }
+}
+
+async function scheduleRestNotificationInSW(seconds, exerciseName = '') {
+    if (localStorage.getItem('nicole_notif_rest') === '0') return;
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    try {
+        const reg = __swRegistration || (navigator.serviceWorker ? await navigator.serviceWorker.getRegistration() : null);
+        if (reg && reg.active) {
+            reg.active.postMessage({
+                type: 'SCHEDULE_REST_NOTIFICATION',
+                delayMs: Math.max(1000, seconds * 1000),
+                title: '⏰ ¡Descanso terminado!',
+                body: exerciseName ? `Sigue con ${exerciseName} 💪` : '¡Tiempo cumplido! A por la siguiente serie 💪'
+            });
+        }
+    } catch (_) {}
+}
+
+async function cancelRestNotificationInSW() {
+    try {
+        const reg = __swRegistration || (navigator.serviceWorker ? await navigator.serviceWorker.getRegistration() : null);
+        if (reg && reg.active) {
+            reg.active.postMessage({ type: 'CANCEL_REST_NOTIFICATION' });
+        }
+    } catch (_) {}
+}
+
+async function requestNotificationPermission() {
+    unlockAudioOnUserTap();
+    triggerHaptic(false);
+
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
+    if (!('Notification' in window)) {
+        if (isIOS && !isStandalone) {
+            showToast('📲 En iPhone: abre la app desde el ícono de "Pantalla de inicio" para activar notificaciones');
+        } else {
+            showToast('Tu navegador no permite notificaciones web en esta vista');
+        }
+        return;
+    }
+
+    try {
+        const perm = await Notification.requestPermission();
+        if (perm === 'granted') {
+            playBeep(false);
+            await sendLocalNotification(
+                '✨ Notificaciones activadas',
+                'Te avisaré cuando termine tu descanso de serie y en tus recordatorios importantes 💖',
+                'nicole-welcome'
+            );
+            showToast('🔔 ¡Notificaciones activadas!');
+            checkSmartDailyNotifications(true);
+        } else if (perm === 'denied') {
+            showToast('Permiso denegado. Actívalo en Ajustes > Notificaciones de tu teléfono.');
+        }
+        if (state.view === 'settings') navigate('settings');
+        else if (state.view === 'personal') navigate('personal');
+    } catch (e) {
+        showToast('No se pudo solicitar permiso: ' + e.message);
+    }
+}
+window.requestNotificationPermission = requestNotificationPermission;
+
+async function testSoundAndNotification() {
+    unlockAudioOnUserTap();
+    playBeep(false);
+    if ('Notification' in window && Notification.permission === 'granted') {
+        await sendLocalNotification(
+            '🔔 Prueba de alerta · Nicole',
+            '¡El sonido, la vibración y las notificaciones están funcionando perfecto! 💪✨',
+            'nicole-test'
+        );
+        showToast('🔊 Sonido, vibración y notificación enviados');
+    } else {
+        showToast('🔊 Sonido y vibración probados (activa notificaciones para recibir alertas)');
+    }
+}
+window.testSoundAndNotification = testSoundAndNotification;
+
+function toggleNotifPref(key, checked) {
+    localStorage.setItem(key, checked ? '1' : '0');
+    showToast('Preferencia guardada');
+}
+window.toggleNotifPref = toggleNotifPref;
+
+async function checkSmartDailyNotifications(force = false) {
+    if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    const today = todayStr();
+    const lastCheck = localStorage.getItem('nicole_last_notif_date');
+    if (!force && lastCheck === today) return;
+
+    try {
+        const [proj, deadlines, stockRaw, labDate] = await Promise.all([
+            api(eel.get_estradiol_projection).catch(() => null),
+            api(eel.get_soon_deadlines).catch(() => []),
+            api(eel.get_config, 'estradiol_stock').catch(() => null),
+            api(eel.get_config, 'next_lab_date').catch(() => null),
+        ]);
+
+        const alerts = [];
+
+        // 1. Health alerts (Estradiol injection, lab, stock)
+        if (localStorage.getItem('nicole_notif_health') !== '0') {
+            if (proj && proj.next_injection_date) {
+                const d = daysUntil(proj.next_injection_date);
+                if (d === 0) alerts.push('💉 Hoy toca tu inyección de Estradiol');
+                else if (d === 1) alerts.push('💉 Mañana te toca inyección de Estradiol');
+            }
+            if (labDate) {
+                const dl = daysUntil(labDate);
+                if (dl !== null && dl >= 0 && dl <= 3) {
+                    alerts.push(dl === 0 ? '🧪 ¡Hoy tenés control de laboratorio!' : `🧪 Control de laboratorio en ${dl} día${dl === 1 ? '' : 's'}`);
+                }
+            }
+            const stock = (stockRaw !== null && stockRaw !== undefined && stockRaw !== '') ? parseInt(stockRaw) : null;
+            if (stock !== null && stock <= 1) {
+                alerts.push(`📦 Queda${stock === 1 ? ' 1 ampolla' : 'n 0 ampollas'} de Estradiol en stock`);
+            }
+        }
+
+        // 2. Tasks, University Exams & Cosplay Deadlines due today or tomorrow
+        if (localStorage.getItem('nicole_notif_tasks') !== '0' && Array.isArray(deadlines)) {
+            const urgent = deadlines.filter(item => {
+                const d = daysUntil(item.date);
+                return d !== null && d >= 0 && d <= 1;
+            });
+            if (urgent.length > 0) {
+                const names = urgent.slice(0, 2).map(u => u.title).join(', ');
+                alerts.push(`📌 Para hoy/mañana: ${names}${urgent.length > 2 ? ` (+${urgent.length - 2} más)` : ''}`);
+            }
+        }
+
+        if (alerts.length > 0) {
+            await sendLocalNotification(
+                '🌸 Resumen de hoy · Nicole',
+                alerts.join(' · '),
+                'nicole-daily-' + today
+            );
+        }
+        localStorage.setItem('nicole_last_notif_date', today);
     } catch (_) {}
 }
 
@@ -2212,10 +2585,15 @@ async function renderPersonalRoutine(el) {
         </div>`;
     }
 
+    const notifGranted = ('Notification' in window) && Notification.permission === 'granted';
     html += `<div class="card" style="margin-bottom:14px;padding:12px 16px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
             <span style="font-size:0.8rem;font-weight:700;color:var(--text-secondary)">🔥 Constancia de esta semana</span>
-            <span class="tag ${weekTrainedCount >= 4 ? 'tag-sage' : 'tag-primary'}" style="font-size:0.72rem">${weekTrainedCount} / 6 días entrenados</span>
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                ${!notifGranted ? `<button class="btn btn-ghost btn-sm" style="font-size:0.72rem;padding:3px 9px;border:1px solid var(--border)" onclick="requestNotificationPermission()">🔔 Activar avisos</button>` : ''}
+                <button class="btn btn-ghost btn-sm" style="font-size:0.72rem;padding:3px 9px" title="Probar sonido y vibración" onclick="testSoundAndNotification()">🔊</button>
+                <span class="tag ${weekTrainedCount >= 4 ? 'tag-sage' : 'tag-primary'}" style="font-size:0.72rem">${weekTrainedCount} / 6 días entrenados</span>
+            </div>
         </div>
         <div style="display:flex;gap:6px;overflow-x:auto">${weekCellsHtml}</div>
     </div>`;
@@ -2508,6 +2886,9 @@ function selectLiveWorkoutStep(stepKey) {
 }
 
 function startLiveWorkout(dayId) {
+    unlockAudioOnUserTap();
+    triggerHaptic(false);
+
     const routine = window.__workoutRoutine || [];
     const day = routine.find(d => d.id === dayId);
     if (!day) return;
@@ -2520,6 +2901,7 @@ function startLiveWorkout(dayId) {
     if (state.activeWorkout && state.activeWorkout.restTimerId) {
         clearInterval(state.activeWorkout.restTimerId);
     }
+    cancelRestNotificationInSW();
 
     const exList = (day.exercises || []).map(ex => {
         const numSets = Math.max(1, parseInt(ex.sets) || 3);
@@ -2537,18 +2919,21 @@ function startLiveWorkout(dayId) {
         return { ...ex, setRows };
     });
 
+    const startMs = Date.now();
     state.activeWorkout = {
         dayId: day.id,
         dayName: day.name,
         warmup: day.warmup_notes,
         cooldown: day.cooldown_notes,
         currentStep: 0,
+        startedAtMs: startMs,
         elapsedSec: 0,
         restSec: 0,
+        restEndTime: 0,
         exercises: exList,
         timerId: setInterval(() => {
             if (!state.activeWorkout) return;
-            state.activeWorkout.elapsedSec++;
+            state.activeWorkout.elapsedSec = Math.max(0, Math.floor((Date.now() - state.activeWorkout.startedAtMs) / 1000));
             const el = document.getElementById('awElapsedTimer');
             if (el) el.textContent = fmtSec(state.activeWorkout.elapsedSec);
         }, 1000),
@@ -2557,6 +2942,32 @@ function startLiveWorkout(dayId) {
 
     refreshLiveWorkoutDOM();
     window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function syncActiveWorkoutTimers() {
+    if (!state.activeWorkout) return;
+    if (state.activeWorkout.startedAtMs) {
+        state.activeWorkout.elapsedSec = Math.max(0, Math.floor((Date.now() - state.activeWorkout.startedAtMs) / 1000));
+        const el = document.getElementById('awElapsedTimer');
+        if (el) el.textContent = fmtSec(state.activeWorkout.elapsedSec);
+    }
+    if (state.activeWorkout.restEndTime > 0) {
+        const rem = Math.ceil((state.activeWorkout.restEndTime - Date.now()) / 1000);
+        if (rem <= 0) {
+            if (state.activeWorkout.restTimerId) clearInterval(state.activeWorkout.restTimerId);
+            state.activeWorkout.restTimerId = null;
+            state.activeWorkout.restSec = 0;
+            state.activeWorkout.restEndTime = 0;
+            playBeep(false);
+            showToast('⏰ ¡Descanso terminado!');
+            const bar = document.getElementById('awRestBar');
+            if (bar) bar.style.display = 'none';
+        } else {
+            state.activeWorkout.restSec = rem;
+            const cd = document.getElementById('awRestCountdown');
+            if (cd) cd.textContent = fmtSec(rem);
+        }
+    }
 }
 
 function updateLiveSet(exIdx, sIdx, field, val) {
@@ -2581,50 +2992,76 @@ function addLiveSetRow(exIdx) {
 }
 
 function toggleLiveSetDone(exIdx, sIdx) {
+    unlockAudioOnUserTap();
+    triggerHaptic(false);
     if (!state.activeWorkout) return;
     const ex = state.activeWorkout.exercises[exIdx];
     const sr = ex?.setRows[sIdx];
     if (!sr) return;
     sr.done = !sr.done;
     if (sr.done) {
-        startRestTimer(ex.rest_seconds || 60);
+        startRestTimer(ex.rest_seconds || 60, ex.name || '');
     } else {
         refreshLiveWorkoutDOM();
     }
 }
 
-function startRestTimer(seconds) {
+function startRestTimer(seconds, exName = '') {
+    unlockAudioOnUserTap();
     if (!state.activeWorkout) return;
     if (state.activeWorkout.restTimerId) clearInterval(state.activeWorkout.restTimerId);
-    state.activeWorkout.restSec = parseInt(seconds) || 60;
+    const sec = Math.max(5, parseInt(seconds) || 60);
+    state.activeWorkout.restSec = sec;
+    state.activeWorkout.restEndTime = Date.now() + sec * 1000;
+    state.activeWorkout.restExName = exName;
+
+    scheduleRestNotificationInSW(sec, exName);
+
     state.activeWorkout.restTimerId = setInterval(() => {
         if (!state.activeWorkout) return;
-        state.activeWorkout.restSec--;
+        const remaining = Math.ceil((state.activeWorkout.restEndTime - Date.now()) / 1000);
+        state.activeWorkout.restSec = Math.max(0, remaining);
         const cd = document.getElementById('awRestCountdown');
         if (cd) cd.textContent = fmtSec(state.activeWorkout.restSec);
         if (state.activeWorkout.restSec <= 0) {
             clearInterval(state.activeWorkout.restTimerId);
             state.activeWorkout.restTimerId = null;
-            playBeep();
+            state.activeWorkout.restEndTime = 0;
+            cancelRestNotificationInSW();
+            playBeep(true);
             showToast('⏰ ¡Descanso terminado!');
             const bar = document.getElementById('awRestBar');
             if (bar) bar.style.display = 'none';
         }
-    }, 1000);
+    }, 500);
     refreshLiveWorkoutDOM();
 }
 
 function adjustRestTimer(delta) {
+    unlockAudioOnUserTap();
+    triggerHaptic(false);
     if (!state.activeWorkout) return;
-    state.activeWorkout.restSec = Math.max(0, (state.activeWorkout.restSec || 0) + delta);
+    const nextSec = Math.max(0, (state.activeWorkout.restSec || 0) + delta);
+    state.activeWorkout.restSec = nextSec;
+    if (nextSec > 0) {
+        state.activeWorkout.restEndTime = Date.now() + nextSec * 1000;
+        scheduleRestNotificationInSW(nextSec, state.activeWorkout.restExName || '');
+    } else {
+        skipRestTimer();
+        return;
+    }
     const cd = document.getElementById('awRestCountdown');
     if (cd) cd.textContent = fmtSec(state.activeWorkout.restSec);
 }
 
 function skipRestTimer() {
+    triggerHaptic(false);
     if (!state.activeWorkout) return;
     if (state.activeWorkout.restTimerId) clearInterval(state.activeWorkout.restTimerId);
+    state.activeWorkout.restTimerId = null;
     state.activeWorkout.restSec = 0;
+    state.activeWorkout.restEndTime = 0;
+    cancelRestNotificationInSW();
     refreshLiveWorkoutDOM();
 }
 
@@ -2632,6 +3069,7 @@ function cancelLiveWorkout() {
     if (!confirm('¿Cancelar el entrenamiento en curso sin guardar?')) return;
     if (state.activeWorkout?.timerId) clearInterval(state.activeWorkout.timerId);
     if (state.activeWorkout?.restTimerId) clearInterval(state.activeWorkout.restTimerId);
+    cancelRestNotificationInSW();
     state.activeWorkout = null;
     navigate('personal');
 }
@@ -4792,10 +5230,64 @@ async function renderSettings(el) {
     const cloudUrl = 'https://nicolecarp.pythonanywhere.com';
     const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&margin=8&data=${encodeURIComponent(cloudUrl)}`;
 
+    const hasNotifApi = ('Notification' in window);
+    const perm = hasNotifApi ? Notification.permission : 'unsupported';
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+
+    const prefRest = localStorage.getItem('nicole_notif_rest') !== '0';
+    const prefHealth = localStorage.getItem('nicole_notif_health') !== '0';
+    const prefTasks = localStorage.getItem('nicole_notif_tasks') !== '0';
+
+    let statusBadge = '';
+    if (perm === 'granted') {
+        statusBadge = `<span class="tag tag-sage">Activas ✅</span>`;
+    } else if (perm === 'denied') {
+        statusBadge = `<span class="tag" style="background:var(--rose);color:#fff">Bloqueadas en navegador</span>`;
+    } else if (isIOS && !isStandalone) {
+        statusBadge = `<span class="tag tag-gold">Abrir desde Pantalla de Inicio</span>`;
+    } else {
+        statusBadge = `<span class="tag tag-primary">Sin activar</span>`;
+    }
+
     el.innerHTML = `<div class="page-header">
-        <div><h1>Ajustes</h1><div class="subtitle">Nube y acceso móvil</div></div>
+        <div><h1>Ajustes</h1><div class="subtitle">Notificaciones, nube y acceso móvil</div></div>
     </div>
     <div class="settings-section">
+        <div class="card" style="margin-bottom:18px">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+                <div>
+                    <div style="font-size:1rem;font-weight:700">🔔 Notificaciones, Sonido y Vibración</div>
+                    <div style="font-size:0.8rem;color:var(--text-muted);margin-top:2px">Avisos de descanso de rutina, inyección de Estradiol y entregas</div>
+                </div>
+                ${statusBadge}
+            </div>
+            ${(isIOS && !isStandalone) ? `
+                <div style="padding:10px 14px;border-radius:10px;background:var(--primary-light);font-size:0.82rem;margin-bottom:12px">
+                    📲 <strong>Tip para iPhone:</strong> Para que iOS permita notificaciones y vibración nativa, tocá <strong>Compartir ⬆️ → Agregar a pantalla de inicio</strong> en Safari y abrí la app desde ese ícono.
+                </div>
+            ` : ''}
+            <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px">
+                ${perm !== 'granted' ? `<button type="button" class="btn btn-primary btn-sm" onclick="requestNotificationPermission()">🔔 Activar notificaciones</button>` : ''}
+                <button type="button" class="btn btn-secondary btn-sm" onclick="testSoundAndNotification()">🔊 Probar sonido, vibración y alerta</button>
+                ${perm === 'granted' ? `<button type="button" class="btn btn-ghost btn-sm" onclick="checkSmartDailyNotifications(true)">🌸 Enviar resumen de hoy</button>` : ''}
+            </div>
+            <div style="display:flex;flex-direction:column;gap:10px;padding-top:12px;border-top:1px solid var(--border-light);font-size:0.86rem">
+                <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+                    <input type="checkbox" ${prefRest ? 'checked' : ''} onchange="toggleNotifPref('nicole_notif_rest', this.checked)">
+                    <span>⏰ Avisar al terminar el descanso entre series (Mi Rutina)</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+                    <input type="checkbox" ${prefHealth ? 'checked' : ''} onchange="toggleNotifPref('nicole_notif_health', this.checked)">
+                    <span>💉 Recordatorios de inyección de Estradiol, stock y laboratorio</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+                    <input type="checkbox" ${prefTasks ? 'checked' : ''} onchange="toggleNotifPref('nicole_notif_tasks', this.checked)">
+                    <span>📌 Recordatorios de tareas, parciales de la facu y entregas de cosplay</span>
+                </label>
+            </div>
+        </div>
+
         <div class="card">
             <div style="display:flex;gap:22px;align-items:center;flex-wrap:wrap">
                 <div style="background:#fff;padding:10px;border-radius:14px;border:1px solid var(--border);flex-shrink:0">

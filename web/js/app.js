@@ -4088,17 +4088,17 @@ async function renderCosplays(el) {
         </div>
         <div class="stat-card lavender">
             <div class="stat-icon">💳</div>
-            <div class="stat-value">S/ ${totalPendingBalance.toFixed(0)}</div>
+            <div class="stat-value">$ ${totalPendingBalance.toFixed(0)}</div>
             <div class="stat-label">Saldo por cobrar</div>
         </div>
         <div class="stat-card rose">
             <div class="stat-icon">🧵</div>
-            <div class="stat-value">S/ ${totalCost.toFixed(0)}</div>
+            <div class="stat-value">$ ${totalCost.toFixed(0)}</div>
             <div class="stat-label">Materiales</div>
         </div>
         <div class="stat-card sage">
             <div class="stat-icon">✨</div>
-            <div class="stat-value">S/ ${totalProfit.toFixed(0)}</div>
+            <div class="stat-value">$ ${totalProfit.toFixed(0)}</div>
             <div class="stat-label">Ganancia neta</div>
         </div>
     </div>`;
@@ -4148,15 +4148,15 @@ async function renderCosplays(el) {
                 <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;text-align:center;font-size:0.78rem;margin-bottom:8px">
                     <div style="background:var(--bg);padding:6px;border-radius:8px">
                         <div style="color:var(--text-muted);font-size:0.7rem">Precio / Seña</div>
-                        <div style="font-weight:700">S/ ${(p.price || 0).toFixed(0)} <span style="font-weight:400;color:var(--text-muted)">(${(p.deposit || 0).toFixed(0)})</span></div>
+                        <div style="font-weight:700">$ ${(p.price || 0).toFixed(0)} <span style="font-weight:400;color:var(--text-muted)">(${(p.deposit || 0).toFixed(0)})</span></div>
                     </div>
                     <div style="background:var(--bg);padding:6px;border-radius:8px">
                         <div style="color:var(--text-muted);font-size:0.7rem">Falta cobrar</div>
-                        <div style="font-weight:700;color:${p.balance_due > 0 ? 'var(--rose)' : 'var(--sage)'}">S/ ${(p.balance_due || 0).toFixed(0)}</div>
+                        <div style="font-weight:700;color:${p.balance_due > 0 ? 'var(--rose)' : 'var(--sage)'}">$ ${(p.balance_due || 0).toFixed(0)}</div>
                     </div>
                     <div style="background:var(--bg);padding:6px;border-radius:8px">
                         <div style="color:var(--text-muted);font-size:0.7rem">Ganancia</div>
-                        <div style="font-weight:700;color:var(--sage)">S/ ${(p.profit || 0).toFixed(0)}</div>
+                        <div style="font-weight:700;color:var(--sage)">$ ${(p.profit || 0).toFixed(0)}</div>
                     </div>
                 </div>
 
@@ -4221,11 +4221,11 @@ function showCosplayProjectForm(id = null) {
         </div>
         <div class="form-group"><label>Talla / Medidas del cliente</label><input class="form-control" name="size_measurements" value="${esc(p ? p.size_measurements : '')}" placeholder="Ej: Talla S · Busto 86, Cintura 65, Cadera 92, Alt 1.62"></div>
         <div class="form-row">
-            <div class="form-group"><label>Precio total (S/)</label><input type="number" step="1" class="form-control" name="price" value="${p ? p.price : ''}"></div>
-            <div class="form-group"><label>Seña / Adelanto recibido (S/)</label><input type="number" step="1" class="form-control" name="deposit" value="${p ? p.deposit : ''}"></div>
+            <div class="form-group"><label>Precio total ($)</label><input type="number" step="1" class="form-control" name="price" value="${p ? p.price : ''}"></div>
+            <div class="form-group"><label>Seña / Adelanto recibido ($)</label><input type="number" step="1" class="form-control" name="deposit" value="${p ? p.deposit : ''}"></div>
         </div>
         <div class="form-row">
-            <div class="form-group"><label>Costo base materiales (S/)</label><input type="number" step="1" class="form-control" name="materials_cost" value="${p ? p.materials_cost : ''}"></div>
+            <div class="form-group"><label>Costo base materiales ($)</label><input type="number" step="1" class="form-control" name="materials_cost" value="${p ? p.materials_cost : ''}"></div>
             <div class="form-group"><label>Fecha de entrega / Evento</label><input type="date" class="form-control" name="due_date" value="${p && p.due_date ? p.due_date : ''}"></div>
         </div>
         <div class="form-group"><label>Estado</label><select class="form-control" name="status">
@@ -4282,7 +4282,7 @@ async function showCosplayItemsModal(projectId) {
                 <option value="Prop">⚔️ Prop</option>
                 <option value="Peluca">💇‍♀️ Peluca</option>
             </select>
-            <input id="ci_cost" type="number" step="0.5" class="form-control" placeholder="Costo S/" style="width:95px" onkeydown="if(event.key==='Enter')addCosplayItemFromModal(${p.id})">
+            <input id="ci_cost" type="number" step="0.5" class="form-control" placeholder="Costo $" style="width:95px" onkeydown="if(event.key==='Enter')addCosplayItemFromModal(${p.id})">
             <button type="button" class="btn btn-primary btn-sm" onclick="addCosplayItemFromModal(${p.id})">+ Añadir</button>
         </div>`;
 
@@ -4297,7 +4297,7 @@ async function showCosplayItemsModal(projectId) {
                     <span class="tag" style="background:var(--border-light);font-size:0.68rem;margin-right:4px">${esc(it.item_type || 'Material')}</span>
                     <strong>${esc(it.name)}</strong>
                 </div>
-                ${it.cost > 0 ? `<div style="font-size:0.82rem;color:var(--text-muted);margin-right:8px">S/ ${parseFloat(it.cost).toFixed(1)}</div>` : ''}
+                ${it.cost > 0 ? `<div style="font-size:0.82rem;color:var(--text-muted);margin-right:8px">$ ${parseFloat(it.cost).toFixed(1)}</div>` : ''}
                 <button class="btn btn-ghost btn-sm" onclick="deleteCosplayItemFromModal(${p.id}, ${it.id})">✕</button>
             </div>`;
         }

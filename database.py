@@ -430,6 +430,32 @@ def init_db():
         "ALTER TABLE body_measurements ADD COLUMN bideltoid_cm REAL",
         "ALTER TABLE body_measurements ADD COLUMN underbust_cm REAL",
         "ALTER TABLE body_measurements ADD COLUMN iliac_crest_cm REAL",
+        """CREATE TABLE IF NOT EXISTS cosplay_projects (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            character_name TEXT NOT NULL,
+            series_name TEXT,
+            client_name TEXT,
+            client_contact TEXT,
+            project_type TEXT DEFAULT 'Comisión',
+            category TEXT DEFAULT 'Traje completo',
+            size_measurements TEXT,
+            price REAL DEFAULT 0,
+            deposit REAL DEFAULT 0,
+            materials_cost REAL DEFAULT 0,
+            due_date TEXT,
+            status TEXT DEFAULT 'cotizado',
+            notes TEXT,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        )""",
+        """CREATE TABLE IF NOT EXISTS cosplay_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            item_type TEXT DEFAULT 'Material',
+            cost REAL DEFAULT 0,
+            done INTEGER DEFAULT 0,
+            FOREIGN KEY (project_id) REFERENCES cosplay_projects(id) ON DELETE CASCADE
+        )""",
     ]:
         try:
             conn.execute(stmt)
@@ -438,7 +464,59 @@ def init_db():
 
     conn.commit()
     seed_default_workouts(conn)
+    apply_cleanups_and_seeds(conn)
     conn.close()
+
+
+def apply_cleanups_and_seeds(conn):
+    # 1. One-time cleanup of Work, University, and 3D databases
+    already_cleaned = conn.execute("SELECT value FROM config WHERE key='wipe_work_uni_3d_v1'").fetchone()
+    if not already_cleaned:
+        conn.execute("PRAGMA foreign_keys = OFF")
+        for tbl in [
+            "quote_items", "quotes", "invoices", "service_records", "daily_control",
+            "client_services", "client_sites", "clients",
+            "employee_documents", "reimbursements", "overtime", "employees",
+            "lindley_contacts", "lindley_forms",
+            "exams", "assignments", "subjects",
+            "print_orders"
+        ]:
+            try:
+                conn.execute(f"DELETE FROM {tbl}")
+            except Exception:
+                pass
+        try:
+            conn.execute("DELETE FROM tasks WHERE area_id IN (1, 2)")
+        except Exception:
+            pass
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('wipe_work_uni_3d_v1', '1')")
+        conn.commit()
+
+    # 2. Ensure historical Apple Health weight records are present (for cloud or local)
+    apple_weights = [
+        ("2022-12-30", 51.0), ("2024-03-04", 51.3), ("2024-08-29", 51.0), ("2024-09-25", 49.0),
+        ("2024-10-08", 49.2), ("2024-10-20", 49.1), ("2024-12-16", 49.4), ("2025-02-01", 47.0),
+        ("2025-02-21", 48.0), ("2025-03-09", 48.8), ("2025-03-10", 47.5), ("2025-03-11", 49.0),
+        ("2025-03-20", 48.0), ("2025-05-03", 50.0), ("2025-06-08", 50.0), ("2025-06-21", 49.5),
+        ("2025-07-07", 51.6), ("2025-09-09", 50.0), ("2025-09-23", 51.0), ("2025-09-28", 50.4),
+        ("2025-09-29", 51.4), ("2025-09-30", 50.8), ("2025-10-01", 50.6), ("2025-10-02", 50.5),
+        ("2025-10-03", 50.4), ("2025-10-04", 50.0), ("2025-10-05", 50.5), ("2025-10-06", 51.5),
+        ("2025-10-07", 51.5), ("2025-10-08", 51.8), ("2025-10-12", 52.0), ("2025-10-13", 52.0),
+        ("2025-10-20", 52.5), ("2025-10-24", 53.0), ("2025-10-30", 53.6), ("2025-11-11", 54.0),
+        ("2025-11-16", 54.5), ("2025-11-18", 55.2), ("2025-11-28", 54.5), ("2025-12-03", 54.2),
+        ("2025-12-08", 55.0), ("2025-12-23", 54.2), ("2026-01-01", 55.0), ("2026-01-13", 55.5),
+        ("2026-01-23", 53.5), ("2026-02-01", 53.7), ("2026-02-23", 53.8), ("2026-05-12", 53.6),
+        ("2026-07-04", 52.4), ("2026-08-29", 51.0), ("2026-09-29", 50.8),
+    ]
+    for dt, w in apple_weights:
+        row = conn.execute("SELECT id, weight FROM body_measurements WHERE date=?", (dt,)).fetchone()
+        if not row:
+            conn.execute("INSERT INTO body_measurements (date, weight) VALUES (?, ?)", (dt, w))
+        elif row["weight"] is None:
+            conn.execute("UPDATE body_measurements SET weight=? WHERE id=?", (w, row["id"]))
+    conn.commit()
+
 
 def seed_default_workouts(conn):
     count = conn.execute("SELECT COUNT(*) FROM workout_days").fetchone()[0]

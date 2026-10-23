@@ -1024,6 +1024,39 @@ def get_dashboard_stats():
             next_injection_date = next_due.isoformat()
             overdue_injection = next_injection_days < 0
 
+        # Workout stats
+        now_month = today()[:7]
+        workouts_month = conn.execute(
+            "SELECT COUNT(*) as c FROM workout_sessions WHERE date LIKE ? || '%'", (now_month,)
+        ).fetchone()['c']
+        last_session = conn.execute(
+            "SELECT day_id, day_name, date FROM workout_sessions ORDER BY date DESC, id DESC LIMIT 1"
+        ).fetchone()
+        days_rows = conn.execute(
+            "SELECT id, day_number, name FROM workout_days ORDER BY sort_order ASC, day_number ASC"
+        ).fetchall()
+        next_workout_name = days_rows[0]['name'] if days_rows else None
+        next_workout_id = days_rows[0]['id'] if days_rows else None
+        if last_session and days_rows:
+            ids = [r['id'] for r in days_rows]
+            if last_session['day_id'] in ids:
+                nxt_idx = (ids.index(last_session['day_id']) + 1) % len(days_rows)
+                next_workout_name = days_rows[nxt_idx]['name']
+                next_workout_id = days_rows[nxt_idx]['id']
+
+        # Latest weight
+        last_weight_row = conn.execute(
+            "SELECT weight, date FROM body_measurements WHERE weight IS NOT NULL ORDER BY date DESC LIMIT 1"
+        ).fetchone()
+
+        # Cosplay stats
+        active_cosplays = conn.execute(
+            "SELECT COUNT(*) as c FROM cosplay_projects WHERE status NOT IN ('entregado')"
+        ).fetchone()['c']
+        next_cosplay = conn.execute(
+            "SELECT character_name, due_date FROM cosplay_projects WHERE status NOT IN ('entregado') AND due_date IS NOT NULL AND due_date != '' ORDER BY due_date ASC LIMIT 1"
+        ).fetchone()
+
         return {
             'overdue_tasks': overdue,
             'pending_tasks': pending,
@@ -1033,6 +1066,15 @@ def get_dashboard_stats():
             'overdue_injection': overdue_injection,
             'next_injection_date': next_injection_date,
             'next_injection_days': next_injection_days,
+            'workouts_month': workouts_month,
+            'last_workout_date': last_session['date'] if last_session else None,
+            'next_workout_name': next_workout_name,
+            'next_workout_id': next_workout_id,
+            'latest_weight': last_weight_row['weight'] if last_weight_row else None,
+            'latest_weight_date': last_weight_row['date'] if last_weight_row else None,
+            'active_cosplays': active_cosplays,
+            'next_cosplay_name': next_cosplay['character_name'] if next_cosplay else None,
+            'next_cosplay_date': next_cosplay['due_date'] if next_cosplay else None,
         }
     finally:
         conn.close()
@@ -1069,10 +1111,19 @@ def get_calendar_events(year, month):
             FROM assignments a WHERE a.due_date>=? AND a.due_date<? AND a.status='pending'
         """, (start, end)).fetchall()
 
-        # Past injections in the month
         injections = conn.execute("""
             SELECT date as due_date, '💉 Inyección: ' || dose_mg || ' mg' as title, 'injection' as type
             FROM injections WHERE date>=? AND date<?
+        """, (start, end)).fetchall()
+
+        cosplays = conn.execute("""
+            SELECT due_date, '🎭 Entrega: ' || character_name as title, 'cosplay' as type
+            FROM cosplay_projects WHERE due_date>=? AND due_date<? AND status!='entregado'
+        """, (start, end)).fetchall()
+
+        workouts = conn.execute("""
+            SELECT date as due_date, '🏋️‍♀️ ' || COALESCE(day_name, 'Entrenamiento') as title, 'workout' as type
+            FROM workout_sessions WHERE date>=? AND date<?
         """, (start, end)).fetchall()
 
         # Project future doses (up to 2 ahead) based on last injection
@@ -1089,7 +1140,7 @@ def get_calendar_events(year, month):
                     projected.append({'due_date': ns, 'title': f'💉 Próxima: {dose_mg} mg', 'type': 'injection'})
                 next_date += timedelta(days=7)
 
-        events = tasks + exams + docs + assignments + injections + projected
+        events = tasks + exams + docs + assignments + injections + cosplays + workouts + projected
         result = {}
         for ev in events:
             if ev['due_date']:
@@ -1132,49 +1183,91 @@ def get_soon_deadlines():
     finally:
         conn.close()
 
-# ===================== PRINT ORDERS (3D) =====================
+# ===================== COSPLAY ENTREPRENEURSHIP =====================
 
 @eel.expose
-def get_print_orders():
+def get_cosplay_projects():
     conn = get_connection()
     try:
-        rows = conn.execute("SELECT * FROM print_orders ORDER BY created_at DESC LIMIT 50").fetchall()
-        return [dict(r) for r in rows]
+        rows = conn.execute("""
+            SELECT * FROM cosplay_projects
+            ORDER BY CASE status
+                WHEN 'en_proceso' THEN 1
+                WHEN 'con_sena' THEN 2
+                WHEN 'cotizado' THEN 3
+                WHEN 'listo' THEN 4
+                WHEN 'entregado' THEN 5
+                ELSE 6
+            END, COALESCE(due_date, '9999-12-31') ASC, id DESC
+        """).fetchall()
+    except Exception:
+        rows = conn.execute("SELECT * FROM cosplay_projects ORDER BY id DESC").fetchall()
+    try:
+        projects = []
+        for r in rows:
+            p = dict(r)
+            items = conn.execute(
+                "SELECT * FROM cosplay_items WHERE project_id=? ORDER BY id ASC", (p['id'],)
+            ).fetchall()
+            p['items'] = [dict(it) for it in items]
+            items_cost = sum(float(it['cost'] or 0) for it in p['items'])
+            p['total_cost'] = round(float(p.get('materials_cost') or 0) + items_cost, 2)
+            p['profit'] = round(float(p.get('price') or 0) - p['total_cost'], 2)
+            p['balance_due'] = round(max(0.0, float(p.get('price') or 0) - float(p.get('deposit') or 0)), 2)
+            projects.append(p)
+        return projects
     finally:
         conn.close()
 
 @eel.expose
-def create_print_order(data):
+def save_cosplay_project(data):
     conn = get_connection()
     try:
-        cur = conn.execute("""
-            INSERT INTO print_orders (customer_name, piece_name, material, color, quantity, price, filament_grams, print_hours, order_date, delivery_date, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (data['customer_name'], data['piece_name'], data.get('material'),
-              data.get('color'), data.get('quantity', 1), data.get('price'),
-              data.get('filament_grams'), data.get('print_hours'),
-              data.get('order_date'), data.get('delivery_date'), data.get('notes')))
-        conn.commit()
-        return {'ok': True, 'id': cur.lastrowid}
+        pid = data.get('id')
+        if pid:
+            conn.execute("""
+                UPDATE cosplay_projects
+                SET character_name=?, series_name=?, client_name=?, client_contact=?,
+                    project_type=?, category=?, size_measurements=?, price=?, deposit=?,
+                    materials_cost=?, due_date=?, status=?, notes=?
+                WHERE id=?
+            """, (
+                data.get('character_name'), data.get('series_name'), data.get('client_name'),
+                data.get('client_contact'), data.get('project_type', 'Comisión'),
+                data.get('category', 'Traje completo'), data.get('size_measurements'),
+                float(data.get('price') or 0), float(data.get('deposit') or 0),
+                float(data.get('materials_cost') or 0), data.get('due_date'),
+                data.get('status', 'cotizado'), data.get('notes'), pid
+            ))
+            conn.commit()
+            return {'ok': True, 'id': pid}
+        else:
+            cur = conn.execute("""
+                INSERT INTO cosplay_projects
+                (character_name, series_name, client_name, client_contact, project_type, category,
+                 size_measurements, price, deposit, materials_cost, due_date, status, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                data.get('character_name'), data.get('series_name'), data.get('client_name'),
+                data.get('client_contact'), data.get('project_type', 'Comisión'),
+                data.get('category', 'Traje completo'), data.get('size_measurements'),
+                float(data.get('price') or 0), float(data.get('deposit') or 0),
+                float(data.get('materials_cost') or 0), data.get('due_date'),
+                data.get('status', 'cotizado'), data.get('notes')
+            ))
+            conn.commit()
+            return {'ok': True, 'id': cur.lastrowid}
     except Exception as e:
         return {'ok': False, 'error': str(e)}
     finally:
         conn.close()
 
 @eel.expose
-def update_print_order(id, data):
+def delete_cosplay_project(id):
     conn = get_connection()
     try:
-        conn.execute("""
-            UPDATE print_orders SET customer_name=?, piece_name=?, material=?, color=?,
-                quantity=?, price=?, filament_grams=?, print_hours=?, order_date=?,
-                delivery_date=?, status=?, notes=?
-            WHERE id=?
-        """, (data['customer_name'], data['piece_name'], data.get('material'),
-              data.get('color'), data.get('quantity'), data.get('price'),
-              data.get('filament_grams'), data.get('print_hours'),
-              data.get('order_date'), data.get('delivery_date'),
-              data.get('status'), data.get('notes'), id))
+        conn.execute("DELETE FROM cosplay_items WHERE project_id=?", (id,))
+        conn.execute("DELETE FROM cosplay_projects WHERE id=?", (id,))
         conn.commit()
         return {'ok': True}
     except Exception as e:
@@ -1183,10 +1276,40 @@ def update_print_order(id, data):
         conn.close()
 
 @eel.expose
-def delete_print_order(id):
+def add_cosplay_item(data):
     conn = get_connection()
     try:
-        conn.execute("DELETE FROM print_orders WHERE id=?", (id,))
+        cur = conn.execute("""
+            INSERT INTO cosplay_items (project_id, name, item_type, cost, done)
+            VALUES (?, ?, ?, ?, 0)
+        """, (
+            data['project_id'], data['name'],
+            data.get('item_type', 'Material'), float(data.get('cost') or 0)
+        ))
+        conn.commit()
+        return {'ok': True, 'id': cur.lastrowid}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+@eel.expose
+def toggle_cosplay_item(item_id):
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE cosplay_items SET done = CASE WHEN done=1 THEN 0 ELSE 1 END WHERE id=?", (item_id,))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+@eel.expose
+def delete_cosplay_item(item_id):
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM cosplay_items WHERE id=?", (item_id,))
         conn.commit()
         return {'ok': True}
     except Exception as e:

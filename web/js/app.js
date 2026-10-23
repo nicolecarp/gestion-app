@@ -194,7 +194,8 @@ async function navigate(view) {
             case 'university': await renderUniversity(el); break;
             case 'personal': await renderPersonal(el); break;
             case 'health': await renderHealth(el); break;
-            case 'print3d': await renderPrint3D(el); break;
+            case 'cosplays':
+            case 'print3d': await renderCosplays(el); break;
             case 'settings': await renderSettings(el); break;
         }
         if (isSameView) {
@@ -210,73 +211,115 @@ async function navigate(view) {
 
 // ===================== DASHBOARD =====================
 async function renderDashboard(el) {
-    const stats = await api(eel.get_dashboard_stats);
-    const events = await api(eel.get_calendar_events, state.cal.year, state.cal.month);
-    const tasks = await api(eel.get_soon_deadlines);
+    const [stats, events, tasks, habits] = await Promise.all([
+        api(eel.get_dashboard_stats),
+        api(eel.get_calendar_events, state.cal.year, state.cal.month),
+        api(eel.get_soon_deadlines),
+        api(eel.get_habits)
+    ]);
 
     const today = new Date();
     const greeting = today.getHours() < 12 ? 'Buenos días' : today.getHours() < 18 ? 'Buenas tardes' : 'Buenas noches';
     const dias = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
     const meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','setiembre','octubre','noviembre','diciembre'];
-    const fechaStr = `${dias[today.getDay()]}, ${today.getDate()} de ${meses[today.getMonth()]} de ${today.getFullYear()}`;
+    const fechaStr = `${dias[today.getDay()]}, ${today.getDate()} de ${meses[today.getMonth()]}`;
 
     const injDays = stats && stats.next_injection_days != null ? stats.next_injection_days : null;
     const injOverdue = stats && stats.overdue_injection;
-    const injLabel = injDays !== null ? (injDays <= 0 ? 'Hoy/Vencida' : `En ${injDays} día${injDays !== 1 ? 's' : ''}`) : 'Sin registro';
+    const injLabel = injDays !== null ? (injDays <= 0 ? 'Toca hoy' : `En ${injDays}d`) : 'Sin registro';
+
+    const nextWorkout = (stats && stats.next_workout_name)
+        ? stats.next_workout_name.replace(/^D[íi]a\s*\d+\s*:\s*/i, '')
+        : 'Iniciar rutina';
+    const workoutsMonth = (stats && stats.workouts_month) || 0;
+    const latestWeight = (stats && stats.latest_weight) ? `${stats.latest_weight} kg` : '--';
+    const activeCosplays = (stats && stats.active_cosplays) || 0;
+    const pendingTasks = (stats && stats.pending_tasks) || 0;
 
     let html = `
-        <div class="page-header">
+        <div class="page-header" style="margin-bottom:14px">
             <div>
-                <h1>${greeting} ✨</h1>
+                <h1>${greeting}, Nicole ✨</h1>
                 <div class="subtitle">${fechaStr}</div>
             </div>
+            <div class="page-actions" style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn btn-primary btn-sm" onclick="state.personalTab='routine';navigate('personal')">🏋️‍♀️ Entrenar</button>
+                <button class="btn btn-secondary btn-sm" onclick="state.healthTab='measurements';navigate('health')">📏 Medidas</button>
+                <button class="btn btn-secondary btn-sm" onclick="navigate('cosplays')">🎭 Cosplays</button>
+                <button class="btn btn-secondary btn-sm" onclick="showPersonalTaskForm()">+ Tarea</button>
+            </div>
         </div>
-        <div class="stats-row">
-            <div class="stat-card coral">
-                <div class="stat-icon">📋</div>
-                <div class="stat-value">${stats ? stats.overdue_tasks : 0}</div>
-                <div class="stat-label">Tareas vencidas</div>
+        <div class="stats-row" style="grid-template-columns:repeat(auto-fit,minmax(155px,1fr));margin-bottom:18px">
+            <div class="stat-card coral" style="cursor:pointer" onclick="state.personalTab='routine';navigate('personal')">
+                <div class="stat-icon">🏋️‍♀️</div>
+                <div class="stat-value" style="font-size:1.05rem;line-height:1.25;margin:4px 0">${esc(nextWorkout)}</div>
+                <div class="stat-label">Toca hoy · ${workoutsMonth} este mes</div>
             </div>
-            <div class="stat-card sage">
-                <div class="stat-icon">📌</div>
-                <div class="stat-value">${stats ? stats.pending_tasks : 0}</div>
-                <div class="stat-label">Pendientes</div>
-            </div>
-            <div class="stat-card lavender">
-                <div class="stat-icon">📝</div>
-                <div class="stat-value">${stats ? stats.pending_exams : 0}</div>
-                <div class="stat-label">Exámenes</div>
-            </div>
-            <div class="stat-card rose">
-                <div class="stat-icon">⚠️</div>
-                <div class="stat-value">${stats ? stats.expired_docs : 0}</div>
-                <div class="stat-label">Docs vencidos</div>
-            </div>
-            <div class="stat-card sage">
-                <div class="stat-icon">🔔</div>
-                <div class="stat-value">${stats ? stats.expiring_soon_docs : 0}</div>
-                <div class="stat-label">Vencen pronto</div>
-            </div>
-            <div class="stat-card ${injOverdue ? 'coral' : 'lavender'}">
+            <div class="stat-card ${injOverdue ? 'rose' : 'lavender'}" style="cursor:pointer" onclick="state.healthTab='injections';navigate('health')">
                 <div class="stat-icon">💉</div>
                 <div class="stat-value">${injLabel}</div>
-                <div class="stat-label">Próxima inyección</div>
+                <div class="stat-label">Próxima dosis E₂</div>
+            </div>
+            <div class="stat-card sage" style="cursor:pointer" onclick="state.healthTab='measurements';navigate('health')">
+                <div class="stat-icon">⚖️</div>
+                <div class="stat-value">${latestWeight}</div>
+                <div class="stat-label">Último peso</div>
+            </div>
+            <div class="stat-card lavender" style="cursor:pointer" onclick="navigate('cosplays')">
+                <div class="stat-icon">🎭</div>
+                <div class="stat-value">${activeCosplays}</div>
+                <div class="stat-label">${stats && stats.next_cosplay_name ? 'Próx: ' + esc(stats.next_cosplay_name) : 'Cosplays activos'}</div>
+            </div>
+            <div class="stat-card rose" style="cursor:pointer" onclick="state.personalTab='progress';navigate('personal')">
+                <div class="stat-icon">📌</div>
+                <div class="stat-value">${pendingTasks}</div>
+                <div class="stat-label">Tareas pendientes</div>
             </div>
         </div>
         <div class="two-col">
-            <div>${buildCalendar(events)}</div>
-            <div>${buildUpcomingTasks(tasks, stats)}</div>
+            <div>
+                ${buildCalendar(events)}
+            </div>
+            <div style="display:flex;flex-direction:column;gap:14px">
+                ${buildDashboardHabits(habits || [])}
+                ${buildUpcomingTasks(tasks, stats)}
+            </div>
         </div>
     `;
     el.innerHTML = html;
 }
+
+function buildDashboardHabits(habitList) {
+    if (!habitList || habitList.length === 0) return '';
+    let html = `<div class="card" style="padding:14px 18px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div class="card-title" style="margin:0">✨ Hábitos de hoy</div>
+            <button class="btn btn-ghost btn-sm" style="font-size:0.75rem" onclick="state.personalTab='progress';navigate('personal')">Ver todos</button>
+        </div>`;
+    for (const h of habitList) {
+        const done = Boolean(h.done_today);
+        html += `<div class="habit-item" style="padding:6px 0">
+            <div class="habit-check${done ? ' done' : ''}" onclick="toggleHabitFromDash(${h.id})"></div>
+            <div class="habit-name">${esc(h.name)}</div>
+            <div class="habit-streak">🔥 ${h.streak || 0}d</div>
+        </div>`;
+    }
+    html += `</div>`;
+    return html;
+}
+
+async function toggleHabitFromDash(id) {
+    await api(eel.toggle_habit_today, id);
+    navigate('dashboard');
+}
+window.toggleHabitFromDash = toggleHabitFromDash;
 
 function buildCalendar(events) {
     const { year, month } = state.cal;
     const today = new Date();
     const firstDay = new Date(year, month-1, 1).getDay();
     const daysInMonth = new Date(year, month, 0).getDate();
-    const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Setiembre','Octubre','Noviembre','Diciembre'];
+    const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Setiembre','Octubre','Noviembre','diciembre'];
     const wd = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
     const todayEvents = (events && events[today.getDate()]) || [];
 
@@ -303,7 +346,7 @@ function buildCalendar(events) {
     if (todayEvents.length > 0) {
         html += '<div class="calendar-events">';
         todayEvents.slice(0, 5).forEach(ev => {
-            const dotClass = ev.type === 'task' ? 'task' : ev.type === 'exam' ? 'exam' : ev.type === 'doc' ? 'doc' : ev.type === 'injection' ? 'injection' : 'assignment';
+            const dotClass = ev.type === 'task' ? 'task' : ev.type === 'injection' ? 'injection' : 'assignment';
             html += `<div class="calendar-event">
                 <div class="event-dot ${dotClass}"></div>
                 <div class="event-text">${esc(ev.title)}</div>
@@ -317,25 +360,40 @@ function buildCalendar(events) {
 
 function buildUpcomingTasks(tasks, stats) {
     let html = '<div class="card"><div class="card-title">Próximos 7 días</div>';
+    let hasItems = false;
 
-    // Injection reminder
     if (stats && stats.next_injection_days != null && stats.next_injection_days <= 7) {
+        hasItems = true;
         const injOverdue = stats.overdue_injection;
         const badge = injOverdue ? '<span class="task-badge overdue">Vencida</span>' :
                       stats.next_injection_days <= 1 ? '<span class="task-badge due-soon">Hoy</span>' : '';
-        html += `<div class="task-item injection-reminder" onclick="navigate('health')">
+        html += `<div class="task-item injection-reminder" onclick="state.healthTab='injections';navigate('health')">
             <div class="task-check" style="border-color:#B388EB;background:var(--bg-lavender)"></div>
             <div class="task-info">
-                <div class="task-title">💉 Inyección programada</div>
+                <div class="task-title">💉 Dosis de Estradiol</div>
                 <div class="task-meta">${stats.next_injection_date ? fmtDate(stats.next_injection_date) : ''} · ${stats.next_injection_days > 0 ? `En ${stats.next_injection_days} día${stats.next_injection_days !== 1 ? 's' : ''}` : 'Hoy'}</div>
             </div>
             ${badge}
         </div>`;
     }
 
-    if (!tasks || tasks.length === 0) {
-        html += '<div class="empty-state" style="padding:24px"><p>Sin tareas pendientes esta semana</p></div>';
-    } else {
+    if (stats && stats.next_cosplay_name && stats.next_cosplay_date) {
+        const du = daysUntil(stats.next_cosplay_date);
+        if (du !== null && du <= 14) {
+            hasItems = true;
+            html += `<div class="task-item" onclick="navigate('cosplays')">
+                <div class="task-check" style="border-color:var(--rose)"></div>
+                <div class="task-info">
+                    <div class="task-title">🎭 Entrega: ${esc(stats.next_cosplay_name)}</div>
+                    <div class="task-meta">${fmtDate(stats.next_cosplay_date)}</div>
+                </div>
+                ${du <= 3 ? '<span class="task-badge due-soon">Pronto</span>' : ''}
+            </div>`;
+        }
+    }
+
+    if (tasks && tasks.length > 0) {
+        hasItems = true;
         for (const t of tasks) {
             const du = daysUntil(t.due_date);
             const badge = du !== null && du < 0 ? '<span class="task-badge overdue">Vencida</span>' :
@@ -349,6 +407,10 @@ function buildUpcomingTasks(tasks, stats) {
                 ${badge}
             </div>`;
         }
+    }
+
+    if (!hasItems) {
+        html += '<div class="empty-state" style="padding:20px"><p>Todo al día esta semana ✨</p></div>';
     }
     html += '</div>';
     return html;
@@ -369,7 +431,7 @@ async function showDayEvents(year, month, day) {
         return;
     }
     const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Setiembre','Octubre','Noviembre','Diciembre'];
-    const typeIcon = { task:'📋', exam:'📝', doc:'📄', assignment:'📎', injection:'💉' };
+    const typeIcon = { task:'📋', exam:'📝', doc:'📄', assignment:'📎', injection:'💉', cosplay:'🎭', workout:'🏋️‍♀️' };
     let html = dayEvents.map(ev =>
         `<div class="calendar-event" style="margin-bottom:6px">
             <span style="margin-right:6px">${typeIcon[ev.type] || '📌'}</span>
@@ -1969,18 +2031,19 @@ function showAssignmentModal(assign, subjectId) {
 
 // ===================== PERSONAL =====================
 async function renderPersonal(el) {
-    const tab = state.personalTab || 'routine';
+    let tab = state.personalTab || 'routine';
+    if (tab === 'tasks') tab = 'progress';
     const tabs = [
         { id: 'routine', label: '🏋️‍♀️ Mi Rutina' },
-        { id: 'progress', label: '📈 Progreso y Historial' },
-        { id: 'tasks', label: '✨ Tareas y Hábitos' },
+        { id: 'progress', label: '📈 Progreso, Tareas y Hábitos' },
     ];
 
     let html = `<div class="page-header">
-        <div><h1>Personal</h1><div class="subtitle">Entrenamiento, hábitos y organización personal</div></div>
+        <div><h1>Personal</h1><div class="subtitle">Entrenamiento y organización</div></div>
         <div class="page-actions">
-            ${tab === 'routine' ? '<button class="btn btn-primary" onclick="showWorkoutDayForm()">+ Nuevo día de rutina</button>' : ''}
-            ${tab === 'tasks' ? '<button class="btn btn-primary" onclick="showPersonalTaskForm()">+ Tarea</button><button class="btn btn-secondary" onclick="showHabitForm()">+ Hábito</button>' : ''}
+            ${tab === 'routine'
+                ? '<button class="btn btn-primary" onclick="showWorkoutDayForm()">+ Nuevo día</button>'
+                : '<button class="btn btn-primary" onclick="showPersonalTaskForm()">+ Tarea</button><button class="btn btn-secondary" onclick="showHabitForm()">+ Hábito</button>'}
         </div>
     </div>
     <div class="subnav">
@@ -1991,59 +2054,12 @@ async function renderPersonal(el) {
     el.innerHTML = html;
     const content = el.querySelector('#personalContent');
     if (tab === 'routine') await renderPersonalRoutine(content);
-    else if (tab === 'progress') await renderPersonalProgress(content);
-    else await renderPersonalTasksAndHabits(content);
+    else await renderPersonalProgress(content);
 }
 
 function switchPersonalTab(tab) {
     state.personalTab = tab;
     navigate('personal');
-}
-
-async function renderPersonalTasksAndHabits(el) {
-    const now = new Date();
-    const [all, habits, logs] = await Promise.all([
-        api(eel.get_tasks, 3),
-        api(eel.get_habits),
-        api(eel.get_habit_logs, now.getFullYear())
-    ]);
-    const tasks = (all || []).filter(t => t.status !== 'completed');
-    const habitList = habits || [];
-
-    let html = `<div class="two-col">
-        <div class="card"><div class="card-title">Tareas personales</div>`;
-    if (tasks.length === 0) {
-        html += '<div class="empty-state" style="padding:20px"><p>Sin tareas pendientes</p></div>';
-    } else {
-        for (const t of tasks) {
-            html += `<div class="task-item">
-                <div class="task-check" onclick="completeTask(${t.id})"></div>
-                <div class="task-info"><div class="task-title">${esc(t.title)}</div>
-                <div class="task-meta">${fmtDate(t.due_date) || 'Sin fecha'}</div></div>
-                <button class="btn btn-ghost btn-sm" onclick="deleteTask(${t.id})">✕</button>
-            </div>`;
-        }
-    }
-    html += `</div>`;
-
-    // === HABITS + GRAPH ===
-    html += `<div><div class="card"><div class="card-title">Hábitos</div>`;
-    if (habitList.length === 0) {
-        html += '<div class="empty-state" style="padding:20px"><p>Sin hábitos</p></div>';
-    } else {
-        for (const h of habitList) {
-            const done = Boolean(h.done_today);
-            html += `<div class="habit-item">
-                <div class="habit-check${done ? ' done' : ''}" onclick="toggleHabit(${h.id})"></div>
-                <div class="habit-name">${esc(h.name)}</div>
-                <div class="habit-streak">🔥 ${h.streak || 0} días</div>
-                <button class="btn btn-ghost btn-sm" onclick="deleteHabit(${h.id})">✕</button>
-            </div>`;
-        }
-        html += buildHabitGraph(logs || [], habitList.length);
-    }
-    html += '</div></div></div>';
-    el.innerHTML = html;
 }
 
 // --- WORKOUT: ROUTINE & LIVE PLAYER ---
@@ -2156,11 +2172,11 @@ function buildRoutineDayViewHTML(days, selectedDayId, suggestedDayId) {
         </div>`;
 
     if (activeDay.warmup_notes) {
-        html += `<div class="stretch-banner"><strong>🔥 Calentamiento Previo (guía visual · no requiere registro):</strong>\n${esc(activeDay.warmup_notes)}</div>`;
+        html += `<div class="stretch-banner"><strong>🔥 Calentamiento:</strong>\n${esc(activeDay.warmup_notes)}</div>`;
     }
 
     if (exs.length === 0) {
-        html += `<div class="empty-state" style="padding:32px"><p>No hay ejercicios en este día todavía.</p><button class="btn btn-primary btn-sm" style="margin-top:10px" onclick="showWorkoutExerciseForm(${activeDay.id})">+ Agregar primer ejercicio</button></div>`;
+        html += `<div class="empty-state" style="padding:32px"><p>No hay ejercicios en este día.</p><button class="btn btn-primary btn-sm" style="margin-top:10px" onclick="showWorkoutExerciseForm(${activeDay.id})">+ Agregar ejercicio</button></div>`;
     } else {
         html += `<div class="routine-ex-list">`;
         exs.forEach((ex, idx) => {
@@ -2172,16 +2188,16 @@ function buildRoutineDayViewHTML(days, selectedDayId, suggestedDayId) {
                         <div class="routine-ex-meta">
                             <span class="tag" style="background:var(--border-light);font-size:0.74rem">${esc(ex.phase || 'Principal')}</span>
                             <span style="font-size:0.84rem;color:var(--text-muted)">🏋️ ${esc(ex.equipment || 'Peso corporal')}</span>
-                            <span style="font-size:0.82rem;color:var(--text-light)">· ⏱ Descanso ${ex.rest_seconds || 60}s</span>
-                            ${ex.last_weight_kg > 0 ? `<span class="tag tag-primary" style="font-size:0.74rem">Último peso: ${ex.last_weight_kg} kg</span>` : ''}
+                            <span style="font-size:0.82rem;color:var(--text-light)">· ⏱ ${ex.rest_seconds || 60}s</span>
+                            ${ex.last_weight_kg > 0 ? `<span class="tag tag-primary" style="font-size:0.74rem">Último: ${ex.last_weight_kg} kg</span>` : ''}
                         </div>
                     </div>
                 </div>
                 <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
                     <div class="routine-ex-target">${ex.sets} × ${esc(ex.reps_text || '')}</div>
                     <div style="display:flex;gap:2px">
-                        <button type="button" class="btn btn-ghost btn-sm" onclick="showWorkoutExerciseForm(${activeDay.id}, ${ex.id})" title="Editar ejercicio">✎</button>
-                        <button type="button" class="btn btn-ghost btn-sm" onclick="deleteWorkoutExercise(${ex.id})" title="Quitar ejercicio">✕</button>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="showWorkoutExerciseForm(${activeDay.id}, ${ex.id})" title="Editar">✎</button>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="deleteWorkoutExercise(${activeDay.id ? ex.id : ex.id})" title="Quitar">✕</button>
                     </div>
                 </div>
             </div>`;
@@ -2190,7 +2206,7 @@ function buildRoutineDayViewHTML(days, selectedDayId, suggestedDayId) {
     }
 
     if (activeDay.cooldown_notes) {
-        html += `<div class="stretch-banner" style="background:var(--lavender-light);border-left-color:#C9B3F9"><strong>🧘‍♀️ Estiramientos Post-Entrenamiento (guía visual al finalizar):</strong>\n${esc(activeDay.cooldown_notes)}</div>`;
+        html += `<div class="stretch-banner" style="background:var(--lavender-light);border-left-color:#C9B3F9"><strong>🧘‍♀️ Estiramientos:</strong>\n${esc(activeDay.cooldown_notes)}</div>`;
     }
 
     html += `</div>`;
@@ -2304,14 +2320,12 @@ function buildActiveWorkoutPlayer(aw) {
     // Render ONLY the currently selected step
     if (String(aw.currentStep) === 'warmup') {
         html += `<div class="card" style="background:var(--bg);padding:20px">
-            <span class="tag tag-primary" style="margin-bottom:8px">PASO PREVIO · SOLO GUÍA VISUAL</span>
-            <h3 style="font-size:1.2rem;margin-bottom:10px">🔥 Calentamiento Previo</h3>
+            <h3 style="font-size:1.2rem;margin-bottom:10px">🔥 Calentamiento</h3>
             <div class="stretch-banner" style="margin:0;font-size:0.95rem">${esc(aw.warmup)}</div>
         </div>`;
     } else if (String(aw.currentStep) === 'cooldown') {
         html += `<div class="card" style="background:var(--bg);padding:20px">
-            <span class="tag tag-lavender" style="margin-bottom:8px">CIERRE · OBLIGATORIO AL FINALIZAR</span>
-            <h3 style="font-size:1.2rem;margin-bottom:10px">🧘‍♀️ Estiramientos Post-Entrenamiento</h3>
+            <h3 style="font-size:1.2rem;margin-bottom:10px">🧘‍♀️ Estiramientos</h3>
             <div class="stretch-banner" style="background:var(--lavender-light);border-left-color:#C9B3F9;margin:0;font-size:0.95rem">${esc(aw.cooldown)}</div>
         </div>`;
     } else {
@@ -2332,11 +2346,11 @@ function buildActiveWorkoutPlayer(aw) {
                         </div>
                         <h3 style="font-size:1.25rem;font-weight:700;margin-top:4px">${esc(ex.name)}</h3>
                         <div style="font-size:0.88rem;color:var(--text-muted);margin-top:4px">
-                            🎯 <strong>Meta:</strong> ${ex.sets} series × ${esc(ex.reps_text)} · 🏋️ ${esc(ex.equipment || 'Peso corporal')} · ⏱ Descanso: ${ex.rest_seconds || 60}s
+                            🎯 ${ex.sets} × ${esc(ex.reps_text)} · 🏋️ ${esc(ex.equipment || 'Peso corporal')} · ⏱ ${ex.rest_seconds || 60}s
                         </div>
                     </div>
                     <div style="display:flex;gap:6px;align-items:center">
-                        ${isTimed ? `<button type="button" class="btn btn-secondary btn-sm" onclick="startRestTimer(${parseInt(ex.reps_text)||15})">⏱ Cronometrar ${parseInt(ex.reps_text)||15}s</button>` : ''}
+                        ${isTimed ? `<button type="button" class="btn btn-secondary btn-sm" onclick="startRestTimer(${parseInt(ex.reps_text)||15})">⏱ ${parseInt(ex.reps_text)||15}s</button>` : ''}
                     </div>
                 </div>
                 <div style="display:grid;grid-template-columns:44px 1fr 1fr 1fr 48px;gap:10px;padding:0 10px 6px;font-size:0.74rem;font-weight:600;color:var(--text-muted);text-transform:uppercase">
@@ -2360,7 +2374,7 @@ function buildActiveWorkoutPlayer(aw) {
             });
 
             html += `<div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center">
-                <span style="font-size:0.8rem;color:var(--text-muted)">${exDoneCount} de ${ex.setRows.length} series listas</span>
+                <span style="font-size:0.8rem;color:var(--text-muted)">${exDoneCount} de ${ex.setRows.length} series</span>
                 <button type="button" class="btn btn-ghost btn-sm" style="font-size:0.78rem" onclick="addLiveSetRow(${exIdx})">+ Serie extra</button>
             </div></div>`;
         }
@@ -2371,7 +2385,7 @@ function buildActiveWorkoutPlayer(aw) {
         ${prevStep ? `<button type="button" class="btn btn-secondary" onclick="selectLiveWorkoutStep('${prevStep.key}')">◀ Anterior</button>` : `<div></div>`}
         ${nextStep
             ? `<button type="button" class="btn btn-primary" onclick="selectLiveWorkoutStep('${nextStep.key}')">Siguiente: ${esc(nextStep.label)} ▶</button>`
-            : `<button type="button" class="btn btn-primary" onclick="finishLiveWorkout()">🎉 Finalizar y Guardar Entrenamiento</button>`}
+            : `<button type="button" class="btn btn-primary" onclick="finishLiveWorkout()">🎉 Finalizar y Guardar</button>`}
     </div>`;
 
     html += `</div>`;
@@ -2483,7 +2497,7 @@ function startRestTimer(seconds) {
             clearInterval(state.activeWorkout.restTimerId);
             state.activeWorkout.restTimerId = null;
             playBeep();
-            showToast('⏰ ¡Tiempo de descanso terminado! Siguiente serie 💪');
+            showToast('⏰ ¡Descanso terminado!');
             const bar = document.getElementById('awRestBar');
             if (bar) bar.style.display = 'none';
         }
@@ -2558,7 +2572,7 @@ async function finishLiveWorkout() {
     state.activeWorkout = null;
 
     if (res && res.ok) {
-        showToast('🎉 ¡Entrenamiento guardado! (' + completedSets.length + ' series)');
+        showToast('🎉 ¡Entrenamiento guardado!');
         state.personalTab = 'progress';
         navigate('personal');
     } else {
@@ -2573,13 +2587,13 @@ function showWorkoutDayForm(dayId) {
     const html = `<form id="modalForm">
         <div class="form-row">
             <div class="form-group"><label>N° Día</label><input type="number" class="form-control" name="day_number" value="${day ? day.day_number : routine.length + 1}"></div>
-            <div class="form-group"><label>Título del día *</label><input class="form-control" name="name" value="${esc(day ? day.name : '')}" placeholder="Ej: Día 1: Glúteo y Pierna"></div>
+            <div class="form-group"><label>Título del día *</label><input class="form-control" name="name" value="${esc(day ? day.name : '')}"></div>
         </div>
-        <div class="form-group"><label>Subtítulo / Enfoque</label><input class="form-control" name="subtitle" value="${esc(day ? day.subtitle : '')}"></div>
-        <div class="form-group"><label>🔥 Calentamiento previo (solo visual, no se registra)</label><textarea class="form-control" name="warmup_notes" rows="2">${esc(day ? day.warmup_notes : '')}</textarea></div>
-        <div class="form-group"><label>🧘‍♀️ Estiramientos post-entreno (solo visual, no se registra)</label><textarea class="form-control" name="cooldown_notes" rows="4">${esc(day ? day.cooldown_notes : '')}</textarea></div>
+        <div class="form-group"><label>Subtítulo</label><input class="form-control" name="subtitle" value="${esc(day ? day.subtitle : '')}"></div>
+        <div class="form-group"><label>🔥 Calentamiento</label><textarea class="form-control" name="warmup_notes" rows="2">${esc(day ? day.warmup_notes : '')}</textarea></div>
+        <div class="form-group"><label>🧘‍♀️ Estiramientos</label><textarea class="form-control" name="cooldown_notes" rows="4">${esc(day ? day.cooldown_notes : '')}</textarea></div>
     </form>`;
-    openModal(day ? 'Editar día de rutina' : 'Nuevo día de rutina', html);
+    openModal(day ? 'Editar día' : 'Nuevo día', html);
     document.getElementById('modalSave').onclick = async () => {
         const f = new FormData(document.getElementById('modalForm'));
         const data = {
@@ -2609,16 +2623,16 @@ function showWorkoutExerciseForm(dayId, exId) {
     const ex = (day && exId) ? (day.exercises || []).find(x => x.id === exId) : null;
     const html = `<form id="modalForm">
         <div class="form-row">
-            <div class="form-group"><label>Fase</label><input class="form-control" name="phase" value="${esc(ex ? ex.phase : 'Principal')}" placeholder="Principal, Circuito, Cierre..."></div>
+            <div class="form-group"><label>Fase</label><input class="form-control" name="phase" value="${esc(ex ? ex.phase : 'Principal')}"></div>
             <div class="form-group"><label>Descanso (seg)</label><input type="number" step="5" class="form-control" name="rest_seconds" value="${ex ? ex.rest_seconds : 60}"></div>
         </div>
-        <div class="form-group"><label>Nombre del ejercicio *</label><input class="form-control" name="name" value="${esc(ex ? ex.name : '')}" placeholder="Ej: Real Hip Thrust"></div>
+        <div class="form-group"><label>Ejercicio *</label><input class="form-control" name="name" value="${esc(ex ? ex.name : '')}"></div>
         <div class="form-row">
             <div class="form-group"><label>Series</label><input type="number" class="form-control" name="sets" value="${ex ? ex.sets : 3}"></div>
-            <div class="form-group"><label>Repeticiones / Tiempo</label><input class="form-control" name="reps_text" value="${esc(ex ? ex.reps_text : '12')}" placeholder="Ej: 12 (por pierna) o 15 segundos"></div>
+            <div class="form-group"><label>Repeticiones / Tiempo</label><input class="form-control" name="reps_text" value="${esc(ex ? ex.reps_text : '12')}"></div>
         </div>
         <div class="form-row">
-            <div class="form-group"><label>Equipo a utilizar</label><input class="form-control" name="equipment" value="${esc(ex ? ex.equipment : '')}" placeholder="Ej: Barra Armada, Banda Fuerte..."></div>
+            <div class="form-group"><label>Equipo</label><input class="form-control" name="equipment" value="${esc(ex ? ex.equipment : '')}"></div>
             <div class="form-group"><label>Peso actual (kg)</label><input type="number" step="0.5" class="form-control" name="default_weight_kg" value="${ex ? ex.default_weight_kg : 0}"></div>
         </div>
     </form>`;
@@ -2636,7 +2650,7 @@ function showWorkoutExerciseForm(dayId, exId) {
             default_weight_kg: parseFloat(f.get('default_weight_kg')) || 0,
             rest_seconds: parseInt(f.get('rest_seconds')) || 60,
         };
-        if (!data.name) { showToast('El nombre del ejercicio es obligatorio'); return; }
+        if (!data.name) { showToast('El nombre es obligatorio'); return; }
         const res = await api(eel.save_workout_exercise, data);
         if (res && res.ok) { showToast('Ejercicio guardado'); closeModal(); navigate('personal'); }
     };
@@ -2649,10 +2663,21 @@ async function deleteWorkoutExercise(exId) {
     navigate('personal');
 }
 
-// --- WORKOUT: PROGRESS CHARTS & SESSION HISTORY ---
+// --- UNIFIED TAB: PROGRESO, HISTORIAL, TAREAS Y HÁBITOS ---
 async function renderPersonalProgress(el) {
-    const prog = await api(eel.get_workout_progress) || { exercises: [], series: {} };
-    const history = await api(eel.get_workout_history) || [];
+    const now = new Date();
+    const [progRes, historyRes, allTasks, habitsRes, logsRes] = await Promise.all([
+        api(eel.get_workout_progress),
+        api(eel.get_workout_history),
+        api(eel.get_tasks, 3),
+        api(eel.get_habits),
+        api(eel.get_habit_logs, now.getFullYear())
+    ]);
+    const prog = progRes || { exercises: [], series: {} };
+    const history = historyRes || [];
+    const tasks = (allTasks || []).filter(t => t.status !== 'completed');
+    const habitList = habitsRes || [];
+    const logs = logsRes || [];
 
     const exercisesWithLogs = Object.keys(prog.series);
     if (!state.progressExercise || !prog.exercises.includes(state.progressExercise)) {
@@ -2660,20 +2685,60 @@ async function renderPersonalProgress(el) {
     }
 
     const exOpts = prog.exercises.map(name =>
-        `<option value="${esc(name)}" ${state.progressExercise === name ? 'selected' : ''}>${esc(name)}${prog.series[name] ? ` (${prog.series[name].length} sesiones)` : ''}</option>`
+        `<option value="${esc(name)}" ${state.progressExercise === name ? 'selected' : ''}>${esc(name)}${prog.series[name] ? ` (${prog.series[name].length})` : ''}</option>`
     ).join('');
 
     const metric = state.progressMetric || 'max_weight';
-
-    // Calculate quick stats
     const nowMonth = todayStr().slice(0, 7);
     const monthSessions = history.filter(h => (h.date || '').startsWith(nowMonth)).length;
 
-    let html = `<div class="stats-row">
+    let html = `<div class="two-col" style="margin-bottom:18px">
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                <div class="card-title" style="margin:0">📌 Tareas personales</div>
+                <button class="btn btn-ghost btn-sm" onclick="showPersonalTaskForm()">+ Tarea</button>
+            </div>`;
+    if (tasks.length === 0) {
+        html += '<div class="empty-state" style="padding:18px"><p>Sin tareas pendientes</p></div>';
+    } else {
+        for (const t of tasks) {
+            html += `<div class="task-item">
+                <div class="task-check" onclick="completeTask(${t.id})"></div>
+                <div class="task-info"><div class="task-title">${esc(t.title)}</div>
+                <div class="task-meta">${fmtDate(t.due_date) || 'Sin fecha'}</div></div>
+                <button class="btn btn-ghost btn-sm" onclick="deleteTask(${t.id})">✕</button>
+            </div>`;
+        }
+    }
+    html += `</div>
+        <div>
+            <div class="card">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                    <div class="card-title" style="margin:0">✨ Hábitos</div>
+                    <button class="btn btn-ghost btn-sm" onclick="showHabitForm()">+ Hábito</button>
+                </div>`;
+    if (habitList.length === 0) {
+        html += '<div class="empty-state" style="padding:18px"><p>Sin hábitos</p></div>';
+    } else {
+        for (const h of habitList) {
+            const done = Boolean(h.done_today);
+            html += `<div class="habit-item">
+                <div class="habit-check${done ? ' done' : ''}" onclick="toggleHabit(${h.id})"></div>
+                <div class="habit-name">${esc(h.name)}</div>
+                <div class="habit-streak">🔥 ${h.streak || 0}d</div>
+                <button class="btn btn-ghost btn-sm" onclick="deleteHabit(${h.id})">✕</button>
+            </div>`;
+        }
+        html += buildHabitGraph(logs, habitList.length);
+    }
+    html += `</div></div></div>`;
+
+    // Workout Progress & History below
+    html += `<div class="stats-row">
         <div class="stat-card coral">
             <div class="stat-icon">🔥</div>
             <div class="stat-value">${history.length}</div>
-            <div class="stat-label">Entrenamientos totales</div>
+            <div class="stat-label">Entrenamientos</div>
         </div>
         <div class="stat-card lavender">
             <div class="stat-icon">📅</div>
@@ -2683,36 +2748,33 @@ async function renderPersonalProgress(el) {
         <div class="stat-card sage">
             <div class="stat-icon">💪</div>
             <div class="stat-value">${exercisesWithLogs.length}</div>
-            <div class="stat-label">Ejercicios con progreso</div>
+            <div class="stat-label">Ejercicios registrados</div>
         </div>
     </div>
 
     <div class="card" style="margin-bottom:18px">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
-            <div>
-                <div class="card-title" style="margin-bottom:2px">📈 Evolución por Ejercicio</div>
-                <div style="font-size:0.8rem;color:var(--text-muted)">Compara cómo sube tu peso en barra/mancuernas o repeticiones semana a semana</div>
-            </div>
+            <div class="card-title" style="margin:0">📈 Evolución por Ejercicio</div>
             <div style="display:flex;gap:8px;flex-wrap:wrap">
-                <select class="form-control" style="width:240px;padding:6px 10px;font-size:0.85rem" onchange="changeWorkoutProgressEx(this.value)">${exOpts}</select>
-                <select class="form-control" style="width:170px;padding:6px 10px;font-size:0.85rem" onchange="changeWorkoutProgressMetric(this.value)">
-                    <option value="max_weight" ${metric === 'max_weight' ? 'selected' : ''}>Peso máximo (kg)</option>
-                    <option value="volume" ${metric === 'volume' ? 'selected' : ''}>Volumen total (kg × reps)</option>
-                    <option value="max_reps" ${metric === 'max_reps' ? 'selected' : ''}>Repeticiones / Seg máx</option>
+                <select class="form-control" style="width:220px;padding:6px 10px;font-size:0.85rem" onchange="changeWorkoutProgressEx(this.value)">${exOpts}</select>
+                <select class="form-control" style="width:160px;padding:6px 10px;font-size:0.85rem" onchange="changeWorkoutProgressMetric(this.value)">
+                    <option value="max_weight" ${metric === 'max_weight' ? 'selected' : ''}>Peso máx (kg)</option>
+                    <option value="volume" ${metric === 'volume' ? 'selected' : ''}>Volumen (kg × reps)</option>
+                    <option value="max_reps" ${metric === 'max_reps' ? 'selected' : ''}>Reps / Seg máx</option>
                 </select>
-                <button class="btn btn-secondary btn-sm" onclick="showQuickExerciseLogModal()">+ Registrar marca rápida</button>
+                <button class="btn btn-secondary btn-sm" onclick="showQuickExerciseLogModal()">+ Marca rápida</button>
             </div>
         </div>
         <canvas id="workoutProgressChart" style="width:100%;height:230px"></canvas>
     </div>
 
     <div class="card">
-        <div class="card-title">Historial de Días Entrenados</div>`;
+        <div class="card-title">Historial de Entrenamientos</div>`;
 
     if (history.length === 0) {
-        html += `<div class="empty-state" style="padding:24px"><p>Aún no hay sesiones registradas. ¡Inicia una rutina en la pestaña "Mi Rutina" o registra una marca rápida!</p></div>`;
+        html += `<div class="empty-state" style="padding:20px"><p>Sin sesiones registradas aún</p></div>`;
     } else {
-        html += `<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Rutina</th><th>Duración</th><th>Resumen de series</th><th></th></tr></thead><tbody>`;
+        html += `<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Rutina</th><th>Duración</th><th>Series</th><th></th></tr></thead><tbody>`;
         for (const sess of history) {
             const sets = sess.sets || [];
             const byEx = {};
@@ -2723,7 +2785,7 @@ async function renderPersonalProgress(el) {
             const summary = Object.entries(byEx).map(([k, v]) => `<strong>${esc(k)}:</strong> ${v.join(', ')}`).join(' · ');
             html += `<tr>
                 <td><strong>${fmtDate(sess.date)}</strong></td>
-                <td>${esc(sess.day_name || 'Sesión libre')}</td>
+                <td>${esc(sess.day_name || 'Sesión')}</td>
                 <td>${sess.duration_minutes ? sess.duration_minutes + ' min' : '-'}</td>
                 <td style="font-size:0.8rem;color:var(--text-muted)">${summary || '-'}</td>
                 <td style="text-align:right"><button class="btn btn-ghost btn-sm" onclick="deleteWorkoutSession(${sess.id})">✕</button></td>
@@ -2973,10 +3035,9 @@ function renderHealthInjections(el, injections, proj) {
         // Estradiol chart
         if (proj.days && proj.levels && proj.levels.length > 0) {
             html += `<div class="card" style="margin-bottom:14px">
-                <div class="card-title">Estradiol estimado (E₂)</div>
-                <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:8px">
-                    Modelo farmacocinético de 1 compartimento · Solo referencia · Vía SC
-                    ${proj.next_dose_date ? '· Próxima dosis estimada: ' + fmtDate(proj.next_dose_date) : ''}
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+                    <div class="card-title" style="margin:0">Estradiol estimado (E₂)</div>
+                    ${proj.next_dose_date ? `<div style="font-size:0.78rem;color:var(--text-muted)">Próxima: ${fmtDate(proj.next_dose_date)}</div>` : ''}
                 </div>
                 <div id="estradiolRangeBtns" style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap"></div>
                 <canvas id="estradiolChart" style="width:100%;height:220px"></canvas>
@@ -3260,27 +3321,19 @@ function renderHealthMeasurements(el, measurements, goals = {}) {
     const latest = getLatestMetricValues(measurements);
 
     if (!state.selectedMeasurementKeys || !Array.isArray(state.selectedMeasurementKeys)) {
-        // Default: select metrics that have data or goals
         const withData = metrics.filter(m => latest[m.key] !== undefined || goals[m.key]).map(m => m.key);
         state.selectedMeasurementKeys = withData.length > 0 ? withData : ['weight', 'bust_cm', 'waist_cm', 'hips_cm'];
     }
     if (state.showMeasurementGoals === undefined) state.showMeasurementGoals = true;
-    if (state.measurementRange === undefined) state.measurementRange = 0; // 0 = Todo
+    if (state.measurementRange === undefined) state.measurementRange = 0;
 
-    // 1. QUICK-ADD BAR ("⚡ Registro Rápido")
+    // 1. QUICK-ADD BAR
     let html = `<div class="card" style="margin-bottom:14px;padding:16px 18px;border:1px solid var(--rose-light)">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap">
-            <div>
-                <div style="font-weight:700;font-size:0.95rem;display:flex;align-items:center;gap:6px">
-                    <span>⚡ Registro rápido de medidas</span>
-                </div>
-                <div style="font-size:0.76rem;color:var(--text-muted)">
-                    Completa solo lo que te hayas medido hoy (si ya registraste algo en la misma fecha, se combina automáticamente).
-                </div>
-            </div>
+            <div style="font-weight:700;font-size:0.95rem">⚡ Registro rápido</div>
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                 <input type="date" id="quickMeasDate" class="form-control" value="${todayStr()}" style="width:auto;padding:5px 10px;font-size:0.82rem">
-                <button class="btn btn-ghost btn-sm" onclick="showMeasurementGoalsModal()">🎯 Configurar Metas</button>
+                <button class="btn btn-ghost btn-sm" onclick="showMeasurementGoalsModal()">🎯 Metas</button>
                 <button class="btn btn-ghost btn-sm" onclick="showMeasurementForm()">+ Con notas</button>
             </div>
         </div>
@@ -3504,9 +3557,6 @@ function showMeasurementGoalsModal() {
     const latest = getLatestMetricValues(state.lastMeasurementsList || []);
 
     let html = `<form id="modalGoalsForm">
-        <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:12px">
-            Define tus metas ideales. Se dibujarán como líneas punteadas (🎯) en el gráfico de evolución para que veas qué tan cerca estás. Deja vacío lo que no quieras fijar como meta.
-        </p>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">`;
     metrics.forEach(m => {
         const cur = latest[m.key] ? `Actual: ${latest[m.key].val} ${m.unit}` : `Sin registro previo`;
@@ -3999,211 +4049,311 @@ async function deleteHabit(id) {
     navigate('personal');
 }
 
-// ===================== PRINT 3D =====================
-const STATUS_CYCLE = ['pending', 'printing', 'done', 'delivered'];
-const STATUS_LABELS = { pending:'Pendiente', printing:'Imprimiendo', done:'Terminado', delivered:'Entregado' };
-const STATUS_CLASSES = { pending:'tag-gold', printing:'tag-primary', done:'tag-sage', delivered:'tag-lavender' };
+// ===================== COSPLAYS ENTREPRENEURSHIP =====================
+const COSPLAY_STATUS_CYCLE = ['cotizado', 'con_sena', 'en_proceso', 'listo', 'entregado'];
+const COSPLAY_STATUS_LABELS = {
+    cotizado: 'Cotizado',
+    con_sena: 'Con seña',
+    en_proceso: 'En confección',
+    listo: 'Listo',
+    entregado: 'Entregado'
+};
+const COSPLAY_STATUS_CLASSES = {
+    cotizado: 'tag-gold',
+    con_sena: 'tag-lavender',
+    en_proceso: 'tag-primary',
+    listo: 'tag-sage',
+    entregado: 'tag-sage'
+};
 
-async function renderPrint3D(el) {
-    const orders = await api(eel.get_print_orders) || [];
+async function renderCosplays(el) {
+    const projects = await api(eel.get_cosplay_projects) || [];
+    state.cosplayProjects = projects;
+
+    const activeList = projects.filter(p => p.status !== 'entregado');
+    const totalPendingBalance = activeList.reduce((acc, p) => acc + (parseFloat(p.balance_due) || 0), 0);
+    const totalProfit = projects.reduce((acc, p) => acc + (parseFloat(p.profit) || 0), 0);
+    const totalCost = projects.reduce((acc, p) => acc + (parseFloat(p.total_cost) || 0), 0);
+
     let html = `<div class="page-header">
-        <div><h1>Impresiones 3D</h1><div class="subtitle">Micro negocio · pedidos</div></div>
-        <div class="page-actions"><button class="btn btn-primary" onclick="showPrintOrderForm()">+ Nuevo pedido</button></div>
+        <div><h1>Cosplays</h1><div class="subtitle">Taller · Comisiones y proyectos</div></div>
+        <div class="page-actions"><button class="btn btn-primary" onclick="showCosplayProjectForm()">+ Nuevo cosplay</button></div>
+    </div>
+
+    <div class="stats-row" style="margin-bottom:18px">
+        <div class="stat-card coral">
+            <div class="stat-icon">🎭</div>
+            <div class="stat-value">${activeList.length}</div>
+            <div class="stat-label">Activos</div>
+        </div>
+        <div class="stat-card lavender">
+            <div class="stat-icon">💳</div>
+            <div class="stat-value">S/ ${totalPendingBalance.toFixed(0)}</div>
+            <div class="stat-label">Saldo por cobrar</div>
+        </div>
+        <div class="stat-card rose">
+            <div class="stat-icon">🧵</div>
+            <div class="stat-value">S/ ${totalCost.toFixed(0)}</div>
+            <div class="stat-label">Materiales</div>
+        </div>
+        <div class="stat-card sage">
+            <div class="stat-icon">✨</div>
+            <div class="stat-value">S/ ${totalProfit.toFixed(0)}</div>
+            <div class="stat-label">Ganancia neta</div>
+        </div>
     </div>`;
-    if (orders.length === 0) {
-        html += '<div class="empty-state"><div class="empty-icon">🖨️</div><h3>Sin pedidos</h3><p>Registra tu primer pedido de impresión 3D</p></div>';
-    } else {
-        html += '<div class="table-wrap"><table><thead><tr><th>Cliente</th><th>Pieza</th><th>Material</th><th>Cant.</th><th>Total</th><th>Entrega</th><th>Estado</th><th></th></tr></thead><tbody>';
-        for (const o of orders) {
-            const s = {label:STATUS_LABELS[o.status] || o.status, cls:STATUS_CLASSES[o.status] || 'tag-primary'};
-            html += `<tr>
-                <td><strong>${esc(o.customer_name)}</strong></td>
-                <td>${esc(o.piece_name)}</td>
-                <td>${esc(o.material || '-')}${o.color ? ' / '+esc(o.color) : ''}</td>
-                <td>${o.quantity}</td>
-                <td>$ ${(o.price || 0).toFixed(2)}</td>
-                <td>${fmtDate(o.delivery_date)}</td>
-                <td><span class="tag ${s.cls}" style="cursor:pointer" onclick="cyclePrintStatus(${o.id})" title="Click para cambiar estado">${s.label}</span></td>
-                <td style="text-align:right;white-space:nowrap">
-                    <button class="btn btn-ghost btn-sm" onclick="showPrintOrderForm(${o.id})">✎</button>
-                    <button class="btn btn-ghost btn-sm" onclick="deletePrintOrder(${o.id})">✕</button>
-                </td>
-            </tr>`;
-        }
-        html += '</tbody></table></div>';
+
+    if (projects.length === 0) {
+        html += `<div class="empty-state">
+            <div class="empty-icon">🎭</div>
+            <h3>Sin proyectos de cosplay</h3>
+            <p>Registra comisiones, trajes en venta, pelucas o props con sus materiales, medidas y señas.</p>
+            <button class="btn btn-primary" style="margin-top:12px" onclick="showCosplayProjectForm()">+ Crear primer cosplay</button>
+        </div>`;
+        el.innerHTML = html;
+        return;
     }
+
+    html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px">`;
+    for (const p of projects) {
+        const sLabel = COSPLAY_STATUS_LABELS[p.status] || p.status;
+        const sCls = COSPLAY_STATUS_CLASSES[p.status] || 'tag-primary';
+        const items = p.items || [];
+        const doneItems = items.filter(i => i.done).length;
+        const pct = items.length > 0 ? Math.round((doneItems / items.length) * 100) : 0;
+        const du = daysUntil(p.due_date);
+        const dueBadge = du !== null && p.status !== 'entregado'
+            ? (du < 0 ? `<span class="tag tag-rose" style="font-size:0.7rem">Atrasado ${Math.abs(du)}d</span>`
+               : du <= 7 ? `<span class="tag tag-gold" style="font-size:0.7rem">En ${du}d</span>` : '')
+            : '';
+
+        html += `<div class="card" style="display:flex;flex-direction:column;justify-content:space-between;gap:10px">
+            <div>
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:6px">
+                    <div>
+                        <span class="tag" style="background:var(--border-light);font-size:0.7rem;margin-right:4px">${esc(p.project_type || 'Comisión')}</span>
+                        <span class="tag" style="background:var(--border-light);font-size:0.7rem">${esc(p.category || 'Traje completo')}</span>
+                    </div>
+                    <span class="tag ${sCls}" style="cursor:pointer" onclick="cycleCosplayStatus(${p.id})" title="Cambiar estado">${sLabel}</span>
+                </div>
+                <h3 style="font-size:1.12rem;font-weight:700;margin:2px 0">${esc(p.character_name)}</h3>
+                ${p.series_name ? `<div style="font-size:0.82rem;color:var(--text-muted);margin-bottom:6px">${esc(p.series_name)}</div>` : ''}
+
+                <div style="font-size:0.82rem;display:flex;flex-direction:column;gap:3px;margin:8px 0;padding:8px 10px;background:var(--bg);border-radius:10px">
+                    <div>👤 <strong>Cliente:</strong> ${esc(p.client_name || 'Propio / Stock')} ${p.client_contact ? `<span style="color:var(--text-muted)">(${esc(p.client_contact)})</span>` : ''}</div>
+                    ${p.size_measurements ? `<div>📏 <strong>Medidas:</strong> <span style="color:var(--text-muted)">${esc(p.size_measurements)}</span></div>` : ''}
+                    ${p.due_date ? `<div>📅 <strong>Entrega:</strong> ${fmtDate(p.due_date)} ${dueBadge}</div>` : ''}
+                </div>
+
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px;text-align:center;font-size:0.78rem;margin-bottom:8px">
+                    <div style="background:var(--bg);padding:6px;border-radius:8px">
+                        <div style="color:var(--text-muted);font-size:0.7rem">Precio / Seña</div>
+                        <div style="font-weight:700">S/ ${(p.price || 0).toFixed(0)} <span style="font-weight:400;color:var(--text-muted)">(${(p.deposit || 0).toFixed(0)})</span></div>
+                    </div>
+                    <div style="background:var(--bg);padding:6px;border-radius:8px">
+                        <div style="color:var(--text-muted);font-size:0.7rem">Falta cobrar</div>
+                        <div style="font-weight:700;color:${p.balance_due > 0 ? 'var(--rose)' : 'var(--sage)'}">S/ ${(p.balance_due || 0).toFixed(0)}</div>
+                    </div>
+                    <div style="background:var(--bg);padding:6px;border-radius:8px">
+                        <div style="color:var(--text-muted);font-size:0.7rem">Ganancia</div>
+                        <div style="font-weight:700;color:var(--sage)">S/ ${(p.profit || 0).toFixed(0)}</div>
+                    </div>
+                </div>
+
+                ${items.length > 0 ? `
+                <div style="margin-top:4px">
+                    <div style="display:flex;justify-content:space-between;font-size:0.74rem;color:var(--text-muted);margin-bottom:3px">
+                        <span>Avance de piezas / materiales</span>
+                        <span>${doneItems}/${items.length} (${pct}%)</span>
+                    </div>
+                    <div style="height:5px;background:var(--border-light);border-radius:99px;overflow:hidden">
+                        <div style="height:100%;width:${pct}%;background:var(--primary)"></div>
+                    </div>
+                </div>` : ''}
+            </div>
+
+            <div style="display:flex;justify-content:space-between;align-items:center;padding-top:8px;border-top:1px solid var(--border-light)">
+                <button class="btn btn-secondary btn-sm" onclick="showCosplayItemsModal(${p.id})">🧵 Piezas / Materiales (${items.length})</button>
+                <div style="display:flex;gap:4px">
+                    <button class="btn btn-ghost btn-sm" onclick="showCosplayProjectForm(${p.id})">✎</button>
+                    <button class="btn btn-ghost btn-sm" onclick="deleteCosplayProject(${p.id})">✕</button>
+                </div>
+            </div>
+        </div>`;
+    }
+    html += `</div>`;
     el.innerHTML = html;
 }
 
-async function cyclePrintStatus(id) {
-    const orders = await api(eel.get_print_orders);
-    const o = orders.find(x => x.id === id);
-    if (!o) return;
-    const idx = STATUS_CYCLE.indexOf(o.status);
-    const nextStatus = idx >= 0 ? STATUS_CYCLE[(idx + 1) % STATUS_CYCLE.length] : 'pending';
-    // Fetch full order data to preserve all fields
-    const full = orders.find(x => x.id === id);
-    if (!full) return;
-    const data = {
-        customer_name: full.customer_name, piece_name: full.piece_name,
-        material: full.material, color: full.color, quantity: full.quantity,
-        price: full.price, filament_grams: full.filament_grams,
-        print_hours: full.print_hours, order_date: full.order_date,
-        delivery_date: full.delivery_date, status: nextStatus, notes: full.notes
-    };
-    const res = await api(eel.update_print_order, id, data);
-    if (res && res.ok) { showToast('Estado: ' + STATUS_LABELS[nextStatus]); navigate('print3d'); }
+async function cycleCosplayStatus(id) {
+    const projects = state.cosplayProjects || await api(eel.get_cosplay_projects) || [];
+    const p = projects.find(x => x.id === id);
+    if (!p) return;
+    const idx = COSPLAY_STATUS_CYCLE.indexOf(p.status);
+    const nextStatus = idx >= 0 ? COSPLAY_STATUS_CYCLE[(idx + 1) % COSPLAY_STATUS_CYCLE.length] : 'cotizado';
+    const res = await api(eel.save_cosplay_project, { ...p, status: nextStatus });
+    if (res && res.ok) {
+        showToast('Estado: ' + COSPLAY_STATUS_LABELS[nextStatus]);
+        navigate('cosplays');
+    }
 }
 
-function showPrintOrderForm(id) {
-    if (id) {
-        api(eel.get_print_orders).then(orders => {
-            const o = orders.find(x => x.id === id);
-            if (o) showPrintOrderModal(o);
-        });
-    } else showPrintOrderModal(null);
-}
-
-function showPrintOrderModal(order) {
-    const materials = ['PLA','ABS','PETG','TPU','Resina','Otro'];
-    const matOpts = materials.map(m =>
-        `<option value="${m}" ${order && order.material === m ? 'selected' : ''}>${m}</option>`
-    ).join('');
-    const isEdit = !!order;
-
-    // Get config and render form
-    api(eel.get_all_config).then(config => {
-        config = config || {};
-        const perGram = parseFloat(config.print3d_price_per_gram) || 1.5;
-        const perHour = parseFloat(config.print3d_price_per_hour) || 5.0;
-
-        const html = `<form id="modalForm">
-            <div class="form-row"><div class="form-group"><label>Cliente *</label><input class="form-control" name="customer_name" value="${esc(order ? order.customer_name : '')}"></div>
-            <div class="form-group"><label>Pieza *</label><input class="form-control" name="piece_name" value="${esc(order ? order.piece_name : '')}"></div></div>
-            <div class="form-row">
-                <div class="form-group"><label>Material</label><select class="form-control" name="material">${matOpts}</select></div>
-                <div class="form-group"><label>Color</label><input class="form-control" name="color" value="${esc(order ? order.color : '')}"></div>
-            </div>
-            <div class="form-row">
-                <div class="form-group"><label>Cantidad</label><input type="number" class="form-control" name="quantity" value="${order ? order.quantity : 1}"></div>
-                <div class="form-group"><label>Precio $</label><input type="number" step="0.01" class="form-control" name="price" id="printPrice" value="${order ? order.price : ''}"></div>
-            </div>
-            <div class="form-row">
-                <div class="form-group"><label>Gramos filamento</label><input type="number" class="form-control" name="filament_grams" id="printGrams" value="${order ? order.filament_grams : ''}" onchange="calcPrintPrice(${perGram}, ${perHour})" onkeyup="calcPrintPrice(${perGram}, ${perHour})"></div>
-                <div class="form-group"><label>Horas impresión</label><input type="number" step="0.5" class="form-control" name="print_hours" id="printHours" value="${order ? order.print_hours : ''}" onchange="calcPrintPrice(${perGram}, ${perHour})" onkeyup="calcPrintPrice(${perGram}, ${perHour})"></div>
-            </div>
-            <div style="font-size:0.8rem;color:var(--text-muted);margin:-8px 0 12px;text-align:right">
-                Precio ref: $${perGram.toFixed(2)}/g · $${perHour.toFixed(2)}/h
-                <button type="button" class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="calcPrintPrice(${perGram}, ${perHour})">Calcular</button>
-            </div>
-            <div class="form-row">
-                <div class="form-group"><label>Fecha pedido</label><input type="date" class="form-control" name="order_date" value="${order ? order.order_date : todayStr()}"></div>
-                <div class="form-group"><label>Fecha entrega</label><input type="date" class="form-control" name="delivery_date" value="${order ? order.delivery_date : ''}"></div>
-            </div>
-            <div class="form-group"><label>Estado</label><select class="form-control" name="status">
-                <option value="pending" ${!order || order.status === 'pending' ? 'selected' : ''}>Pendiente</option>
-                <option value="printing" ${order && order.status === 'printing' ? 'selected' : ''}>Imprimiendo</option>
-                <option value="done" ${order && order.status === 'done' ? 'selected' : ''}>Terminado</option>
-                <option value="delivered" ${order && order.status === 'delivered' ? 'selected' : ''}>Entregado</option>
+function showCosplayProjectForm(id = null) {
+    const p = id ? (state.cosplayProjects || []).find(x => x.id === id) : null;
+    const types = ['Comisión', 'Stock / Venta', 'Propio', 'Alquiler'];
+    const cats = ['Traje completo', 'Costura / Traje', 'Props / Armadura', 'Peluca', 'Accesorios'];
+    const html = `<form id="modalForm">
+        <div class="form-row">
+            <div class="form-group"><label>Personaje *</label><input class="form-control" name="character_name" value="${esc(p ? p.character_name : '')}" placeholder="Ej: Asa Mitaka, 2B, Makima..."></div>
+            <div class="form-group"><label>Anime / Juego / Serie</label><input class="form-control" name="series_name" value="${esc(p ? p.series_name : '')}" placeholder="Ej: Chainsaw Man"></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Tipo</label><select class="form-control" name="project_type">
+                ${types.map(t => `<option value="${t}" ${p && p.project_type === t ? 'selected' : ''}>${t}</option>`).join('')}
             </select></div>
-            <div class="form-group"><label>Notas</label><textarea class="form-control" name="notes">${esc(order ? order.notes : '')}</textarea></div>
-        </form>`;
-        openModal(order ? 'Editar pedido' : 'Nuevo pedido', html);
-        if (!order && perGram && perHour) setTimeout(() => calcPrintPrice(perGram, perHour), 100);
-        document.getElementById('modalSave').onclick = async () => {
-            const f = new FormData(document.getElementById('modalForm'));
-            const data = {
-                customer_name: f.get('customer_name'), piece_name: f.get('piece_name'),
-                material: f.get('material'), color: f.get('color'),
-                quantity: parseInt(f.get('quantity')) || 1, price: parseFloat(f.get('price')) || 0,
-                filament_grams: parseFloat(f.get('filament_grams')) || null,
-                print_hours: parseFloat(f.get('print_hours')) || null,
-                order_date: f.get('order_date'), delivery_date: f.get('delivery_date'),
-                status: f.get('status'), notes: f.get('notes')
-            };
-            if (!data.customer_name || !data.piece_name) { showToast('Cliente y pieza son obligatorios'); return; }
-            const res = order ? await api(eel.update_print_order, order.id, data) : await api(eel.create_print_order, data);
-            if (res && res.ok) { showToast(order ? 'Actualizado' : 'Creado'); closeModal(); navigate('print3d'); }
-            else showToast('Error');
+            <div class="form-group"><label>Categoría</label><select class="form-control" name="category">
+                ${cats.map(c => `<option value="${c}" ${p && p.category === c ? 'selected' : ''}>${c}</option>`).join('')}
+            </select></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Cliente</label><input class="form-control" name="client_name" value="${esc(p ? p.client_name : '')}"></div>
+            <div class="form-group"><label>Contacto (IG / WhatsApp)</label><input class="form-control" name="client_contact" value="${esc(p ? p.client_contact : '')}" placeholder="@usuario o celular"></div>
+        </div>
+        <div class="form-group"><label>Talla / Medidas del cliente</label><input class="form-control" name="size_measurements" value="${esc(p ? p.size_measurements : '')}" placeholder="Ej: Talla S · Busto 86, Cintura 65, Cadera 92, Alt 1.62"></div>
+        <div class="form-row">
+            <div class="form-group"><label>Precio total (S/)</label><input type="number" step="1" class="form-control" name="price" value="${p ? p.price : ''}"></div>
+            <div class="form-group"><label>Seña / Adelanto recibido (S/)</label><input type="number" step="1" class="form-control" name="deposit" value="${p ? p.deposit : ''}"></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Costo base materiales (S/)</label><input type="number" step="1" class="form-control" name="materials_cost" value="${p ? p.materials_cost : ''}"></div>
+            <div class="form-group"><label>Fecha de entrega / Evento</label><input type="date" class="form-control" name="due_date" value="${p && p.due_date ? p.due_date : ''}"></div>
+        </div>
+        <div class="form-group"><label>Estado</label><select class="form-control" name="status">
+            ${COSPLAY_STATUS_CYCLE.map(s => `<option value="${s}" ${(p ? p.status : 'cotizado') === s ? 'selected' : ''}>${COSPLAY_STATUS_LABELS[s]}</option>`).join('')}
+        </select></div>
+        <div class="form-group"><label>Notas / Referencias</label><textarea class="form-control" name="notes">${esc(p ? p.notes : '')}</textarea></div>
+    </form>`;
+    openModal(p ? 'Editar cosplay' : 'Nuevo cosplay', html);
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('modalForm'));
+        const data = {
+            id: p ? p.id : null,
+            character_name: f.get('character_name'),
+            series_name: f.get('series_name'),
+            project_type: f.get('project_type'),
+            category: f.get('category'),
+            client_name: f.get('client_name'),
+            client_contact: f.get('client_contact'),
+            size_measurements: f.get('size_measurements'),
+            price: parseFloat(f.get('price')) || 0,
+            deposit: parseFloat(f.get('deposit')) || 0,
+            materials_cost: parseFloat(f.get('materials_cost')) || 0,
+            due_date: f.get('due_date'),
+            status: f.get('status'),
+            notes: f.get('notes'),
         };
-    });
+        if (!data.character_name) { showToast('El personaje es obligatorio'); return; }
+        const res = await api(eel.save_cosplay_project, data);
+        if (res && res.ok) { showToast('Guardado'); closeModal(); navigate('cosplays'); }
+        else showToast('Error');
+    };
 }
 
-function calcPrintPrice(perGram, perHour) {
-    const grams = parseFloat(document.getElementById('printGrams').value) || 0;
-    const hours = parseFloat(document.getElementById('printHours').value) || 0;
-    const price = grams * perGram + hours * perHour;
-    document.getElementById('printPrice').value = price > 0 ? price.toFixed(2) : '';
+async function deleteCosplayProject(id) {
+    if (!confirm('¿Eliminar este proyecto de cosplay?')) return;
+    await api(eel.delete_cosplay_project, id);
+    showToast('Eliminado');
+    navigate('cosplays');
 }
 
-async function deletePrintOrder(id) {
-    if (!confirm('¿Eliminar este pedido?')) return;
-    const res = await api(eel.delete_print_order, id);
-    if (res && res.ok) { showToast('Eliminado'); navigate('print3d'); }
+async function showCosplayItemsModal(projectId) {
+    const projects = await api(eel.get_cosplay_projects) || [];
+    state.cosplayProjects = projects;
+    const p = projects.find(x => x.id === projectId);
+    if (!p) return;
+    const items = p.items || [];
+
+    let html = `<div>
+        <div style="display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap">
+            <input id="ci_name" class="form-control" placeholder="Ej: Tela gabardina 2m, Peluca base, Espada EVA..." style="flex:2;min-width:160px" onkeydown="if(event.key==='Enter')addCosplayItemFromModal(${p.id})">
+            <select id="ci_type" class="form-control" style="width:120px">
+                <option value="Material">🛒 Material</option>
+                <option value="Pieza">✂️ Pieza</option>
+                <option value="Prop">⚔️ Prop</option>
+                <option value="Peluca">💇‍♀️ Peluca</option>
+            </select>
+            <input id="ci_cost" type="number" step="0.5" class="form-control" placeholder="Costo S/" style="width:95px" onkeydown="if(event.key==='Enter')addCosplayItemFromModal(${p.id})">
+            <button type="button" class="btn btn-primary btn-sm" onclick="addCosplayItemFromModal(${p.id})">+ Añadir</button>
+        </div>`;
+
+    if (items.length === 0) {
+        html += `<div class="empty-state" style="padding:18px"><p>Sin piezas ni materiales anotados</p></div>`;
+    } else {
+        html += `<div style="max-height:280px;overflow-y:auto">`;
+        for (const it of items) {
+            html += `<div class="habit-item" style="padding:7px 4px">
+                <div class="habit-check${it.done ? ' done' : ''}" onclick="toggleCosplayItemFromModal(${p.id}, ${it.id})"></div>
+                <div style="flex:1;${it.done ? 'text-decoration:line-through;color:var(--text-muted)' : ''}">
+                    <span class="tag" style="background:var(--border-light);font-size:0.68rem;margin-right:4px">${esc(it.item_type || 'Material')}</span>
+                    <strong>${esc(it.name)}</strong>
+                </div>
+                ${it.cost > 0 ? `<div style="font-size:0.82rem;color:var(--text-muted);margin-right:8px">S/ ${parseFloat(it.cost).toFixed(1)}</div>` : ''}
+                <button class="btn btn-ghost btn-sm" onclick="deleteCosplayItemFromModal(${p.id}, ${it.id})">✕</button>
+            </div>`;
+        }
+        html += `</div>`;
+    }
+    html += `</div>`;
+
+    openModal(`🧵 ${p.character_name} · Piezas y Materiales`, html);
+    document.getElementById('modalSave').style.display = 'none';
+    document.getElementById('modalCancel').textContent = 'Cerrar';
+    document.getElementById('modalCancel').onclick = () => { closeModal(); navigate('cosplays'); };
+}
+
+async function addCosplayItemFromModal(projectId) {
+    const name = document.getElementById('ci_name').value.trim();
+    const item_type = document.getElementById('ci_type').value;
+    const cost = parseFloat(document.getElementById('ci_cost').value) || 0;
+    if (!name) return;
+    await api(eel.add_cosplay_item, { project_id: projectId, name, item_type, cost });
+    showCosplayItemsModal(projectId);
+}
+
+async function toggleCosplayItemFromModal(projectId, itemId) {
+    await api(eel.toggle_cosplay_item, itemId);
+    showCosplayItemsModal(projectId);
+}
+
+async function deleteCosplayItemFromModal(projectId, itemId) {
+    await api(eel.delete_cosplay_item, itemId);
+    showCosplayItemsModal(projectId);
 }
 
 // ===================== SETTINGS =====================
 async function renderSettings(el) {
-    const [config, lan] = await Promise.all([
-        api(eel.get_all_config),
-        window.eel && window.eel.get_lan_info ? api(eel.get_lan_info).catch(() => ({})) : Promise.resolve({})
-    ]);
-    const cfg = config || {};
-    const perGram = cfg.print3d_price_per_gram || '1.5';
-    const perHour = cfg.print3d_price_per_hour || '5.0';
-    const lanUrl = (lan && lan.url) ? lan.url.replace('/index.html', '') : `http://${window.location.hostname}:8080`;
-    const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&margin=8&data=${encodeURIComponent((lan && lan.url) || lanUrl)}`;
+    const cloudUrl = 'https://nicolecarp.pythonanywhere.com';
+    const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&margin=8&data=${encodeURIComponent(cloudUrl)}`;
 
     el.innerHTML = `<div class="page-header">
-        <div><h1>Ajustes</h1><div class="subtitle">Configuración · Acceso móvil</div></div>
+        <div><h1>Ajustes</h1><div class="subtitle">Nube y acceso móvil</div></div>
     </div>
     <div class="settings-section">
-        <h3>📱 Acceso desde tu iPhone / Celular</h3>
         <div class="card">
-            <div style="display:flex;gap:24px;align-items:center;flex-wrap:wrap">
+            <div style="display:flex;gap:22px;align-items:center;flex-wrap:wrap">
                 <div style="background:#fff;padding:10px;border-radius:14px;border:1px solid var(--border);flex-shrink:0">
-                    <img src="${qrSrc}" alt="QR Acceso iPhone" style="width:140px;height:140px;display:block" onerror="this.style.display='none'">
+                    <img src="${qrSrc}" alt="QR Acceso iPhone" style="width:130px;height:130px;display:block" onerror="this.style.display='none'">
                 </div>
                 <div style="flex:1;min-width:240px">
-                    <div style="font-size:0.95rem;font-weight:600;margin-bottom:6px">1. En casa (misma red Wi-Fi)</div>
-                    <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:10px">
-                        Con tu PC encendida y la app abierta, escanea el código QR con la cámara de tu iPhone o escribe esta dirección en <strong>Safari</strong>:
-                    </p>
+                    <div style="font-size:1rem;font-weight:700;margin-bottom:6px">📱 Tu link en la nube (iPhone / PC)</div>
                     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">
-                        <code style="padding:8px 14px;border-radius:10px;background:var(--primary-light);color:var(--primary);font-size:1rem;font-weight:700;user-select:all">${esc(lanUrl)}</code>
-                        <button type="button" class="btn btn-secondary btn-sm" onclick="copyLanUrl('${esc(lanUrl)}')">📋 Copiar enlace</button>
+                        <code style="padding:8px 14px;border-radius:10px;background:var(--primary-light);color:var(--primary);font-size:0.95rem;font-weight:700;user-select:all">${cloudUrl}</code>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="copyLanUrl('${cloudUrl}')">📋 Copiar link</button>
                     </div>
-                    <div style="font-size:0.84rem;background:var(--bg);padding:12px 14px;border-radius:12px;border:1px solid var(--border-light)">
-                        <strong>✨ Tip para instalarla como App en iPhone (sin App Store):</strong><br>
-                        Cuando abras el enlace en Safari, toca el botón <strong>Compartir</strong> (el cuadrado con la flecha hacia arriba) y selecciona <strong>"Agregar a inicio"</strong>. Te creará el ícono de <em>Nicole</em> en tu pantalla de inicio a pantalla completa.
+                    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                        <button class="btn btn-primary btn-sm" onclick="syncCloudFromGithub()">🔄 Actualizar app desde GitHub</button>
                     </div>
                 </div>
-            </div>
-            <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border-light);font-size:0.83rem;color:var(--text-muted)">
-                <strong>🌍 ¿Cómo entrar desde fuera de casa (con datos móviles / en el gimnasio)?</strong><br>
-                Puedes instalar <strong>Tailscale</strong> (gratis en tu PC y desde el App Store en tu iPhone) para conectar tu iPhone a tu PC desde cualquier lugar sin abrir puertos del router, o alojar la aplicación en un servidor gratuito en la nube (Render / Railway / PythonAnywhere) si quieres que funcione incluso con tu PC apagada.
-            </div>
-        </div>
-    </div>
-    <div class="settings-section">
-        <h3>Impresión 3D · Precios</h3>
-        <div class="card">
-            <div class="form-row">
-                <div class="form-group"><label>$ por gramo de filamento</label><input class="form-control" id="cfgPerGram" value="${esc(perGram)}"></div>
-                <div class="form-group"><label>$ por hora de impresión</label><input class="form-control" id="cfgPerHour" value="${esc(perHour)}"></div>
-            </div>
-            <div style="margin-top:12px"><button class="btn btn-primary" onclick="savePrint3dConfig()">Guardar</button></div>
-        </div>
-    </div>
-    <div class="settings-section">
-        <h3>☁️ Servidor en la Nube (PythonAnywhere / GitHub)</h3>
-        <div class="card">
-            <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px">
-                Cuando hagamos mejoras y las subamos a GitHub, toca este botón para descargar los últimos cambios y recargar el servidor en la nube automáticamente (sin perder tu base de datos):
-            </p>
-            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-                <button class="btn btn-primary" onclick="syncCloudFromGithub()">🔄 Actualizar app desde GitHub</button>
-                <button class="btn btn-secondary" onclick="showToast('Próximamente')">Exportar datos</button>
             </div>
         </div>
     </div>`;
@@ -4215,36 +4365,23 @@ async function syncCloudFromGithub() {
         const res = await fetch('/webhook/github', { method: 'POST' });
         const data = await res.json();
         if (data && data.ok) {
-            showToast('✨ Actualizado! Recargando en 3 segundos...');
-            setTimeout(() => window.location.reload(), 3000);
+            showToast('✨ Actualizado! Recargando...');
+            setTimeout(() => window.location.reload(), 2500);
         } else {
             showToast('Resultado: ' + (data.output || 'Usa git pull en local'));
         }
     } catch (e) {
-        showToast('Esta función es para el servidor en la nube');
+        showToast('Solo disponible en la versión nube');
     }
 }
 window.syncCloudFromGithub = syncCloudFromGithub;
 
 function copyLanUrl(url) {
     if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(url).then(() => showToast('Enlace copiado al portapapeles ✨'));
+        navigator.clipboard.writeText(url).then(() => showToast('Link copiado ✨'));
     } else {
         showToast(url);
     }
-}
-
-async function savePrint3dConfig() {
-    const perGram = document.getElementById('cfgPerGram').value.trim();
-    const perHour = document.getElementById('cfgPerHour').value.trim();
-    if (!perGram || !perHour || isNaN(perGram) || isNaN(perHour)) {
-        showToast('Ingresa valores numéricos válidos');
-        return;
-    }
-    await api(eel.set_config, 'print3d_price_per_gram', perGram);
-    await api(eel.set_config, 'print3d_price_per_hour', perHour);
-    showToast('Configuración guardada');
-    navigate('settings');
 }
 
 // ===== GLOBAL: expose functions to HTML onclick =====
@@ -4289,11 +4426,13 @@ window.showPersonalTaskForm = showPersonalTaskForm;
 window.showHabitForm = showHabitForm;
 window.toggleHabit = toggleHabit;
 window.deleteHabit = deleteHabit;
-window.showPrintOrderForm = showPrintOrderForm;
-window.deletePrintOrder = deletePrintOrder;
-window.cyclePrintStatus = cyclePrintStatus;
-window.calcPrintPrice = calcPrintPrice;
-window.savePrint3dConfig = savePrint3dConfig;
+window.showCosplayProjectForm = showCosplayProjectForm;
+window.deleteCosplayProject = deleteCosplayProject;
+window.cycleCosplayStatus = cycleCosplayStatus;
+window.showCosplayItemsModal = showCosplayItemsModal;
+window.addCosplayItemFromModal = addCosplayItemFromModal;
+window.toggleCosplayItemFromModal = toggleCosplayItemFromModal;
+window.deleteCosplayItemFromModal = deleteCosplayItemFromModal;
 window.showDayEvents = showDayEvents;
 window.toggleCompletedTasks = toggleCompletedTasks;
 window.showInjectionForm = showInjectionForm;

@@ -15,12 +15,36 @@ console.log('app.js loaded at', new Date().toISOString());
 const state = {
     view: 'dashboard',
     workTab: 'tasks',
+    personalTab: 'routine',
+    selectedRoutineDayId: null,
     cal: { year: 0, month: 0 },
     showCompleted: false,
     healthTab: 'injections',
     estradiolRange: 365,
     estradiolData: null,
+    activeWorkout: null, // { dayId, dayName, warmup, cooldown, startTime, elapsedSec, timerId, restSec, restTimerId, exercises: [...] }
+    progressExercise: '',
+    progressMetric: 'max_weight',
 };
+
+function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('nicole_theme', theme);
+    const btn = document.getElementById('themeToggle');
+    if (btn) btn.textContent = theme === 'dark' ? '☀️' : '🌙';
+}
+
+function toggleTheme() {
+    const current = document.documentElement.getAttribute('data-theme') || 'light';
+    const next = current === 'dark' ? 'light' : 'dark';
+    applyTheme(next);
+    if (typeof window.eel !== 'undefined' && window.eel.set_config) {
+        api(eel.set_config, 'theme', next).catch(() => {});
+    }
+    if (state.view === 'health' || state.view === 'personal') {
+        navigate(state.view);
+    }
+}
 
 // ===== SAFE API CALL =====
 async function api(fn, ...args) {
@@ -111,6 +135,8 @@ function waitForEel(cb, attempt) {
 
 // ===== INIT =====
 document.addEventListener('DOMContentLoaded', () => {
+    const savedTheme = localStorage.getItem('nicole_theme') || 'dark';
+    applyTheme(savedTheme);
     document.getElementById('modalClose').onclick = closeModal;
     document.getElementById('modalCancel').onclick = closeModal;
     document.getElementById('modalOverlay').onclick = (e) => {
@@ -125,7 +151,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const now = new Date();
     state.cal.year = now.getFullYear();
     state.cal.month = now.getMonth() + 1;
-    waitForEel(() => {
+    waitForEel(async () => {
+        if (!localStorage.getItem('nicole_theme')) {
+            const dbTheme = await api(eel.get_config, 'theme');
+            if (dbTheme) applyTheme(dbTheme);
+        }
         navigate('dashboard');
         startReloadPoller();
     });
@@ -138,11 +168,13 @@ function startReloadPoller() {
                 location.reload();
             }
         } catch (_) {}
-    }, 2000);
+    }, 5000);
 }
 
 // ===== NAVIGATION =====
 async function navigate(view) {
+    const isSameView = (state.view === view);
+    const savedScrollY = window.scrollY;
     state.view = view;
     document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
     const link = document.querySelector(`.nav-link[data-view="${view}"]`);
@@ -151,7 +183,10 @@ async function navigate(view) {
     const el = document.getElementById('view-' + view);
     if (!el) return;
     el.classList.add('active');
-    el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Cargando...</div>';
+    // Only replace with "Cargando..." if the view is currently empty, preventing scroll jumps
+    if (!isSameView && !el.innerHTML.trim()) {
+        el.innerHTML = '<div style="text-align:center;padding:40px;color:var(--text-muted)">Cargando...</div>';
+    }
     try {
         switch (view) {
             case 'dashboard': await renderDashboard(el); break;
@@ -161,6 +196,11 @@ async function navigate(view) {
             case 'health': await renderHealth(el); break;
             case 'print3d': await renderPrint3D(el); break;
             case 'settings': await renderSettings(el); break;
+        }
+        if (isSameView) {
+            window.scrollTo(0, savedScrollY);
+        } else {
+            window.scrollTo(0, 0);
         }
     } catch (e) {
         console.error('Error rendering', view, e);
@@ -574,12 +614,14 @@ function showEmpresaForm(id) {
     api(eel.get_clients).then(clients => {
         const c = id ? clients.find(x => x.id === id) : null;
         const html = '<form id="modalForm">' +
-            '<div class="form-group"><label>RUC</label><input class="form-control" name="ruc" value="'+esc(c ? c.ruc : '')+'"></div>' +
-            '<div class="form-group"><label>Razón social *</label><input class="form-control" name="business_name" value="'+esc(c ? c.business_name : '')+'"></div>' +
+            '<div class="form-group"><label>RUC</label><div style="display:flex;gap:8px">' +
+            '<input class="form-control" name="ruc" id="empresaRucInput" value="'+esc(c ? c.ruc : '')+'" placeholder="11 dígitos">' +
+            '<button type="button" class="btn btn-secondary btn-sm" onclick="buscarRucSunat()">🔍 SUNAT</button></div></div>' +
+            '<div class="form-group"><label>Razón social *</label><input class="form-control" name="business_name" id="empresaNameInput" value="'+esc(c ? c.business_name : '')+'"></div>' +
             '<div class="form-row"><div class="form-group"><label>Contacto</label><input class="form-control" name="contact_name" value="'+esc(c ? c.contact_name : '')+'"></div>' +
             '<div class="form-group"><label>Teléfono</label><input class="form-control" name="phone" value="'+esc(c ? c.phone : '')+'"></div></div>' +
             '<div class="form-group"><label>Email</label><input class="form-control" name="email" value="'+esc(c ? c.email : '')+'"></div>' +
-            '<div class="form-group"><label>Dirección</label><input class="form-control" name="address" value="'+esc(c ? c.address : '')+'"></div>' +
+            '<div class="form-group"><label>Dirección</label><input class="form-control" name="address" id="empresaAddressInput" value="'+esc(c ? c.address : '')+'"></div>' +
             '</form>';
         openModal(c ? 'Editar empresa' : 'Nueva empresa', html);
         document.getElementById('modalSave').onclick = async () => {
@@ -592,6 +634,20 @@ function showEmpresaForm(id) {
             else showToast('Error');
         };
     });
+}
+
+async function buscarRucSunat() {
+    const rucEl = document.getElementById('empresaRucInput');
+    if (!rucEl || !rucEl.value.trim()) { showToast('Ingresa un número de RUC'); return; }
+    showToast('Consultando RUC...');
+    const res = await api(eel.lookup_ruc, rucEl.value.trim());
+    if (res && res.ok) {
+        if (res.business_name) document.getElementById('empresaNameInput').value = res.business_name;
+        if (res.address) document.getElementById('empresaAddressInput').value = res.address;
+        showToast('Datos cargados (' + (res.estado || 'OK') + ')');
+    } else {
+        showToast(res && res.error ? res.error : 'No se pudo consultar RUC');
+    }
 }
 
 // --- WORK INVOICES (facturación mensual) ---
@@ -627,10 +683,11 @@ async function renderWorkInvoices(el) {
         for (const m of months) {
             html += '<th style="text-align:center;font-size:0.75rem;padding:4px 6px">'+m.label+'</th>';
         }
-        html += '<th style="text-align:center">Total año</th><th style="text-align:center">Cuota</th><th style="text-align:center">Dif</th></tr></thead><tbody>';
+        html += '<th style="text-align:center">Total 12m</th><th style="text-align:center">Cuota/mes</th><th style="text-align:center">Dif. Anual</th></tr></thead><tbody>';
         for (const s of data.sites) {
             const empresa = s.empresa || s.nombre_cliente;
             let totalInvoiced = 0;
+            let monthsBilledCount = 0;
             const fee = parseFloat(s.monthly_fee) || 0;
             html += '<tr><td><strong>'+esc(empresa)+'</strong><br><span style="font-size:0.75rem;color:#999">'+esc(s.nombre_cliente)+'</span></td>';
             for (const m of months) {
@@ -639,16 +696,18 @@ async function renderWorkInvoices(el) {
                 const total = invs.reduce((sum, inv) => sum + (inv.total || 0), 0);
                 totalInvoiced += total;
                 if (total > 0) {
-                    html += '<td style="text-align:center;background:#E8EFE8;font-size:0.8rem">S/ '+total.toFixed(0)+'</td>';
+                    monthsBilledCount++;
+                    html += '<td style="text-align:center;background:var(--secondary-light);font-size:0.8rem">S/ '+total.toFixed(0)+'</td>';
                 } else {
-                    html += '<td style="text-align:center;color:#ddd">—</td>';
+                    html += '<td style="text-align:center;color:var(--text-light)">—</td>';
                 }
             }
-            const diff = totalInvoiced - fee;
+            const expectedTotal = fee * (monthsBilledCount || 1);
+            const diff = totalInvoiced - expectedTotal;
             const diffCls = diff >= 0 ? 'tag-sage' : 'tag-rose';
             html += '<td style="text-align:center;font-weight:600">S/ '+totalInvoiced.toFixed(0)+'</td>' +
                 '<td style="text-align:center">S/ '+fee.toFixed(0)+'</td>' +
-                '<td style="text-align:center"><span class="tag '+diffCls+'">'+(diff >= 0 ? '+': '')+diff.toFixed(0)+'</span></td></tr>';
+                '<td style="text-align:center"><span class="tag '+diffCls+'" title="Comparado contra '+monthsBilledCount+' mes(es) facturados">'+(diff >= 0 ? '+': '')+diff.toFixed(0)+'</span></td></tr>';
         }
         html += '</tbody></table></div>';
     }
@@ -767,14 +826,27 @@ async function renderWorkQuotes(el) {
             html += '<tr><td>'+esc(q.number)+'</td><td><strong>'+esc(q.business_name||'')+'</strong></td>' +
                 '<td style="font-size:0.8rem">'+esc(q.site_name||'-')+'</td><td>S/ '+(q.total||0).toFixed(2)+'</td>' +
                 '<td>'+fmtDate(q.issue_date)+'</td><td><span class="tag '+s.cls+'">'+s.label+'</span></td>' +
-                '<td style="text-align:right">' +
-                '<button class="btn btn-ghost btn-sm" onclick="showQuoteForm('+q.id+')">✎</button>' +
+                '<td style="text-align:right;white-space:nowrap">' +
+                '<button class="btn btn-ghost btn-sm" onclick="showQuoteForm('+q.id+')" title="Editar">✎</button>' +
                 '<button class="btn btn-ghost btn-sm" onclick="downloadQuoteWord('+q.id+')" title="Descargar Word">📄</button>' +
-                '<button class="btn btn-ghost btn-sm" onclick="deleteQuote('+q.id+')">✕</button></td></tr>';
+                '<button class="btn btn-ghost btn-sm" onclick="convertQuoteToInvoice('+q.id+')" title="Convertir a Factura">🧾</button>' +
+                '<button class="btn btn-ghost btn-sm" onclick="deleteQuote('+q.id+')" title="Eliminar">✕</button></td></tr>';
         }
         html += '</tbody></table></div>';
     }
     el.innerHTML = html;
+}
+
+async function convertQuoteToInvoice(id) {
+    if (!confirm('¿Convertir esta cotización en una Factura emitida y marcarla como Aceptada?')) return;
+    const res = await api(eel.convert_quote_to_invoice, id);
+    if (res && res.ok) {
+        showToast('Factura creada desde cotización');
+        state.workTab = 'invoices';
+        navigate('work');
+    } else {
+        showToast('Error: ' + (res?.error || 'No se pudo convertir'));
+    }
 }
 
 function showQuoteForm(id) {
@@ -794,39 +866,42 @@ function showQuoteModal(quote) {
         api(eel.get_service_descriptions) || [],
     ]).then(([clients, sites, serviceTypes, descriptions]) => {
         clients = clients || []; sites = sites || []; serviceTypes = serviceTypes || []; descriptions = descriptions || [];
-        const items = (quote && quote.items) || [];
+        const items = (quote && quote.items) ? quote.items.map(it => ({...it})) : [];
 
         const clientOpts = '<option value="">— Seleccionar —</option>' + clients.map(c =>
             '<option value="'+c.id+'"'+(quote && quote.client_id === c.id ? ' selected' : '')+'>'+esc(c.business_name)+'</option>'
         ).join('');
 
+        const stVal = quote ? quote.status : 'borrador';
         const html = '<form id="quoteForm">' +
             '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">' +
             '<div class="form-group" style="flex:2"><label>Empresa *</label><select class="form-control" name="client_id" onchange="updateQuoteSites()">'+clientOpts+'</select></div>' +
             '<div class="form-group" style="flex:1"><label>Sede</label><select class="form-control" name="client_site_id" id="quoteSiteSelect"><option value="">— Sin sede —</option></select></div></div>' +
             '<div class="form-row"><div class="form-group"><label>Fecha</label><input type="date" class="form-control" name="issue_date" value="'+(quote ? quote.issue_date : todayStr())+'"></div>' +
-            '<div class="form-group"><label>Válido hasta</label><input type="date" class="form-control" name="valid_until" value="'+(quote ? quote.valid_until : '')+'"></div>' +
-            '<div class="form-group"><label>Cond. pago</label><select class="form-control" name="payment_terms">' +
+            '<div class="form-group"><label>Válido hasta</label><input type="date" class="form-control" name="valid_until" value="'+(quote ? quote.valid_until : '')+'"></div></div>' +
+            '<div class="form-row"><div class="form-group"><label>Cond. pago</label><select class="form-control" name="payment_terms">' +
             '<option value="CREDITO A 30 DIAS"'+(quote && quote.payment_terms === 'CREDITO A 30 DIAS' ? ' selected' : '')+'>Crédito 30 días</option>' +
             '<option value="CREDITO A 15 DIAS"'+(quote && quote.payment_terms === 'CREDITO A 15 DIAS' ? ' selected' : '')+'>Crédito 15 días</option>' +
             '<option value="CONTADO"'+(quote && quote.payment_terms === 'CONTADO' ? ' selected' : '')+'>Contado</option>' +
             '<option value="CREDITO A 60 DIAS"'+(quote && quote.payment_terms === 'CREDITO A 60 DIAS' ? ' selected' : '')+'>Crédito 60 días</option>' +
+            '</select></div>' +
+            '<div class="form-group"><label>Estado</label><select class="form-control" name="status">' +
+            '<option value="borrador"'+(stVal==='borrador'?' selected':'')+'>Borrador</option>' +
+            '<option value="emitida"'+(stVal==='emitida'?' selected':'')+'>Emitida</option>' +
+            '<option value="aceptada"'+(stVal==='aceptada'?' selected':'')+'>Aceptada</option>' +
+            '<option value="rechazada"'+(stVal==='rechazada'?' selected':'')+'>Rechazada</option>' +
             '</select></div></div>' +
             '<div id="quoteItemsContainer"></div>' +
-            '<div style="margin:8px 0;text-align:right">' +
+            '<div style="margin:8px 0;display:flex;justify-content:space-between;align-items:center">' +
+            (quote ? '<button type="button" class="btn btn-secondary btn-sm" onclick="downloadQuoteWord('+quote.id+')">📄 Descargar Word</button>' : '<div></div>') +
             '<button type="button" class="btn btn-ghost btn-sm" onclick="addQuoteLine()">+ Agregar servicio</button></div>' +
             '<div style="border-top:1px solid #ddd;padding-top:8px;text-align:right;font-size:1.1rem">' +
             'Subtotal: <strong id="qSubtotal">S/ 0.00</strong> | IGV (18%): <strong id="qIgv">S/ 0.00</strong> | ' +
             '<span style="font-size:1.3rem">Total: <strong id="qTotal">S/ 0.00</strong></span></div>' +
-            '<input type="hidden" name="status" value="'+(quote ? quote.status : 'borrador')+'">' +
             '</form>';
 
         const title = quote ? 'Editar cotización ' + quote.number : 'Nueva cotización';
-        const saveLabel = quote ? 'Guardar' : 'Crear';
-        openModal(title, html + '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">' +
-            '<button class="btn btn-primary" id="quoteSaveBtn">'+saveLabel+'</button>' +
-            (quote ? '<button class="btn btn-ghost" onclick="downloadQuoteWord('+quote.id+')">📄 Word</button>' : '') +
-            '</div>');
+        openModal(title, html);
 
         // Store data for line editor
         window.__quoteData = { serviceTypes, descriptions, items, sites, clients, quoteId: quote ? quote.id : null };
@@ -845,9 +920,33 @@ function showQuoteModal(quote) {
 
         // Render existing items
         renderQuoteLines(items, serviceTypes, descriptions);
+        recalcQuoteTotals();
 
-        document.getElementById('quoteSaveBtn').onclick = async () => saveQuote(quote);
+        document.getElementById('modalSave').onclick = async () => saveQuote(quote);
     });
+}
+
+function syncQuoteItemsFromDOM() {
+    const lines = document.querySelectorAll('.quote-line');
+    if (!lines.length || !window.__quoteData) return;
+    const synced = [];
+    lines.forEach(line => {
+        const typeVal = line.querySelector('.qt-type')?.value;
+        const descVal = line.querySelector('.qt-desc')?.value;
+        const qty = parseFloat(line.querySelector('.qt-qty')?.value) || 1;
+        const price = parseFloat(line.querySelector('.qt-price')?.value) || 0;
+        const text = line.querySelector('.qt-text')?.value || '';
+        const itemId = line.dataset.itemId ? parseInt(line.dataset.itemId) : null;
+        synced.push({
+            id: itemId,
+            service_type_id: typeVal ? parseInt(typeVal) : '',
+            description_id: descVal ? parseInt(descVal) : '',
+            description_text: text,
+            quantity: qty,
+            unit_price: price,
+        });
+    });
+    window.__quoteData.items = synced;
 }
 
 function renderQuoteLines(items, serviceTypes, descriptions) {
@@ -864,16 +963,16 @@ function renderQuoteLines(items, serviceTypes, descriptions) {
             '<option value="'+d.id+'" data-text="'+esc(d.description_text)+'"'+(item.description_id === d.id ? ' selected' : '')+'>'+esc(d.name)+'</option>'
         ).join('');
 
-        html += '<div class="quote-line" style="border:1px solid #eee;border-radius:8px;padding:8px;margin-bottom:8px;background:#fafafa">' +
+        html += '<div class="quote-line" data-item-id="'+(item.id||'')+'" style="border:1px solid #eee;border-radius:8px;padding:8px;margin-bottom:8px;background:#fafafa">' +
             '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:end">' +
-            '<div class="form-group" style="flex:1;min-width:140px"><label>Servicio</label><select class="form-control" name="qt_type_'+idx+'" onchange="onQuoteTypeChange('+idx+')">'+typeOpts+'</select></div>' +
-            '<div class="form-group" style="flex:1;min-width:140px"><label>Descripción</label><select class="form-control" name="qt_desc_'+idx+'" onchange="onQuoteDescChange('+idx+')">'+descOpts+'</select></div>' +
-            '<div class="form-group" style="width:60px"><label>Cant.</label><input type="number" step="1" class="form-control" name="qt_qty_'+idx+'" value="'+(item.quantity||1)+'" onchange="recalcQuoteLine('+idx+')"></div>' +
-            '<div class="form-group" style="width:90px"><label>P. Unit.</label><input type="number" step="0.01" class="form-control" name="qt_price_'+idx+'" value="'+(item.unit_price||'')+'" onchange="recalcQuoteLine('+idx+')"></div>' +
+            '<div class="form-group" style="flex:1;min-width:140px"><label>Servicio</label><select class="form-control qt-type" name="qt_type_'+idx+'" onchange="onQuoteTypeChange('+idx+')">'+typeOpts+'</select></div>' +
+            '<div class="form-group" style="flex:1;min-width:140px"><label>Descripción</label><select class="form-control qt-desc" name="qt_desc_'+idx+'" onchange="onQuoteDescChange('+idx+')">'+descOpts+'</select></div>' +
+            '<div class="form-group" style="width:60px"><label>Cant.</label><input type="number" step="1" class="form-control qt-qty" name="qt_qty_'+idx+'" value="'+(item.quantity||1)+'" onchange="recalcQuoteLine('+idx+')" onkeyup="recalcQuoteLine('+idx+')"></div>' +
+            '<div class="form-group" style="width:90px"><label>P. Unit.</label><input type="number" step="0.01" class="form-control qt-price" name="qt_price_'+idx+'" value="'+(item.unit_price||'')+'" onchange="recalcQuoteLine('+idx+')" onkeyup="recalcQuoteLine('+idx+')"></div>' +
             '<div class="form-group" style="width:80px"><label>Total</label><strong class="qt-line-total" id="qt_total_'+idx+'">S/ '+((item.quantity||1)*(item.unit_price||0)).toFixed(2)+'</strong></div>' +
-            '<button type="button" class="btn btn-ghost btn-sm" style="margin-bottom:4px" onclick="removeQuoteLine(this)">✕</button></div>' +
+            '<button type="button" class="btn btn-ghost btn-sm" style="margin-bottom:4px" onclick="removeQuoteLine('+idx+')">✕</button></div>' +
             '<div class="form-group" style="margin-top:4px"><label>Descripción detallada</label>' +
-            '<div style="display:flex;gap:4px"><textarea class="form-control" name="qt_text_'+idx+'" rows="3" style="font-size:0.8rem">'+esc(item.description_text||'')+'</textarea>' +
+            '<div style="display:flex;gap:4px"><textarea class="form-control qt-text" name="qt_text_'+idx+'" rows="3" style="font-size:0.8rem">'+esc(item.description_text||'')+'</textarea>' +
             '<button type="button" class="btn btn-ghost btn-sm" style="align-self:end;white-space:nowrap" onclick="generateIALine('+idx+')" title="Generar con IA">✨ IA</button></div></div></div>';
     });
     container.innerHTML = html;
@@ -923,22 +1022,31 @@ function recalcQuoteTotals() {
     });
     const igv = subtotal * 0.18;
     const total = subtotal + igv;
-    document.getElementById('qSubtotal').textContent = 'S/ '+subtotal.toFixed(2);
-    document.getElementById('qIgv').textContent = 'S/ '+igv.toFixed(2);
-    document.getElementById('qTotal').textContent = 'S/ '+total.toFixed(2);
+    const subEl = document.getElementById('qSubtotal');
+    const igvEl = document.getElementById('qIgv');
+    const totEl = document.getElementById('qTotal');
+    if (subEl) subEl.textContent = 'S/ '+subtotal.toFixed(2);
+    if (igvEl) igvEl.textContent = 'S/ '+igv.toFixed(2);
+    if (totEl) totEl.textContent = 'S/ '+total.toFixed(2);
 }
 
 window.addQuoteLine = function() {
+    syncQuoteItemsFromDOM();
     const data = window.__quoteData;
-    const items = data.items;
-    items.push({ id: null, service_type_id: '', description_id: '', description_text: '', quantity: 1, unit_price: 0 });
-    renderQuoteLines(items, data.serviceTypes, data.descriptions);
+    data.items.push({ id: null, service_type_id: '', description_id: '', description_text: '', quantity: 1, unit_price: 0 });
+    renderQuoteLines(data.items, data.serviceTypes, data.descriptions);
     recalcQuoteTotals();
 };
 
-window.removeQuoteLine = function(btn) {
-    const line = btn.closest('.quote-line');
-    if (line) line.remove();
+window.removeQuoteLine = function(idx) {
+    syncQuoteItemsFromDOM();
+    const data = window.__quoteData;
+    if (!data.deletedItemIds) data.deletedItemIds = [];
+    const removed = data.items.splice(idx, 1)[0];
+    if (removed && removed.id) {
+        data.deletedItemIds.push(removed.id);
+    }
+    renderQuoteLines(data.items, data.serviceTypes, data.descriptions);
     recalcQuoteTotals();
 };
 
@@ -966,20 +1074,9 @@ async function saveQuote(existing) {
     const clientId = parseInt(f.get('client_id'));
     if (!clientId) { showToast('Selecciona una empresa'); return; }
 
-    // Collect line items from DOM
-    const lines = document.querySelectorAll('.quote-line');
-    const items = [];
-    lines.forEach((line, idx) => {
-        const typeVal = line.querySelector('[name=qt_type_'+idx+']')?.value;
-        const descVal = line.querySelector('[name=qt_desc_'+idx+']')?.value;
-        const qty = parseFloat(line.querySelector('[name=qt_qty_'+idx+']')?.value) || 1;
-        const price = parseFloat(line.querySelector('[name=qt_price_'+idx+']')?.value) || 0;
-        const text = line.querySelector('[name=qt_text_'+idx+']')?.value || '';
-        if (typeVal) {
-            items.push({ service_type_id: parseInt(typeVal), description_id: descVal ? parseInt(descVal) : null,
-                description_text: text, quantity: qty, unit_price: price });
-        }
-    });
+    syncQuoteItemsFromDOM();
+    const qData = window.__quoteData;
+    const items = qData.items.filter(it => it.service_type_id);
 
     const totals = recalcQuoteTotalsFromItems(items);
     const data = {
@@ -994,7 +1091,6 @@ async function saveQuote(existing) {
         status: f.get('status'),
     };
 
-    const qData = window.__quoteData;
     let res;
     if (qData.quoteId) {
         res = await api(eel.update_quote, qData.quoteId, data);
@@ -1005,11 +1101,13 @@ async function saveQuote(existing) {
 
     const quoteId = qData.quoteId || res.id;
 
-    // Save items: delete all and re-add
+    // Save items: delete old items and re-add
     if (qData.quoteId) {
-        // For existing quote, delete old items
-        for (const oldItem of qData.items) {
-            if (oldItem.id) await api(eel.delete_quote_item, oldItem.id);
+        const oldQuote = await api(eel.get_quote, qData.quoteId);
+        if (oldQuote && oldQuote.items) {
+            for (const oldItem of oldQuote.items) {
+                if (oldItem.id) await api(eel.delete_quote_item, oldItem.id);
+            }
         }
     }
     for (const item of items) {
@@ -1374,9 +1472,57 @@ async function renderWorkLindley(el) {
     const now = new Date();
     const curMonth = now.getMonth() + 1;
     const curYear = now.getFullYear();
+    const nextMonth = curMonth === 12 ? 1 : curMonth + 1;
+    const nextYear = curMonth === 12 ? curYear + 1 : curYear;
+    const valMonth = state.lindleyMonth || nextMonth;
+    const valYear = state.lindleyYear || nextYear;
+    const validation = await api(eel.get_lindley_validation, valYear, valMonth) || { employees: [] };
     const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Setiembre','Octubre','Noviembre','Diciembre'];
 
-    let html = `<div class="two-col">
+    const monthOpts = meses.map((m, i) => `<option value="${i+1}" ${valMonth === i+1 ? 'selected' : ''}>${m}</option>`).join('');
+
+    let html = `<div class="card" style="margin-bottom:18px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+            <div>
+                <div class="card-title" style="margin-bottom:2px">🚦 Semáforo de Habilitación de Técnicos para Planta</div>
+                <div style="font-size:0.8rem;color:var(--text-muted)">Valida que EMO, MATPEL e Inducción estén vigentes durante todo el mes programado</div>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center">
+                <select class="form-control" style="width:130px;padding:6px 10px;font-size:0.8rem" onchange="changeLindleyValPeriod(this.value, ${valYear})">${monthOpts}</select>
+                <input type="number" class="form-control" style="width:85px;padding:6px 10px;font-size:0.8rem" value="${valYear}" onchange="changeLindleyValPeriod(${valMonth}, this.value)">
+            </div>
+        </div>`;
+
+    if (!validation.employees || validation.employees.length === 0) {
+        html += '<p style="color:var(--text-muted);font-size:0.85rem">Sin técnicos activos</p>';
+    } else {
+        html += '<div class="table-wrap"><table><thead><tr><th>Técnico</th><th>DNI</th><th>EMO</th><th>MATPEL</th><th>Inducción</th><th>Estado ingreso</th></tr></thead><tbody>';
+        for (const emp of validation.employees) {
+            const renderDocBadge = (d) => {
+                if (!d || d.status === 'missing') return '<span class="tag tag-rose">Falta</span>';
+                if (d.status === 'expired') return `<span class="tag tag-rose" title="${esc(d.label)}">Vencido (${fmtDate(d.expiry_date)})</span>`;
+                if (d.status === 'expiring_in_month') return `<span class="tag tag-gold" title="${esc(d.label)}">⚠️ Vence ${fmtDate(d.expiry_date)}</span>`;
+                return `<span class="tag tag-sage">${d.expiry_date ? fmtDate(d.expiry_date) : 'Vigente'}</span>`;
+            };
+            const overallBadge = emp.overall === 'ok'
+                ? '<span class="tag tag-sage">✅ Habilitado</span>'
+                : emp.overall === 'warning'
+                ? '<span class="tag tag-gold">⚠️ Se vence en el mes</span>'
+                : '<span class="tag tag-rose">🚫 No habilitado</span>';
+            html += `<tr>
+                <td><strong>${esc(emp.full_name)}</strong><br><span style="font-size:0.75rem;color:var(--text-muted)">${esc(emp.position || '')}</span></td>
+                <td>${esc(emp.document_number || '-')}</td>
+                <td>${renderDocBadge(emp.docs['EMO'])}</td>
+                <td>${renderDocBadge(emp.docs['MATPEL'])}</td>
+                <td>${renderDocBadge(emp.docs['Inducción'])}</td>
+                <td>${overallBadge}</td>
+            </tr>`;
+        }
+        html += '</tbody></table></div>';
+    }
+    html += `</div>`;
+
+    html += `<div class="two-col">
         <div class="card">
             <div class="card-title">Contactos por planta</div>
             <div style="margin-bottom:12px"><button class="btn btn-primary btn-sm" onclick="showContactForm()">+ Contacto</button></div>`;
@@ -1399,8 +1545,8 @@ async function renderWorkLindley(el) {
         <div>
             <div class="card" style="margin-bottom:14px">
                 <div class="card-title">Plan de trabajo mensual</div>
-                <p style="margin-bottom:12px;font-size:0.85rem;color:var(--text-muted)">${meses[curMonth-1]} ${curYear}</p>
-                <button class="btn btn-primary" onclick="completeForm(${curMonth}, ${curYear})">Completar este mes</button>
+                <p style="margin-bottom:12px;font-size:0.85rem;color:var(--text-muted)">Programación para ${meses[nextMonth-1]} ${nextYear}</p>
+                <button class="btn btn-primary" onclick="completeForm(${nextMonth}, ${nextYear})">Marcar ${meses[nextMonth-1]} completado</button>
             </div>
             <div class="card"><div class="card-title">Historial</div>`;
     if (forms.length === 0) {
@@ -1414,6 +1560,12 @@ async function renderWorkLindley(el) {
     }
     html += '</div></div></div>';
     el.innerHTML = html;
+}
+
+function changeLindleyValPeriod(month, year) {
+    state.lindleyMonth = parseInt(month);
+    state.lindleyYear = parseInt(year);
+    navigate('work');
 }
 
 function showContactForm(id) {
@@ -1476,7 +1628,7 @@ async function renderWorkServices(el) {
             '<th>Fecha</th><th>Técnico</th><th>Cliente</th><th>Entrada</th><th>Salida</th><th>Hrs</th><th>Estado</th><th></th></tr></thead><tbody>';
         for (const r of records) {
             const isActive = r.status === 'active';
-            const stl = isActive ? ' style="background:#FFF0E6"' : '';
+            const stl = isActive ? ' style="background:var(--primary-light)"' : '';
             const badge = isActive ? '<span class="task-badge due-soon">Activo</span>' : '<span class="tag tag-sage" style="font-size:0.75rem">Completado</span>';
             const evIcon = r.evidencia ? '📸' : '';
             html += `<tr${stl}>
@@ -1577,14 +1729,10 @@ async function deleteServiceRecord(id) {
 // --- WORK DAILY CONTROL ---
 async function renderWorkDailyControl(el) {
     const today = todayStr();
-    const control = await api(eel.get_daily_control, today) || [];
-    const employees = await api(eel.get_employees) || [];
-
-    // Auto-sync: asegura daily_control actualizado para hoy
-    for (const emp of employees) {
-        await api(eel.sync_daily_control, today, emp.id);
-    }
-    const updatedControl = await api(eel.get_daily_control, today) || [];
+    const [updatedControl, employees] = await Promise.all([
+        api(eel.get_daily_control, today),
+        api(eel.get_employees)
+    ]);
 
     let html = '<div class="card"><div class="card-title">Control del dia \u00b7 '+fmtDate(today)+'</div>';
 
@@ -1821,20 +1969,48 @@ function showAssignmentModal(assign, subjectId) {
 
 // ===================== PERSONAL =====================
 async function renderPersonal(el) {
-    const all = await api(eel.get_tasks, 3) || [];
-    const tasks = all.filter(t => t.status !== 'completed');
-    const habits = await api(eel.get_habits) || [];
-    const now = new Date();
-    const logs = await api(eel.get_habit_logs, now.getFullYear()) || [];
+    const tab = state.personalTab || 'routine';
+    const tabs = [
+        { id: 'routine', label: '🏋️‍♀️ Mi Rutina' },
+        { id: 'progress', label: '📈 Progreso y Historial' },
+        { id: 'tasks', label: '✨ Tareas y Hábitos' },
+    ];
 
     let html = `<div class="page-header">
-        <div><h1>Personal</h1><div class="subtitle">Tareas y hábitos</div></div>
+        <div><h1>Personal</h1><div class="subtitle">Entrenamiento, hábitos y organización personal</div></div>
         <div class="page-actions">
-            <button class="btn btn-primary" onclick="showPersonalTaskForm()">+ Tarea</button>
-            <button class="btn btn-secondary" onclick="showHabitForm()">+ Hábito</button>
+            ${tab === 'routine' ? '<button class="btn btn-primary" onclick="showWorkoutDayForm()">+ Nuevo día de rutina</button>' : ''}
+            ${tab === 'tasks' ? '<button class="btn btn-primary" onclick="showPersonalTaskForm()">+ Tarea</button><button class="btn btn-secondary" onclick="showHabitForm()">+ Hábito</button>' : ''}
         </div>
     </div>
-    <div class="two-col">
+    <div class="subnav">
+        ${tabs.map(t => `<button class="subnav-item${tab === t.id ? ' active' : ''}" onclick="switchPersonalTab('${t.id}')">${t.label}</button>`).join('')}
+    </div>
+    <div id="personalContent"></div>`;
+
+    el.innerHTML = html;
+    const content = el.querySelector('#personalContent');
+    if (tab === 'routine') await renderPersonalRoutine(content);
+    else if (tab === 'progress') await renderPersonalProgress(content);
+    else await renderPersonalTasksAndHabits(content);
+}
+
+function switchPersonalTab(tab) {
+    state.personalTab = tab;
+    navigate('personal');
+}
+
+async function renderPersonalTasksAndHabits(el) {
+    const now = new Date();
+    const [all, habits, logs] = await Promise.all([
+        api(eel.get_tasks, 3),
+        api(eel.get_habits),
+        api(eel.get_habit_logs, now.getFullYear())
+    ]);
+    const tasks = (all || []).filter(t => t.status !== 'completed');
+    const habitList = habits || [];
+
+    let html = `<div class="two-col">
         <div class="card"><div class="card-title">Tareas personales</div>`;
     if (tasks.length === 0) {
         html += '<div class="empty-state" style="padding:20px"><p>Sin tareas pendientes</p></div>';
@@ -1852,12 +2028,11 @@ async function renderPersonal(el) {
 
     // === HABITS + GRAPH ===
     html += `<div><div class="card"><div class="card-title">Hábitos</div>`;
-    if (habits.length === 0) {
+    if (habitList.length === 0) {
         html += '<div class="empty-state" style="padding:20px"><p>Sin hábitos</p></div>';
     } else {
-        for (const h of habits) {
-            const status = await api(eel.get_habit_status, h.id);
-            const done = status && status.done;
+        for (const h of habitList) {
+            const done = Boolean(h.done_today);
             html += `<div class="habit-item">
                 <div class="habit-check${done ? ' done' : ''}" onclick="toggleHabit(${h.id})"></div>
                 <div class="habit-name">${esc(h.name)}</div>
@@ -1865,20 +2040,876 @@ async function renderPersonal(el) {
                 <button class="btn btn-ghost btn-sm" onclick="deleteHabit(${h.id})">✕</button>
             </div>`;
         }
-        html += buildHabitGraph(logs, habits.length);
+        html += buildHabitGraph(logs || [], habitList.length);
     }
-    html += '</div>';
-
-    html += '</div></div>';
-
+    html += '</div></div></div>';
     el.innerHTML = html;
+}
+
+// --- WORKOUT: ROUTINE & LIVE PLAYER ---
+function fmtSec(sec) {
+    const s = Math.max(0, Math.floor(sec || 0));
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return String(m).padStart(2, '0') + ':' + String(r).padStart(2, '0');
+}
+
+function playBeep() {
+    try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        gain.gain.setValueAtTime(0.15, ctx.currentTime);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 0.25);
+    } catch (_) {}
+}
+
+async function renderPersonalRoutine(el) {
+    const [routine, history] = await Promise.all([
+        api(eel.get_workout_routine),
+        api(eel.get_workout_history)
+    ]);
+    const days = routine || [];
+    const hist = history || [];
+    window.__workoutRoutine = days;
+
+    // Suggested next workout day based on last completed session
+    let suggestedDayId = days.length > 0 ? days[0].id : null;
+    if (hist.length > 0 && days.length > 0) {
+        const lastDayId = hist[0].day_id;
+        const idx = days.findIndex(d => d.id === lastDayId);
+        if (idx >= 0) {
+            suggestedDayId = days[(idx + 1) % days.length].id;
+        }
+    }
+    window.__suggestedDayId = suggestedDayId;
+
+    if (!state.selectedRoutineDayId || !days.some(d => d.id === state.selectedRoutineDayId)) {
+        state.selectedRoutineDayId = suggestedDayId;
+    }
+
+    let html = `<div id="liveWorkoutMount">${state.activeWorkout ? buildActiveWorkoutPlayer(state.activeWorkout) : ''}</div>`;
+
+    if (days.length === 0) {
+        html += '<div class="empty-state"><div class="empty-icon">🏋️‍♀️</div><h3>Sin días de rutina</h3><p>Crea tu primer día de entrenamiento</p></div>';
+        el.innerHTML = html;
+        return;
+    }
+
+    html += `<div id="routineDayViewMount">${buildRoutineDayViewHTML(days, state.selectedRoutineDayId, suggestedDayId)}</div>`;
+    el.innerHTML = html;
+}
+
+function buildRoutineDayViewHTML(days, selectedDayId, suggestedDayId) {
+    const activeDay = days.find(d => d.id === selectedDayId) || days[0];
+    if (!activeDay) return '';
+    const activeIdx = days.findIndex(d => d.id === activeDay.id);
+    const prevDay = days[(activeIdx - 1 + days.length) % days.length];
+    const nextDay = days[(activeIdx + 1) % days.length];
+    const isSuggested = activeDay.id === suggestedDayId;
+    const exs = activeDay.exercises || [];
+
+    // Selector bar with Day tabs + Prev/Next navigation
+    let html = `<div class="routine-day-selector">
+        <button type="button" class="btn btn-secondary btn-sm" style="height:52px;padding:0 14px;border-radius:var(--radius)" onclick="selectRoutineDay(${prevDay.id})" title="Día anterior">◀</button>`;
+
+    for (const d of days) {
+        const isCurrent = d.id === activeDay.id;
+        const isToday = d.id === suggestedDayId;
+        // Extract short title without "Día X:" prefix
+        const shortName = (d.name || '').replace(/^D[íi]a\s*\d+\s*:\s*/i, '').trim() || d.name;
+        html += `<button type="button" class="routine-day-tab${isCurrent ? ' active' : ''}" onclick="selectRoutineDay(${d.id})">
+            <div class="day-tab-num">
+                <span>Día ${d.day_number}</span>
+                ${isToday ? `<span style="font-size:0.68rem;background:${isCurrent ? 'rgba(0,0,0,0.2)' : 'var(--primary-light)'};color:${isCurrent ? 'inherit' : 'var(--primary)'};padding:1px 6px;border-radius:99px">✨ Hoy</span>` : ''}
+            </div>
+            <div class="day-tab-title">${esc(shortName)}</div>
+        </button>`;
+    }
+
+    html += `<button type="button" class="btn btn-secondary btn-sm" style="height:52px;padding:0 14px;border-radius:var(--radius)" onclick="selectRoutineDay(${nextDay.id})" title="Día siguiente">▶</button>
+    </div>`;
+
+    // Focused single-day card
+    html += `<div class="routine-focus-card" style="${isSuggested ? 'border-color:var(--primary)' : ''}">
+        <div class="routine-focus-header">
+            <div>
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+                    <span class="tag tag-lavender">DÍA ${activeDay.day_number} DE ${days.length}</span>
+                    ${isSuggested ? '<span class="tag tag-primary">✨ Toca entrenar hoy</span>' : ''}
+                    <span style="font-size:0.8rem;color:var(--text-muted)">${exs.length} ejercicios principales</span>
+                </div>
+                <h2 style="font-size:1.45rem;font-weight:700;letter-spacing:-0.01em">${esc(activeDay.name)}</h2>
+                ${activeDay.subtitle ? `<p style="font-size:0.95rem;color:var(--text-muted);margin-top:4px">${esc(activeDay.subtitle)}</p>` : ''}
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <button type="button" class="btn btn-primary" style="padding:11px 22px;font-size:0.95rem" onclick="startLiveWorkout(${activeDay.id})">▶ Iniciar rutina del día</button>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="showWorkoutExerciseForm(${activeDay.id})">+ Ejercicio</button>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="showWorkoutDayForm(${activeDay.id})" title="Editar título y estiramientos de este día">✎ Editar día</button>
+                <button type="button" class="btn btn-ghost btn-sm" onclick="deleteWorkoutDay(${activeDay.id})" title="Eliminar día">🗑️</button>
+            </div>
+        </div>`;
+
+    if (activeDay.warmup_notes) {
+        html += `<div class="stretch-banner"><strong>🔥 Calentamiento Previo (guía visual · no requiere registro):</strong>\n${esc(activeDay.warmup_notes)}</div>`;
+    }
+
+    if (exs.length === 0) {
+        html += `<div class="empty-state" style="padding:32px"><p>No hay ejercicios en este día todavía.</p><button class="btn btn-primary btn-sm" style="margin-top:10px" onclick="showWorkoutExerciseForm(${activeDay.id})">+ Agregar primer ejercicio</button></div>`;
+    } else {
+        html += `<div class="routine-ex-list">`;
+        exs.forEach((ex, idx) => {
+            html += `<div class="routine-ex-item">
+                <div style="display:flex;align-items:flex-start;gap:14px;flex:1;min-width:0">
+                    <div class="routine-ex-num">${idx + 1}</div>
+                    <div class="routine-ex-info">
+                        <div class="routine-ex-name">${esc(ex.name)}</div>
+                        <div class="routine-ex-meta">
+                            <span class="tag" style="background:var(--border-light);font-size:0.74rem">${esc(ex.phase || 'Principal')}</span>
+                            <span style="font-size:0.84rem;color:var(--text-muted)">🏋️ ${esc(ex.equipment || 'Peso corporal')}</span>
+                            <span style="font-size:0.82rem;color:var(--text-light)">· ⏱ Descanso ${ex.rest_seconds || 60}s</span>
+                            ${ex.last_weight_kg > 0 ? `<span class="tag tag-primary" style="font-size:0.74rem">Último peso: ${ex.last_weight_kg} kg</span>` : ''}
+                        </div>
+                    </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                    <div class="routine-ex-target">${ex.sets} × ${esc(ex.reps_text || '')}</div>
+                    <div style="display:flex;gap:2px">
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="showWorkoutExerciseForm(${activeDay.id}, ${ex.id})" title="Editar ejercicio">✎</button>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="deleteWorkoutExercise(${ex.id})" title="Quitar ejercicio">✕</button>
+                    </div>
+                </div>
+            </div>`;
+        });
+        html += `</div>`;
+    }
+
+    if (activeDay.cooldown_notes) {
+        html += `<div class="stretch-banner" style="background:var(--lavender-light);border-left-color:#C9B3F9"><strong>🧘‍♀️ Estiramientos Post-Entrenamiento (guía visual al finalizar):</strong>\n${esc(activeDay.cooldown_notes)}</div>`;
+    }
+
+    html += `</div>`;
+    return html;
+}
+
+function selectRoutineDay(dayId) {
+    state.selectedRoutineDayId = dayId;
+    const mount = document.getElementById('routineDayViewMount');
+    const days = window.__workoutRoutine || [];
+    if (mount && days.length > 0) {
+        mount.innerHTML = buildRoutineDayViewHTML(days, dayId, window.__suggestedDayId);
+    } else {
+        navigate('personal');
+    }
+}
+
+function refreshLiveWorkoutDOM() {
+    const mount = document.getElementById('liveWorkoutMount');
+    if (mount) {
+        mount.innerHTML = state.activeWorkout ? buildActiveWorkoutPlayer(state.activeWorkout) : '';
+    } else {
+        const player = document.getElementById('liveWorkoutPlayer');
+        if (player && state.activeWorkout) {
+            player.outerHTML = buildActiveWorkoutPlayer(state.activeWorkout);
+        } else {
+            navigate('personal');
+        }
+    }
+}
+
+function buildActiveWorkoutPlayer(aw) {
+    let totalSets = 0, doneSets = 0;
+    aw.exercises.forEach(ex => {
+        ex.setRows.forEach(sr => {
+            totalSets++;
+            if (sr.done) doneSets++;
+        });
+    });
+    const pct = totalSets > 0 ? Math.round((doneSets / totalSets) * 100) : 0;
+
+    // Build ordered steps: optional 'warmup', exercise indices 0..N-1, optional 'cooldown'
+    const steps = [];
+    if (aw.warmup) steps.push({ key: 'warmup', label: '🔥 Calentamiento' });
+    aw.exercises.forEach((ex, idx) => {
+        const allDone = ex.setRows.length > 0 && ex.setRows.every(sr => sr.done);
+        const shortEx = ex.name.length > 20 ? ex.name.slice(0, 18) + '…' : ex.name;
+        steps.push({
+            key: idx,
+            label: `${allDone ? '✓ ' : ''}${idx + 1}. ${shortEx}`,
+            done: allDone,
+        });
+    });
+    if (aw.cooldown) steps.push({ key: 'cooldown', label: '🧘‍♀️ Estiramiento' });
+
+    if (aw.currentStep === undefined || !steps.some(s => String(s.key) === String(aw.currentStep))) {
+        aw.currentStep = aw.exercises.length > 0 ? 0 : (steps[0]?.key ?? 0);
+    }
+
+    const curStepPos = steps.findIndex(s => String(s.key) === String(aw.currentStep));
+    const prevStep = curStepPos > 0 ? steps[curStepPos - 1] : null;
+    const nextStep = curStepPos >= 0 && curStepPos < steps.length - 1 ? steps[curStepPos + 1] : null;
+
+    let html = `<div class="workout-player" id="liveWorkoutPlayer">
+        <div class="workout-sticky-header">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
+                <div>
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                        <span class="tag tag-primary" style="font-size:0.72rem">🔥 EN CURSO</span>
+                        <span style="font-size:0.8rem;color:var(--text-muted);font-weight:600">${doneSets}/${totalSets} series (${pct}%)</span>
+                    </div>
+                    <h2 style="font-size:1.1rem;margin-top:2px">${esc(aw.dayName)}</h2>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <div class="timer-pill" title="Tiempo total de entrenamiento">⏱ <span id="awElapsedTimer">${fmtSec(aw.elapsedSec)}</span></div>
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="cancelLiveWorkout()">✕</button>
+                    <button type="button" class="btn btn-primary btn-sm" onclick="finishLiveWorkout()">✓ Finalizar</button>
+                </div>
+            </div>
+
+            <div style="height:5px;background:var(--border-light);border-radius:99px;overflow:hidden;margin-top:10px">
+                <div style="height:100%;width:${pct}%;background:var(--primary);transition:width 0.3s ease"></div>
+            </div>`;
+
+    if (aw.restSec > 0) {
+        html += `<div class="rest-overlay-bar" id="awRestBar">
+            <div style="display:flex;align-items:center;gap:10px">
+                <span style="font-size:0.75rem;text-transform:uppercase;letter-spacing:0.04em;color:var(--text-muted)">⏳ Descanso:</span>
+                <span style="font-size:1.35rem;font-weight:700;color:var(--primary);font-variant-numeric:tabular-nums" id="awRestCountdown">${fmtSec(aw.restSec)}</span>
+            </div>
+            <div style="display:flex;gap:6px">
+                <button type="button" class="btn btn-secondary btn-sm" style="padding:4px 10px" onclick="adjustRestTimer(15)">+15s</button>
+                <button type="button" class="btn btn-secondary btn-sm" style="padding:4px 10px" onclick="adjustRestTimer(-15)">-15s</button>
+                <button type="button" class="btn btn-primary btn-sm" style="padding:4px 12px" onclick="skipRestTimer()">Saltar ⏭</button>
+            </div>
+        </div>`;
+    } else {
+        html += `<div id="awRestBar" style="display:none"></div>`;
+    }
+
+    html += `</div>`; // end .workout-sticky-header
+
+    // Stepper bar to switch between Warmup, Exercise 1..N, and Cooldown
+    html += `<div class="workout-step-bar">`;
+    steps.forEach(s => {
+        const isActive = String(s.key) === String(aw.currentStep);
+        html += `<button type="button" class="workout-step-pill${isActive ? ' active' : ''}${s.done ? ' done' : ''}" onclick="selectLiveWorkoutStep('${s.key}')">${esc(s.label)}</button>`;
+    });
+    html += `</div>`;
+
+    // Render ONLY the currently selected step
+    if (String(aw.currentStep) === 'warmup') {
+        html += `<div class="card" style="background:var(--bg);padding:20px">
+            <span class="tag tag-primary" style="margin-bottom:8px">PASO PREVIO · SOLO GUÍA VISUAL</span>
+            <h3 style="font-size:1.2rem;margin-bottom:10px">🔥 Calentamiento Previo</h3>
+            <div class="stretch-banner" style="margin:0;font-size:0.95rem">${esc(aw.warmup)}</div>
+        </div>`;
+    } else if (String(aw.currentStep) === 'cooldown') {
+        html += `<div class="card" style="background:var(--bg);padding:20px">
+            <span class="tag tag-lavender" style="margin-bottom:8px">CIERRE · OBLIGATORIO AL FINALIZAR</span>
+            <h3 style="font-size:1.2rem;margin-bottom:10px">🧘‍♀️ Estiramientos Post-Entrenamiento</h3>
+            <div class="stretch-banner" style="background:var(--lavender-light);border-left-color:#C9B3F9;margin:0;font-size:0.95rem">${esc(aw.cooldown)}</div>
+        </div>`;
+    } else {
+        const exIdx = parseInt(aw.currentStep) || 0;
+        const ex = aw.exercises[exIdx];
+        if (ex) {
+            const isTimed = (ex.reps_text || '').toLowerCase().includes('seg');
+            const exDoneCount = ex.setRows.filter(sr => sr.done).length;
+            const exAllDone = exDoneCount === ex.setRows.length && ex.setRows.length > 0;
+
+            html += `<div class="card" style="margin-bottom:10px;padding:18px;background:var(--bg);border:1.5px solid ${exAllDone ? 'var(--sage)' : 'var(--border)'}">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+                    <div>
+                        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap">
+                            <span class="tag tag-primary">EJERCICIO ${exIdx + 1} DE ${aw.exercises.length}</span>
+                            <span class="tag" style="background:var(--border-light)">${esc(ex.phase)}</span>
+                            ${exAllDone ? '<span class="tag tag-sage">✓ Completado</span>' : ''}
+                        </div>
+                        <h3 style="font-size:1.25rem;font-weight:700;margin-top:4px">${esc(ex.name)}</h3>
+                        <div style="font-size:0.88rem;color:var(--text-muted);margin-top:4px">
+                            🎯 <strong>Meta:</strong> ${ex.sets} series × ${esc(ex.reps_text)} · 🏋️ ${esc(ex.equipment || 'Peso corporal')} · ⏱ Descanso: ${ex.rest_seconds || 60}s
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:6px;align-items:center">
+                        ${isTimed ? `<button type="button" class="btn btn-secondary btn-sm" onclick="startRestTimer(${parseInt(ex.reps_text)||15})">⏱ Cronometrar ${parseInt(ex.reps_text)||15}s</button>` : ''}
+                    </div>
+                </div>
+                <div style="display:grid;grid-template-columns:44px 1fr 1fr 1fr 48px;gap:10px;padding:0 10px 6px;font-size:0.74rem;font-weight:600;color:var(--text-muted);text-transform:uppercase">
+                    <div>Serie</div>
+                    <div>Peso (kg)</div>
+                    <div>Reps / Seg</div>
+                    <div>Meta</div>
+                    <div style="text-align:center">Listo</div>
+                </div>`;
+
+            ex.setRows.forEach((sr, sIdx) => {
+                html += `<div class="set-row ${sr.done ? 'completed' : ''}">
+                    <div style="font-weight:700">#${sr.setNumber}</div>
+                    <div><input type="number" step="0.5" class="form-control" style="padding:7px 10px;font-size:0.9rem" value="${sr.weight_kg}" onchange="updateLiveSet(${exIdx},${sIdx},'weight_kg',this.value)"></div>
+                    <div><input type="number" step="1" class="form-control" style="padding:7px 10px;font-size:0.9rem" value="${sr.reps}" onchange="updateLiveSet(${exIdx},${sIdx},'reps',this.value)"></div>
+                    <div style="font-size:0.8rem;color:var(--text-muted)">${esc(ex.reps_text)}</div>
+                    <div style="text-align:center">
+                        <button type="button" class="btn ${sr.done ? 'btn-primary' : 'btn-secondary'} btn-sm" style="width:38px;height:36px;padding:0" onclick="toggleLiveSetDone(${exIdx},${sIdx})">✓</button>
+                    </div>
+                </div>`;
+            });
+
+            html += `<div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center">
+                <span style="font-size:0.8rem;color:var(--text-muted)">${exDoneCount} de ${ex.setRows.length} series listas</span>
+                <button type="button" class="btn btn-ghost btn-sm" style="font-size:0.78rem" onclick="addLiveSetRow(${exIdx})">+ Serie extra</button>
+            </div></div>`;
+        }
+    }
+
+    // Bottom navigation between exercises (Prev / Next / Finish)
+    html += `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:14px;padding-top:12px;border-top:1px solid var(--border-light)">
+        ${prevStep ? `<button type="button" class="btn btn-secondary" onclick="selectLiveWorkoutStep('${prevStep.key}')">◀ Anterior</button>` : `<div></div>`}
+        ${nextStep
+            ? `<button type="button" class="btn btn-primary" onclick="selectLiveWorkoutStep('${nextStep.key}')">Siguiente: ${esc(nextStep.label)} ▶</button>`
+            : `<button type="button" class="btn btn-primary" onclick="finishLiveWorkout()">🎉 Finalizar y Guardar Entrenamiento</button>`}
+    </div>`;
+
+    html += `</div>`;
+    return html;
+}
+
+function selectLiveWorkoutStep(stepKey) {
+    if (!state.activeWorkout) return;
+    state.activeWorkout.currentStep = (stepKey === 'warmup' || stepKey === 'cooldown') ? stepKey : parseInt(stepKey);
+    refreshLiveWorkoutDOM();
+}
+
+function startLiveWorkout(dayId) {
+    const routine = window.__workoutRoutine || [];
+    const day = routine.find(d => d.id === dayId);
+    if (!day) return;
+
+    state.selectedRoutineDayId = day.id;
+
+    if (state.activeWorkout && state.activeWorkout.timerId) {
+        clearInterval(state.activeWorkout.timerId);
+    }
+    if (state.activeWorkout && state.activeWorkout.restTimerId) {
+        clearInterval(state.activeWorkout.restTimerId);
+    }
+
+    const exList = (day.exercises || []).map(ex => {
+        const numSets = Math.max(1, parseInt(ex.sets) || 3);
+        const defaultReps = parseInt(ex.reps_text) || 12;
+        const defaultWeight = parseFloat(ex.last_weight_kg ?? ex.default_weight_kg) || 0;
+        const setRows = [];
+        for (let i = 1; i <= numSets; i++) {
+            setRows.push({
+                setNumber: i,
+                weight_kg: defaultWeight,
+                reps: defaultReps,
+                done: false,
+            });
+        }
+        return { ...ex, setRows };
+    });
+
+    state.activeWorkout = {
+        dayId: day.id,
+        dayName: day.name,
+        warmup: day.warmup_notes,
+        cooldown: day.cooldown_notes,
+        currentStep: 0,
+        elapsedSec: 0,
+        restSec: 0,
+        exercises: exList,
+        timerId: setInterval(() => {
+            if (!state.activeWorkout) return;
+            state.activeWorkout.elapsedSec++;
+            const el = document.getElementById('awElapsedTimer');
+            if (el) el.textContent = fmtSec(state.activeWorkout.elapsedSec);
+        }, 1000),
+        restTimerId: null,
+    };
+
+    refreshLiveWorkoutDOM();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function updateLiveSet(exIdx, sIdx, field, val) {
+    if (!state.activeWorkout) return;
+    const sr = state.activeWorkout.exercises[exIdx]?.setRows[sIdx];
+    if (!sr) return;
+    sr[field] = parseFloat(val) || 0;
+}
+
+function addLiveSetRow(exIdx) {
+    if (!state.activeWorkout) return;
+    const ex = state.activeWorkout.exercises[exIdx];
+    if (!ex) return;
+    const last = ex.setRows[ex.setRows.length - 1] || { weight_kg: 0, reps: 12 };
+    ex.setRows.push({
+        setNumber: ex.setRows.length + 1,
+        weight_kg: last.weight_kg,
+        reps: last.reps,
+        done: false,
+    });
+    refreshLiveWorkoutDOM();
+}
+
+function toggleLiveSetDone(exIdx, sIdx) {
+    if (!state.activeWorkout) return;
+    const ex = state.activeWorkout.exercises[exIdx];
+    const sr = ex?.setRows[sIdx];
+    if (!sr) return;
+    sr.done = !sr.done;
+    if (sr.done) {
+        startRestTimer(ex.rest_seconds || 60);
+    } else {
+        refreshLiveWorkoutDOM();
+    }
+}
+
+function startRestTimer(seconds) {
+    if (!state.activeWorkout) return;
+    if (state.activeWorkout.restTimerId) clearInterval(state.activeWorkout.restTimerId);
+    state.activeWorkout.restSec = parseInt(seconds) || 60;
+    state.activeWorkout.restTimerId = setInterval(() => {
+        if (!state.activeWorkout) return;
+        state.activeWorkout.restSec--;
+        const cd = document.getElementById('awRestCountdown');
+        if (cd) cd.textContent = fmtSec(state.activeWorkout.restSec);
+        if (state.activeWorkout.restSec <= 0) {
+            clearInterval(state.activeWorkout.restTimerId);
+            state.activeWorkout.restTimerId = null;
+            playBeep();
+            showToast('⏰ ¡Tiempo de descanso terminado! Siguiente serie 💪');
+            const bar = document.getElementById('awRestBar');
+            if (bar) bar.style.display = 'none';
+        }
+    }, 1000);
+    refreshLiveWorkoutDOM();
+}
+
+function adjustRestTimer(delta) {
+    if (!state.activeWorkout) return;
+    state.activeWorkout.restSec = Math.max(0, (state.activeWorkout.restSec || 0) + delta);
+    const cd = document.getElementById('awRestCountdown');
+    if (cd) cd.textContent = fmtSec(state.activeWorkout.restSec);
+}
+
+function skipRestTimer() {
+    if (!state.activeWorkout) return;
+    if (state.activeWorkout.restTimerId) clearInterval(state.activeWorkout.restTimerId);
+    state.activeWorkout.restSec = 0;
+    refreshLiveWorkoutDOM();
+}
+
+function cancelLiveWorkout() {
+    if (!confirm('¿Cancelar el entrenamiento en curso sin guardar?')) return;
+    if (state.activeWorkout?.timerId) clearInterval(state.activeWorkout.timerId);
+    if (state.activeWorkout?.restTimerId) clearInterval(state.activeWorkout.restTimerId);
+    state.activeWorkout = null;
+    navigate('personal');
+}
+
+async function finishLiveWorkout() {
+    if (!state.activeWorkout) return;
+    const aw = state.activeWorkout;
+    const completedSets = [];
+    aw.exercises.forEach(ex => {
+        ex.setRows.forEach(sr => {
+            if (sr.done) {
+                completedSets.push({
+                    exercise_name: ex.name,
+                    set_number: sr.setNumber,
+                    weight_kg: parseFloat(sr.weight_kg) || 0,
+                    reps: parseInt(sr.reps) || 0,
+                });
+            }
+        });
+    });
+
+    if (completedSets.length === 0) {
+        if (!confirm('No marcaste ninguna serie con ✓. ¿Quieres marcar todas las series como completadas y guardar?')) return;
+        aw.exercises.forEach(ex => {
+            ex.setRows.forEach(sr => {
+                completedSets.push({
+                    exercise_name: ex.name,
+                    set_number: sr.setNumber,
+                    weight_kg: parseFloat(sr.weight_kg) || 0,
+                    reps: parseInt(sr.reps) || 0,
+                });
+            });
+        });
+    }
+
+    const durMin = Math.max(1, Math.round(aw.elapsedSec / 60));
+    const res = await api(eel.log_workout_session, {
+        day_id: aw.dayId,
+        day_name: aw.dayName,
+        date: todayStr(),
+        duration_minutes: durMin,
+        sets: completedSets,
+    });
+
+    if (aw.timerId) clearInterval(aw.timerId);
+    if (aw.restTimerId) clearInterval(aw.restTimerId);
+    state.activeWorkout = null;
+
+    if (res && res.ok) {
+        showToast('🎉 ¡Entrenamiento guardado! (' + completedSets.length + ' series)');
+        state.personalTab = 'progress';
+        navigate('personal');
+    } else {
+        showToast('Error al guardar entrenamiento');
+    }
+}
+
+// --- MODALS TO EDIT ROUTINE DAYS & EXERCISES ---
+function showWorkoutDayForm(dayId) {
+    const routine = window.__workoutRoutine || [];
+    const day = dayId ? routine.find(d => d.id === dayId) : null;
+    const html = `<form id="modalForm">
+        <div class="form-row">
+            <div class="form-group"><label>N° Día</label><input type="number" class="form-control" name="day_number" value="${day ? day.day_number : routine.length + 1}"></div>
+            <div class="form-group"><label>Título del día *</label><input class="form-control" name="name" value="${esc(day ? day.name : '')}" placeholder="Ej: Día 1: Glúteo y Pierna"></div>
+        </div>
+        <div class="form-group"><label>Subtítulo / Enfoque</label><input class="form-control" name="subtitle" value="${esc(day ? day.subtitle : '')}"></div>
+        <div class="form-group"><label>🔥 Calentamiento previo (solo visual, no se registra)</label><textarea class="form-control" name="warmup_notes" rows="2">${esc(day ? day.warmup_notes : '')}</textarea></div>
+        <div class="form-group"><label>🧘‍♀️ Estiramientos post-entreno (solo visual, no se registra)</label><textarea class="form-control" name="cooldown_notes" rows="4">${esc(day ? day.cooldown_notes : '')}</textarea></div>
+    </form>`;
+    openModal(day ? 'Editar día de rutina' : 'Nuevo día de rutina', html);
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('modalForm'));
+        const data = {
+            id: day ? day.id : null,
+            day_number: parseInt(f.get('day_number')) || 1,
+            name: f.get('name'),
+            subtitle: f.get('subtitle'),
+            warmup_notes: f.get('warmup_notes'),
+            cooldown_notes: f.get('cooldown_notes'),
+        };
+        if (!data.name) { showToast('El título es obligatorio'); return; }
+        const res = await api(eel.save_workout_day, data);
+        if (res && res.ok) { showToast('Día guardado'); closeModal(); navigate('personal'); }
+    };
+}
+
+async function deleteWorkoutDay(dayId) {
+    if (!confirm('¿Eliminar este día de rutina y sus ejercicios?')) return;
+    await api(eel.delete_workout_day, dayId);
+    showToast('Día eliminado');
+    navigate('personal');
+}
+
+function showWorkoutExerciseForm(dayId, exId) {
+    const routine = window.__workoutRoutine || [];
+    const day = routine.find(d => d.id === dayId);
+    const ex = (day && exId) ? (day.exercises || []).find(x => x.id === exId) : null;
+    const html = `<form id="modalForm">
+        <div class="form-row">
+            <div class="form-group"><label>Fase</label><input class="form-control" name="phase" value="${esc(ex ? ex.phase : 'Principal')}" placeholder="Principal, Circuito, Cierre..."></div>
+            <div class="form-group"><label>Descanso (seg)</label><input type="number" step="5" class="form-control" name="rest_seconds" value="${ex ? ex.rest_seconds : 60}"></div>
+        </div>
+        <div class="form-group"><label>Nombre del ejercicio *</label><input class="form-control" name="name" value="${esc(ex ? ex.name : '')}" placeholder="Ej: Real Hip Thrust"></div>
+        <div class="form-row">
+            <div class="form-group"><label>Series</label><input type="number" class="form-control" name="sets" value="${ex ? ex.sets : 3}"></div>
+            <div class="form-group"><label>Repeticiones / Tiempo</label><input class="form-control" name="reps_text" value="${esc(ex ? ex.reps_text : '12')}" placeholder="Ej: 12 (por pierna) o 15 segundos"></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Equipo a utilizar</label><input class="form-control" name="equipment" value="${esc(ex ? ex.equipment : '')}" placeholder="Ej: Barra Armada, Banda Fuerte..."></div>
+            <div class="form-group"><label>Peso actual (kg)</label><input type="number" step="0.5" class="form-control" name="default_weight_kg" value="${ex ? ex.default_weight_kg : 0}"></div>
+        </div>
+    </form>`;
+    openModal(ex ? 'Editar ejercicio' : 'Agregar ejercicio', html);
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('modalForm'));
+        const data = {
+            id: ex ? ex.id : null,
+            day_id: dayId,
+            phase: f.get('phase') || 'Principal',
+            name: f.get('name'),
+            sets: parseInt(f.get('sets')) || 3,
+            reps_text: f.get('reps_text') || '12',
+            equipment: f.get('equipment') || '',
+            default_weight_kg: parseFloat(f.get('default_weight_kg')) || 0,
+            rest_seconds: parseInt(f.get('rest_seconds')) || 60,
+        };
+        if (!data.name) { showToast('El nombre del ejercicio es obligatorio'); return; }
+        const res = await api(eel.save_workout_exercise, data);
+        if (res && res.ok) { showToast('Ejercicio guardado'); closeModal(); navigate('personal'); }
+    };
+}
+
+async function deleteWorkoutExercise(exId) {
+    if (!confirm('¿Quitar este ejercicio de la rutina?')) return;
+    await api(eel.delete_workout_exercise, exId);
+    showToast('Ejercicio eliminado');
+    navigate('personal');
+}
+
+// --- WORKOUT: PROGRESS CHARTS & SESSION HISTORY ---
+async function renderPersonalProgress(el) {
+    const prog = await api(eel.get_workout_progress) || { exercises: [], series: {} };
+    const history = await api(eel.get_workout_history) || [];
+
+    const exercisesWithLogs = Object.keys(prog.series);
+    if (!state.progressExercise || !prog.exercises.includes(state.progressExercise)) {
+        state.progressExercise = exercisesWithLogs[0] || prog.exercises[0] || '';
+    }
+
+    const exOpts = prog.exercises.map(name =>
+        `<option value="${esc(name)}" ${state.progressExercise === name ? 'selected' : ''}>${esc(name)}${prog.series[name] ? ` (${prog.series[name].length} sesiones)` : ''}</option>`
+    ).join('');
+
+    const metric = state.progressMetric || 'max_weight';
+
+    // Calculate quick stats
+    const nowMonth = todayStr().slice(0, 7);
+    const monthSessions = history.filter(h => (h.date || '').startsWith(nowMonth)).length;
+
+    let html = `<div class="stats-row">
+        <div class="stat-card coral">
+            <div class="stat-icon">🔥</div>
+            <div class="stat-value">${history.length}</div>
+            <div class="stat-label">Entrenamientos totales</div>
+        </div>
+        <div class="stat-card lavender">
+            <div class="stat-icon">📅</div>
+            <div class="stat-value">${monthSessions}</div>
+            <div class="stat-label">Este mes</div>
+        </div>
+        <div class="stat-card sage">
+            <div class="stat-icon">💪</div>
+            <div class="stat-value">${exercisesWithLogs.length}</div>
+            <div class="stat-label">Ejercicios con progreso</div>
+        </div>
+    </div>
+
+    <div class="card" style="margin-bottom:18px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+            <div>
+                <div class="card-title" style="margin-bottom:2px">📈 Evolución por Ejercicio</div>
+                <div style="font-size:0.8rem;color:var(--text-muted)">Compara cómo sube tu peso en barra/mancuernas o repeticiones semana a semana</div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <select class="form-control" style="width:240px;padding:6px 10px;font-size:0.85rem" onchange="changeWorkoutProgressEx(this.value)">${exOpts}</select>
+                <select class="form-control" style="width:170px;padding:6px 10px;font-size:0.85rem" onchange="changeWorkoutProgressMetric(this.value)">
+                    <option value="max_weight" ${metric === 'max_weight' ? 'selected' : ''}>Peso máximo (kg)</option>
+                    <option value="volume" ${metric === 'volume' ? 'selected' : ''}>Volumen total (kg × reps)</option>
+                    <option value="max_reps" ${metric === 'max_reps' ? 'selected' : ''}>Repeticiones / Seg máx</option>
+                </select>
+                <button class="btn btn-secondary btn-sm" onclick="showQuickExerciseLogModal()">+ Registrar marca rápida</button>
+            </div>
+        </div>
+        <canvas id="workoutProgressChart" style="width:100%;height:230px"></canvas>
+    </div>
+
+    <div class="card">
+        <div class="card-title">Historial de Días Entrenados</div>`;
+
+    if (history.length === 0) {
+        html += `<div class="empty-state" style="padding:24px"><p>Aún no hay sesiones registradas. ¡Inicia una rutina en la pestaña "Mi Rutina" o registra una marca rápida!</p></div>`;
+    } else {
+        html += `<div class="table-wrap"><table><thead><tr><th>Fecha</th><th>Rutina</th><th>Duración</th><th>Resumen de series</th><th></th></tr></thead><tbody>`;
+        for (const sess of history) {
+            const sets = sess.sets || [];
+            const byEx = {};
+            sets.forEach(s => {
+                if (!byEx[s.exercise_name]) byEx[s.exercise_name] = [];
+                byEx[s.exercise_name].push(`${s.weight_kg > 0 ? s.weight_kg + 'kg×' : ''}${s.reps}`);
+            });
+            const summary = Object.entries(byEx).map(([k, v]) => `<strong>${esc(k)}:</strong> ${v.join(', ')}`).join(' · ');
+            html += `<tr>
+                <td><strong>${fmtDate(sess.date)}</strong></td>
+                <td>${esc(sess.day_name || 'Sesión libre')}</td>
+                <td>${sess.duration_minutes ? sess.duration_minutes + ' min' : '-'}</td>
+                <td style="font-size:0.8rem;color:var(--text-muted)">${summary || '-'}</td>
+                <td style="text-align:right"><button class="btn btn-ghost btn-sm" onclick="deleteWorkoutSession(${sess.id})">✕</button></td>
+            </tr>`;
+        }
+        html += `</tbody></table></div>`;
+    }
+    html += `</div>`;
+    el.innerHTML = html;
+
+    drawWorkoutProgressChart(prog.series[state.progressExercise] || [], metric, state.progressExercise);
+}
+
+function changeWorkoutProgressEx(exName) {
+    state.progressExercise = exName;
+    navigate('personal');
+}
+
+function changeWorkoutProgressMetric(m) {
+    state.progressMetric = m;
+    navigate('personal');
+}
+
+async function deleteWorkoutSession(id) {
+    if (!confirm('¿Eliminar este registro de entrenamiento?')) return;
+    await api(eel.delete_workout_session, id);
+    showToast('Sesión eliminada');
+    navigate('personal');
+}
+
+function showQuickExerciseLogModal() {
+    api(eel.get_workout_routine).then(routine => {
+        const allEx = [];
+        (routine || []).forEach(d => (d.exercises || []).forEach(e => {
+            if (!allEx.includes(e.name)) allEx.push(e.name);
+        }));
+        const opts = allEx.map(name => `<option value="${esc(name)}" ${state.progressExercise === name ? 'selected' : ''}>${esc(name)}</option>`).join('');
+        const html = `<form id="modalForm">
+            <div class="form-group"><label>Ejercicio *</label><select class="form-control" name="exercise_name">${opts}</select></div>
+            <div class="form-row">
+                <div class="form-group"><label>Fecha *</label><input type="date" class="form-control" name="date" value="${todayStr()}"></div>
+                <div class="form-group"><label>Series realizadas</label><input type="number" class="form-control" name="sets" value="3"></div>
+            </div>
+            <div class="form-row">
+                <div class="form-group"><label>Peso utilizado (kg)</label><input type="number" step="0.5" class="form-control" name="weight_kg" value="10"></div>
+                <div class="form-group"><label>Repeticiones por serie</label><input type="number" class="form-control" name="reps" value="12"></div>
+            </div>
+        </form>`;
+        openModal('Registrar marca / progreso rápido', html);
+        document.getElementById('modalSave').onclick = async () => {
+            const f = new FormData(document.getElementById('modalForm'));
+            const exName = f.get('exercise_name');
+            const nSets = Math.max(1, parseInt(f.get('sets')) || 1);
+            const w = parseFloat(f.get('weight_kg')) || 0;
+            const r = parseInt(f.get('reps')) || 0;
+            const sets = [];
+            for (let i = 1; i <= nSets; i++) {
+                sets.push({ exercise_name: exName, set_number: i, weight_kg: w, reps: r });
+            }
+            const res = await api(eel.log_workout_session, {
+                day_id: null,
+                day_name: 'Registro: ' + exName,
+                date: f.get('date') || todayStr(),
+                duration_minutes: 0,
+                sets,
+            });
+            if (res && res.ok) {
+                state.progressExercise = exName;
+                showToast('Progreso registrado');
+                closeModal();
+                navigate('personal');
+            }
+        };
+    });
+}
+
+function drawWorkoutProgressChart(points, metric, exName) {
+    setTimeout(() => {
+        const canvas = document.getElementById('workoutProgressChart');
+        if (!canvas) return;
+        const setup = setupCanvas(canvas);
+        const ctx = setup.ctx;
+        const W = setup.W, H = setup.H;
+        const PAD = { top: 24, bottom: 32, left: 48, right: 24 };
+        const plotW = W - PAD.left - PAD.right;
+        const plotH = H - PAD.top - PAD.bottom;
+
+        ctx.clearRect(0, 0, W, H);
+
+        if (!points || points.length === 0) {
+            ctx.fillStyle = '#B89CA8';
+            ctx.font = '14px Outfit';
+            ctx.textAlign = 'center';
+            ctx.fillText(`Sin registros aún para "${exName}". ¡Completa una rutina o agrega una marca rápida!`, W / 2, H / 2);
+            return;
+        }
+
+        const vals = points.map(p => parseFloat(p[metric]) || 0);
+        let min = Math.min(...vals);
+        let max = Math.max(...vals);
+        if (min === max) {
+            min = Math.max(0, min - 2);
+            max = max + 2;
+        } else {
+            const span = max - min;
+            min = Math.max(0, min - span * 0.15);
+            max = max + span * 0.15;
+        }
+
+        const unit = metric === 'max_weight' ? 'kg' : metric === 'volume' ? 'kg' : 'reps';
+
+        // Grid
+        ctx.strokeStyle = 'rgba(184, 156, 168, 0.2)';
+        ctx.lineWidth = 1;
+        for (let i = 0; i <= 4; i++) {
+            const y = PAD.top + plotH * (1 - i / 4);
+            ctx.beginPath();
+            ctx.moveTo(PAD.left, y);
+            ctx.lineTo(W - PAD.right, y);
+            ctx.stroke();
+            const val = min + (max - min) * (i / 4);
+            ctx.fillStyle = '#B89CA8';
+            ctx.font = '10px Outfit';
+            ctx.textAlign = 'right';
+            ctx.fillText(val.toFixed(1) + ' ' + unit, PAD.left - 6, y + 3);
+        }
+
+        // Coordinates
+        const count = points.length;
+        const coords = points.map((p, i) => {
+            const x = count === 1 ? PAD.left + plotW / 2 : PAD.left + plotW * (i / (count - 1));
+            const y = PAD.top + plotH * (1 - ((vals[i] - min) / (max - min || 1)));
+            return { x, y, val: vals[i], date: p.date };
+        });
+
+        // Line & area
+        if (coords.length > 1) {
+            ctx.strokeStyle = '#F28BA8';
+            ctx.lineWidth = 3;
+            ctx.lineJoin = 'round';
+            ctx.beginPath();
+            coords.forEach((c, i) => {
+                if (i === 0) ctx.moveTo(c.x, c.y);
+                else ctx.lineTo(c.x, c.y);
+            });
+            ctx.stroke();
+
+            ctx.lineTo(coords[coords.length - 1].x, PAD.top + plotH);
+            ctx.lineTo(coords[0].x, PAD.top + plotH);
+            ctx.closePath();
+            ctx.fillStyle = 'rgba(242, 139, 168, 0.15)';
+            ctx.fill();
+        }
+
+        // Points & value labels
+        coords.forEach(c => {
+            ctx.beginPath();
+            ctx.arc(c.x, c.y, 5, 0, Math.PI * 2);
+            ctx.fillStyle = '#F28BA8';
+            ctx.fill();
+            ctx.strokeStyle = '#151014';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            ctx.fillStyle = '#F28BA8';
+            ctx.font = 'bold 11px Outfit';
+            ctx.textAlign = 'center';
+            ctx.fillText(`${c.val} ${unit}`, c.x, c.y - 10);
+
+            ctx.fillStyle = '#B89CA8';
+            ctx.font = '10px Outfit';
+            ctx.fillText(c.date.slice(5), c.x, H - 8);
+        });
+    }, 50);
 }
 
 // ===================== HEALTH =====================
 async function renderHealth(el) {
-    const injections = await api(eel.get_injections) || [];
-    const measurements = await api(eel.get_body_measurements) || [];
-    const proj = await api(eel.get_estradiol_projection) || {};
+    const [injections, measurements, proj, goals] = await Promise.all([
+        api(eel.get_injections),
+        api(eel.get_body_measurements),
+        api(eel.get_estradiol_projection),
+        api(eel.get_measurement_goals)
+    ]);
+    state.measurementGoals = goals || {};
+    state.lastMeasurementsList = measurements || [];
 
     const tabs = ['injections', 'measurements'];
     const labels = ['Inyecciones', 'Medidas'];
@@ -1895,8 +2926,8 @@ async function renderHealth(el) {
     el.innerHTML = html;
 
     const content = el.querySelector('#healthContent');
-    if (tab === 'injections') renderHealthInjections(content, injections, proj);
-    else if (tab === 'measurements') renderHealthMeasurements(content, measurements);
+    if (tab === 'injections') renderHealthInjections(content, injections || [], proj || {});
+    else if (tab === 'measurements') renderHealthMeasurements(content, measurements || [], state.measurementGoals);
 }
 
 function switchHealthTab(t) {
@@ -1997,23 +3028,25 @@ function renderHealthInjections(el, injections, proj) {
     }
 }
 
-function setupCanvas(canvas) {
+function setupCanvas(canvas, customHeight) {
     const rect = canvas.parentElement.getBoundingClientRect();
     const w = rect.width || 700;
+    const h = customHeight || 220;
     const dpr = window.devicePixelRatio || 1;
     canvas.width = w * dpr;
-    canvas.height = 220 * dpr;
+    canvas.height = h * dpr;
     canvas.style.width = w + 'px';
-    canvas.style.height = '220px';
+    canvas.style.height = h + 'px';
     const ctx = canvas.getContext('2d');
     ctx.scale(dpr, dpr);
-    return { ctx, W: w, H: 220 };
+    return { ctx, W: w, H: h, dpr };
 }
 
 function drawEstradiolChart(proj) {
     setTimeout(() => {
         const canvas = document.getElementById('estradiolChart');
         if (!canvas) return;
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
 
         // Filter by selected range
         let range = state.estradiolRange || 365;
@@ -2033,17 +3066,19 @@ function drawEstradiolChart(proj) {
         const tooltip = document.getElementById('chartTooltip') || (() => {
             const el = document.createElement('div');
             el.id = 'chartTooltip';
-            el.style.cssText = 'position:absolute;background:#fff;border:1px solid #ddd;border-radius:6px;padding:4px 8px;font-size:0.8rem;pointer-events:none;display:none;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,0.1)';
             canvas.parentElement.style.position = 'relative';
             canvas.parentElement.appendChild(el);
             return el;
         })();
+        tooltip.style.cssText = isDark
+            ? 'position:absolute;background:#211920;color:#F7EAF0;border:1px solid #F28BA8;border-radius:8px;padding:5px 10px;font-size:0.8rem;font-weight:500;pointer-events:none;display:none;z-index:100;box-shadow:0 4px 14px rgba(0,0,0,0.5)'
+            : 'position:absolute;background:#FFFFFF;color:#2D2327;border:1px solid #F0E6E2;border-radius:8px;padding:5px 10px;font-size:0.8rem;font-weight:500;pointer-events:none;display:none;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,0.1)';
 
         const setupSc = setupCanvas(canvas);
         const ctx = setupSc.ctx;
         const dpr = setupSc.dpr;
         const W = setupSc.W, H = setupSc.H;
-        const PAD = { top: 16, bottom: 24, left: 40, right: 30 };
+        const PAD = { top: 18, bottom: 24, left: 42, right: 30 };
         const plotW = W - PAD.left - PAD.right;
         const plotH = H - PAD.top - PAD.bottom;
 
@@ -2059,10 +3094,9 @@ function drawEstradiolChart(proj) {
 
         drawEstradiolChartFull(ctx, dpr, filteredDays, data, max, min, count, futureIdx, todayIdx, PAD, W, H, plotW, plotH, proj);
 
-        // Tooltip on hover
-        canvas.onmousemove = function(e) {
-            const r = this.getBoundingClientRect();
-            const mx = e.clientX - r.left;
+        const handlePointer = function(clientX) {
+            const r = canvas.getBoundingClientRect();
+            const mx = clientX - r.left;
             if (mx < PAD.left || mx > W - PAD.right) {
                 tooltip.style.display = 'none';
                 drawEstradiolChartFull(ctx, dpr, filteredDays, data, max, min, count, futureIdx, todayIdx, PAD, W, H, plotW, plotH, proj);
@@ -2078,16 +3112,21 @@ function drawEstradiolChart(proj) {
             const y = PAD.top + plotH * (1 - (data[i] / max));
             drawEstradiolChartFull(ctx, dpr, filteredDays, data, max, min, count, futureIdx, todayIdx, PAD, W, H, plotW, plotH, proj);
             ctx.beginPath();
-            ctx.arc(x, y, 4, 0, 2 * Math.PI);
-            ctx.fillStyle = '#E85D75';
+            ctx.arc(x, y, 4.5, 0, 2 * Math.PI);
+            ctx.fillStyle = isDark ? '#F28BA8' : '#E85D75';
             ctx.fill();
-            ctx.strokeStyle = '#fff';
-            ctx.lineWidth = 1.5;
+            ctx.strokeStyle = isDark ? '#151014' : '#fff';
+            ctx.lineWidth = 2;
             ctx.stroke();
             tooltip.style.display = 'block';
-            tooltip.style.left = Math.min(x + 12, W - 80) + 'px';
-            tooltip.style.top = y - 24 + 'px';
+            tooltip.style.left = Math.max(8, Math.min(x + 12, W - 150)) + 'px';
+            tooltip.style.top = Math.max(4, y - 28) + 'px';
             tooltip.textContent = data[i].toFixed(1) + ' pg/mL — ' + filteredDays[i];
+        };
+
+        canvas.onmousemove = function(e) { handlePointer(e.clientX); };
+        canvas.ontouchmove = function(e) {
+            if (e.touches && e.touches[0]) handlePointer(e.touches[0].clientX);
         };
         canvas.onmouseleave = function() {
             tooltip.style.display = 'none';
@@ -2097,8 +3136,14 @@ function drawEstradiolChart(proj) {
 }
 
 function drawEstradiolChartFull(ctx, dpr, filteredDays, data, max, min, count, futureIdx, todayIdx, PAD, W, H, plotW, plotH, proj) {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const gridColor = isDark ? '#362832' : '#F0E6E2';
+    const labelColor = isDark ? '#B89CA8' : '#9C8B8D';
+    const lineColor = isDark ? '#F28BA8' : '#E8998F';
+    const fillColor = isDark ? 'rgba(242, 139, 168, 0.16)' : 'rgba(255, 183, 178, 0.18)';
+
     ctx.clearRect(0, 0, W, H);
-    ctx.strokeStyle = '#F0E6E2';
+    ctx.strokeStyle = gridColor;
     ctx.lineWidth = 1;
     for (let i = 0; i <= 4; i++) {
         const y = PAD.top + plotH * (1 - i/4);
@@ -2107,28 +3152,28 @@ function drawEstradiolChartFull(ctx, dpr, filteredDays, data, max, min, count, f
         ctx.lineTo(W - PAD.right, y);
         ctx.stroke();
         const val = min + max * (i/4);
-        ctx.fillStyle = '#9C8B8D';
-        ctx.font = '9px Outfit';
+        ctx.fillStyle = labelColor;
+        ctx.font = '10px Outfit';
         ctx.textAlign = 'right';
-        ctx.fillText(Math.round(val) + '', PAD.left - 4, y + 3);
+        ctx.fillText(Math.round(val) + '', PAD.left - 6, y + 3);
     }
     const rangeLow = Math.max(0, Math.min(1, (100 - min) / max));
     const rangeHigh = Math.max(0, Math.min(1, (250 - min) / max));
-    ctx.fillStyle = 'rgba(212, 224, 212, 0.15)';
+    ctx.fillStyle = isDark ? 'rgba(143, 224, 179, 0.10)' : 'rgba(212, 224, 212, 0.22)';
     const yLow = PAD.top + plotH * (1 - rangeLow);
     const yHigh = PAD.top + plotH * (1 - rangeHigh);
     ctx.fillRect(PAD.left, yHigh, plotW, yLow - yHigh);
     if (futureIdx > 0 && futureIdx < count) {
-        ctx.fillStyle = 'rgba(240, 230, 226, 0.4)';
+        ctx.fillStyle = isDark ? 'rgba(242, 139, 168, 0.05)' : 'rgba(240, 230, 226, 0.4)';
         const xFuture = PAD.left + plotW * (futureIdx / (count - 1));
         ctx.fillRect(xFuture, PAD.top, W - PAD.right - xFuture, plotH);
-        ctx.fillStyle = '#9C8B8D';
-        ctx.font = '8px Outfit';
+        ctx.fillStyle = labelColor;
+        ctx.font = '9px Outfit';
         ctx.textAlign = 'center';
-        ctx.fillText('\u2b05 pasado', xFuture, H - 4);
+        ctx.fillText('\u2b05 pasado · proyección \u27a1', xFuture, H - 5);
     }
-    ctx.strokeStyle = '#FFB7B2';
-    ctx.lineWidth = 2;
+    ctx.strokeStyle = lineColor;
+    ctx.lineWidth = 2.2;
     ctx.lineJoin = 'round';
     ctx.beginPath();
     data.forEach((v, i) => {
@@ -2141,18 +3186,17 @@ function drawEstradiolChartFull(ctx, dpr, filteredDays, data, max, min, count, f
     ctx.lineTo(PAD.left + plotW, PAD.top + plotH);
     ctx.lineTo(PAD.left, PAD.top + plotH);
     ctx.closePath();
-    ctx.fillStyle = 'rgba(255, 183, 178, 0.1)';
+    ctx.fillStyle = fillColor;
     ctx.fill();
     const lastDoseIdx = filteredDays.indexOf(proj.last_dose_date);
     if (lastDoseIdx >= 0 && lastDoseIdx < count) {
         const x = PAD.left + plotW * (lastDoseIdx / (count - 1));
         const y = PAD.top + plotH * (1 - (data[lastDoseIdx] / max));
         ctx.beginPath();
-        ctx.arc(x, y, 4, 0, Math.PI * 2);
-        ctx.fillStyle = '#FFB7B2';
+        ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+        ctx.fillStyle = lineColor;
         ctx.fill();
-        ctx.fillStyle = '#FFB7B2';
-        ctx.font = '8px Outfit';
+        ctx.font = '10px Outfit';
         ctx.textAlign = 'center';
         ctx.fillText('\ud83d\udc89', x, y - 8);
     }
@@ -2161,83 +3205,363 @@ function drawEstradiolChartFull(ctx, dpr, filteredDays, data, max, min, count, f
         ctx.beginPath();
         ctx.moveTo(x, PAD.top);
         ctx.lineTo(x, PAD.top + plotH);
-        ctx.strokeStyle = 'rgba(45,35,39,0.15)';
-        ctx.lineWidth = 1;
-        ctx.setLineDash([3, 3]);
+        ctx.strokeStyle = isDark ? 'rgba(247, 234, 240, 0.35)' : 'rgba(45, 35, 39, 0.22)';
+        ctx.lineWidth = 1.2;
+        ctx.setLineDash([4, 4]);
         ctx.stroke();
         ctx.setLineDash([]);
     }
-    ctx.fillStyle = '#9C8B8D';
-    ctx.font = '8px Outfit';
+    ctx.fillStyle = labelColor;
+    ctx.font = '9px Outfit';
     ctx.textAlign = 'center';
-    ctx.fillText('pg/mL', 14, 12);
-    ctx.fillStyle = 'rgba(100, 140, 100, 0.5)';
-    ctx.font = '8px Outfit';
+    ctx.fillText('pg/mL', 18, 12);
+    ctx.fillStyle = isDark ? '#8FE0B3' : 'rgba(70, 120, 70, 0.8)';
+    ctx.font = '9px Outfit';
     ctx.textAlign = 'left';
-    ctx.fillText('Rango terap\u00e9utico 100-250', PAD.left + 4, 12);
+    ctx.fillText('Rango terapéutico 100-250 pg/mL', PAD.left + 6, 12);
 }
 
 function setEstradiolRange(days) {
     state.estradiolRange = days;
-    // Re-render health tab
     navigate('health');
 }
 
-// --- HEALTH: MEASUREMENTS WITH CHART ---
-function renderHealthMeasurements(el, measurements) {
-    let html = `<div style="display:flex;justify-content:flex-end;margin-bottom:14px">
-        <button class="btn btn-primary" onclick="showMeasurementForm()">+ Registrar medidas</button>
+// --- HEALTH: MEASUREMENTS WITH QUICK-ADD, GOALS & CHART ---
+function getMeasurementMetricsConfig(isDark) {
+    return [
+        { key: 'weight',         short: 'Peso',          label: 'Peso (kg)',                  unit: 'kg', step: '0.1', color: isDark ? '#F28BA8' : '#E85D75' },
+        { key: 'bideltoid_cm',   short: 'Bideltoideo',   label: 'Ancho bideltoideo (cm)',     unit: 'cm', step: '0.5', color: isDark ? '#FFB870' : '#E07A2A' },
+        { key: 'bust_cm',        short: 'Busto',         label: 'Busto (cm)',                 unit: 'cm', step: '0.5', color: isDark ? '#C9B3F9' : '#9B5DE5' },
+        { key: 'underbust_cm',   short: 'Bajo busto',    label: 'Bajo busto (cm)',            unit: 'cm', step: '0.5', color: isDark ? '#F7A8D8' : '#D65DB1' },
+        { key: 'waist_cm',       short: 'Cintura',       label: 'Cintura (cm)',               unit: 'cm', step: '0.5', color: isDark ? '#8FE0B3' : '#3B9E66' },
+        { key: 'iliac_crest_cm', short: 'Cresta ilíaca', label: 'Crestas ilíacas / Hip dip (cm)', unit: 'cm', step: '0.5', color: isDark ? '#FFD166' : '#C98A00' },
+        { key: 'hips_cm',        short: 'Cadera',        label: 'Cadera (cm)',                unit: 'cm', step: '0.5', color: isDark ? '#7CC6FE' : '#2D82D8' },
+        { key: 'thigh_cm',       short: 'Muslo',         label: 'Muslo (cm)',                 unit: 'cm', step: '0.5', color: isDark ? '#80ED99' : '#2A9D8F' },
+        { key: 'arm_cm',         short: 'Brazo',         label: 'Brazo (cm)',                 unit: 'cm', step: '0.5', color: isDark ? '#A5B4FC' : '#5E60CE' },
+    ];
+}
+
+function getLatestMetricValues(measurements) {
+    const latest = {};
+    for (let i = measurements.length - 1; i >= 0; i--) {
+        const row = measurements[i];
+        ['weight', 'bideltoid_cm', 'bust_cm', 'underbust_cm', 'waist_cm', 'iliac_crest_cm', 'hips_cm', 'thigh_cm', 'arm_cm'].forEach(k => {
+            if (latest[k] === undefined && row[k] !== null && row[k] !== undefined && row[k] !== '') {
+                latest[k] = { val: parseFloat(row[k]), date: row.date };
+            }
+        });
+    }
+    return latest;
+}
+
+function renderHealthMeasurements(el, measurements, goals = {}) {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const metrics = getMeasurementMetricsConfig(isDark);
+    const latest = getLatestMetricValues(measurements);
+
+    if (!state.selectedMeasurementKeys || !Array.isArray(state.selectedMeasurementKeys)) {
+        // Default: select metrics that have data or goals
+        const withData = metrics.filter(m => latest[m.key] !== undefined || goals[m.key]).map(m => m.key);
+        state.selectedMeasurementKeys = withData.length > 0 ? withData : ['weight', 'bust_cm', 'waist_cm', 'hips_cm'];
+    }
+    if (state.showMeasurementGoals === undefined) state.showMeasurementGoals = true;
+    if (state.measurementRange === undefined) state.measurementRange = 0; // 0 = Todo
+
+    // 1. QUICK-ADD BAR ("⚡ Registro Rápido")
+    let html = `<div class="card" style="margin-bottom:14px;padding:16px 18px;border:1px solid var(--rose-light)">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+            <div>
+                <div style="font-weight:700;font-size:0.95rem;display:flex;align-items:center;gap:6px">
+                    <span>⚡ Registro rápido de medidas</span>
+                </div>
+                <div style="font-size:0.76rem;color:var(--text-muted)">
+                    Completa solo lo que te hayas medido hoy (si ya registraste algo en la misma fecha, se combina automáticamente).
+                </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                <input type="date" id="quickMeasDate" class="form-control" value="${todayStr()}" style="width:auto;padding:5px 10px;font-size:0.82rem">
+                <button class="btn btn-ghost btn-sm" onclick="showMeasurementGoalsModal()">🎯 Configurar Metas</button>
+                <button class="btn btn-ghost btn-sm" onclick="showMeasurementForm()">+ Con notas</button>
+            </div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;margin-bottom:12px">`;
+
+    metrics.forEach(m => {
+        const lastInfo = latest[m.key];
+        const goalVal = goals[m.key];
+        const ph = lastInfo ? `Últ: ${lastInfo.val} ${m.unit}` : `Ej: -- ${m.unit}`;
+        html += `<div style="background:var(--bg);padding:7px 9px;border-radius:10px;border:1px solid var(--border)">
+            <label style="font-size:0.72rem;font-weight:600;color:var(--text-muted);display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+                <span style="display:flex;align-items:center;gap:4px">
+                    <span style="width:7px;height:7px;border-radius:50%;background:${m.color};display:inline-block"></span>
+                    ${esc(m.short)}
+                </span>
+                ${goalVal ? `<span title="Meta: ${goalVal} ${m.unit}" style="color:var(--rose);font-size:0.68rem">🎯${goalVal}</span>` : `<span style="font-size:0.68rem">${m.unit}</span>`}
+            </label>
+            <input type="number" step="${m.step}" id="qm_${m.key}" class="form-control quick-meas-input"
+                placeholder="${ph}" onkeydown="if(event.key==='Enter')saveQuickMeasurement()"
+                style="padding:5px 8px;font-size:0.86rem;height:32px;background:var(--bg-card)">
+        </div>`;
+    });
+
+    html += `</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+            <input type="text" id="qm_notes" class="form-control" placeholder="Nota opcional (ej. en ayunas, post-entreno...)"
+                onkeydown="if(event.key==='Enter')saveQuickMeasurement()"
+                style="flex:1;min-width:180px;padding:6px 10px;font-size:0.82rem;height:34px">
+            <button class="btn btn-primary" onclick="saveQuickMeasurement()" style="padding:7px 18px">💾 Guardar medidas</button>
+        </div>
     </div>`;
+
+    // 2. GOALS PROGRESS STRIP (if any goals configured)
+    const goalKeys = metrics.filter(m => goals[m.key] !== undefined && goals[m.key] !== null && goals[m.key] !== '');
+    if (goalKeys.length > 0) {
+        html += `<div class="card" style="margin-bottom:14px;padding:12px 16px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+                <div style="font-size:0.82rem;font-weight:700;color:var(--text-secondary)">🎯 Progreso hacia tus metas</div>
+                <button class="btn btn-ghost btn-sm" style="font-size:0.74rem;padding:2px 8px" onclick="showMeasurementGoalsModal()">Editar metas</button>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:8px">`;
+        goalKeys.forEach(m => {
+            const target = parseFloat(goals[m.key]);
+            const currObj = latest[m.key];
+            const curr = currObj ? currObj.val : null;
+            let diffHtml = '<span style="color:var(--text-muted);font-size:0.74rem">Sin datos aún</span>';
+            if (curr !== null && !isNaN(target)) {
+                const diff = +(target - curr).toFixed(1);
+                const absDiff = Math.abs(diff);
+                if (absDiff <= 0.2) {
+                    diffHtml = `<span class="tag tag-sage" style="font-size:0.7rem">✨ ¡Meta lograda!</span>`;
+                } else {
+                    const sign = diff > 0 ? `+${diff}` : `${diff}`;
+                    diffHtml = `<span style="font-size:0.75rem;color:var(--text-muted)">Faltan <strong>${absDiff} ${m.unit}</strong> (${sign})</span>`;
+                }
+            }
+            html += `<div style="padding:8px 10px;border-radius:10px;background:var(--bg);border-left:3px solid ${m.color}">
+                <div style="font-size:0.75rem;color:var(--text-muted);font-weight:600">${esc(m.short)}</div>
+                <div style="font-size:0.92rem;font-weight:700;margin:2px 0">
+                    ${curr !== null ? curr : '--'} <span style="color:var(--text-muted);font-weight:400">→</span> <span style="color:var(--rose)">🎯 ${target} ${m.unit}</span>
+                </div>
+                <div>${diffHtml}</div>
+            </div>`;
+        });
+        html += `</div></div>`;
+    }
+
     if (measurements.length === 0) {
-        html += '<div class="empty-state"><div class="empty-icon">📏</div><h3>Sin medidas</h3><p>Registra tu peso y medidas corporales</p></div>';
+        html += '<div class="empty-state"><div class="empty-icon">📏</div><h3>Sin medidas</h3><p>Usa el registro rápido de arriba para anotar tus primeras medidas</p></div>';
         el.innerHTML = html;
         return;
     }
 
-    html += `<div class="card" style="margin-bottom:14px">
-        <div class="card-title">Evolución</div>
-        <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">`;
-    const metrics = [
-        {key:'weight',label:'Peso (kg)',color:'#FFB7B2'},
-        {key:'bust_cm',label:'Busto (cm)',color:'#D4A0D4'},
-        {key:'waist_cm',label:'Cintura (cm)',color:'#D4E0D4'},
-        {key:'hips_cm',label:'Cadera (cm)',color:'#A0C4D4'},
+    // 3. EVOLUTION CHART CARD
+    const ranges = [
+        { days: 90, label: '3 meses' },
+        { days: 180, label: '6 meses' },
+        { days: 365, label: '1 año' },
+        { days: 0, label: 'Todo' }
     ];
+    html += `<div class="card" style="margin-bottom:14px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+            <div class="card-title" style="margin-bottom:0">Evolución y Metas</div>
+            <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+                <button class="btn btn-ghost btn-sm" style="font-size:0.73rem;padding:3px 8px" onclick="setMeasurementMetricPreset('weight')">Solo Peso</button>
+                <button class="btn btn-ghost btn-sm" style="font-size:0.73rem;padding:3px 8px" onclick="setMeasurementMetricPreset('cm')">Solo Medidas (cm)</button>
+                <button class="btn btn-ghost btn-sm" style="font-size:0.73rem;padding:3px 8px" onclick="setMeasurementMetricPreset('all')">Todas</button>
+                <span style="color:var(--border);margin:0 2px">|</span>
+                ${ranges.map(r => `<button class="btn btn-ghost btn-sm chart-range-btn${state.measurementRange === r.days ? ' active' : ''}" style="font-size:0.73rem;padding:3px 8px" onclick="setMeasurementRange(${r.days})">${r.label}</button>`).join('')}
+            </div>
+        </div>
+        <div style="display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;align-items:center">`;
+
     metrics.forEach(m => {
-        html += `<label style="font-size:0.8rem;display:flex;align-items:center;gap:4px;cursor:pointer">
-            <input type="checkbox" class="metric-toggle" data-key="${m.key}" data-color="${m.color}" checked> ${m.label}
+        const isChecked = state.selectedMeasurementKeys.includes(m.key);
+        const hasGoal = goals[m.key] !== undefined && goals[m.key] !== null && goals[m.key] !== '';
+        html += `<label style="font-size:0.78rem;display:flex;align-items:center;gap:5px;cursor:pointer;padding:3px 8px;border-radius:16px;background:var(--bg);border:1px solid var(--border)">
+            <input type="checkbox" class="metric-toggle" data-key="${m.key}" data-color="${m.color}" data-label="${esc(m.label)}" data-short="${esc(m.short)}" data-unit="${m.unit}" ${isChecked ? 'checked' : ''}>
+            <span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${m.color}"></span>
+            <span>${esc(m.short)}</span>
+            ${hasGoal ? `<span style="font-size:0.68rem;color:var(--rose)" title="Meta: ${goals[m.key]} ${m.unit}">🎯</span>` : ''}
         </label>`;
     });
-    html += `</div>
-        <canvas id="measurementChart" style="width:100%;height:220px"></canvas>
+
+    html += `<label style="font-size:0.78rem;display:flex;align-items:center;gap:5px;cursor:pointer;margin-left:auto;color:var(--rose);font-weight:600">
+            <input type="checkbox" id="toggleShowGoalsLine" ${state.showMeasurementGoals ? 'checked' : ''}>
+            🎯 Ver líneas de meta
+        </label>
+        </div>
+        <div style="position:relative">
+            <canvas id="measurementChart" style="width:100%;height:260px"></canvas>
+        </div>
     </div>`;
 
-    // Table of measurements
-    html += '<div class="table-wrap" style="max-height:300px;overflow-y:auto"><table><thead><tr><th>Fecha</th><th>Peso</th><th>Busto</th><th>Cintura</th><th>Cadera</th><th></th></tr></thead><tbody>';
+    // 4. HISTORY TABLE OF MEASUREMENTS
+    html += `<div class="table-wrap" style="max-height:360px;overflow-y:auto"><table><thead><tr>
+        <th>Fecha</th>
+        <th>Peso</th>
+        <th>Bideltoideo</th>
+        <th>Busto</th>
+        <th>Bajo busto</th>
+        <th>Cintura</th>
+        <th>Cresta ilíaca</th>
+        <th>Cadera</th>
+        <th>Muslo / Brazo</th>
+        <th></th>
+    </tr></thead><tbody>`;
     const reversed = [...measurements].reverse();
+    const fmtVal = (v, u) => (v !== null && v !== undefined && v !== '') ? `${v} <span style="font-size:0.72rem;color:var(--text-muted)">${u}</span>` : '<span style="color:var(--text-muted)">-</span>';
     for (const m of reversed) {
-        html += `<tr><td><strong>${fmtDate(m.date)}</strong></td>
-            <td>${m.weight ? m.weight+' kg' : '-'}</td>
-            <td>${m.bust_cm ? m.bust_cm+' cm' : '-'}</td>
-            <td>${m.waist_cm ? m.waist_cm+' cm' : '-'}</td>
-            <td>${m.hips_cm ? m.hips_cm+' cm' : '-'}</td>
-            <td style="text-align:right"><button class="btn btn-ghost btn-sm" onclick="deleteMeasurement(${m.id})">✕</button></td></tr>`;
+        const tb = (m.thigh_cm || m.arm_cm)
+            ? `${m.thigh_cm ? m.thigh_cm + ' / ' : '- / '}${m.arm_cm ? m.arm_cm + ' cm' : '-'}`
+            : '<span style="color:var(--text-muted)">-</span>';
+        html += `<tr>
+            <td><strong>${fmtDate(m.date)}</strong>${m.notes ? `<div style="font-size:0.7rem;color:var(--text-muted)">${esc(m.notes)}</div>` : ''}</td>
+            <td>${fmtVal(m.weight, 'kg')}</td>
+            <td>${fmtVal(m.bideltoid_cm, 'cm')}</td>
+            <td>${fmtVal(m.bust_cm, 'cm')}</td>
+            <td>${fmtVal(m.underbust_cm, 'cm')}</td>
+            <td>${fmtVal(m.waist_cm, 'cm')}</td>
+            <td>${fmtVal(m.iliac_crest_cm, 'cm')}</td>
+            <td>${fmtVal(m.hips_cm, 'cm')}</td>
+            <td>${tb}</td>
+            <td style="text-align:right;white-space:nowrap">
+                <button class="btn btn-ghost btn-sm" title="Editar" onclick="showMeasurementForm(${m.id})">✎</button>
+                <button class="btn btn-ghost btn-sm" title="Eliminar" onclick="deleteMeasurement(${m.id})">✕</button>
+            </td>
+        </tr>`;
     }
     html += '</tbody></table></div>';
     el.innerHTML = html;
 
-    // Draw chart after element is rendered
-    drawMeasurementChart(measurements, metrics);
+    drawMeasurementChart(measurements, metrics, goals);
 }
 
-function drawMeasurementChart(data, metrics) {
+function setMeasurementRange(days) {
+    state.measurementRange = days;
+    const content = document.getElementById('healthContent');
+    if (content && state.lastMeasurementsList) {
+        renderHealthMeasurements(content, state.lastMeasurementsList, state.measurementGoals || {});
+    } else {
+        navigate('health');
+    }
+}
+
+function setMeasurementMetricPreset(mode) {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const metrics = getMeasurementMetricsConfig(isDark);
+    if (mode === 'weight') {
+        state.selectedMeasurementKeys = ['weight'];
+    } else if (mode === 'cm') {
+        state.selectedMeasurementKeys = metrics.filter(m => m.key !== 'weight').map(m => m.key);
+    } else {
+        state.selectedMeasurementKeys = metrics.map(m => m.key);
+    }
+    document.querySelectorAll('.metric-toggle').forEach(t => {
+        t.checked = state.selectedMeasurementKeys.includes(t.dataset.key);
+    });
+    drawMeasurementChart(state.lastMeasurementsList || [], metrics, state.measurementGoals || {});
+}
+
+async function saveQuickMeasurement() {
+    const dateEl = document.getElementById('quickMeasDate');
+    const date = dateEl ? dateEl.value : todayStr();
+    if (!date) { showToast('Selecciona una fecha'); return; }
+
+    const keys = ['weight', 'bideltoid_cm', 'bust_cm', 'underbust_cm', 'waist_cm', 'iliac_crest_cm', 'hips_cm', 'thigh_cm', 'arm_cm'];
+    const data = { date };
+    let hasAny = false;
+    keys.forEach(k => {
+        const inp = document.getElementById('qm_' + k);
+        if (inp && inp.value !== '' && !isNaN(parseFloat(inp.value))) {
+            data[k] = parseFloat(inp.value);
+            hasAny = true;
+        } else {
+            data[k] = null;
+        }
+    });
+    const notesEl = document.getElementById('qm_notes');
+    if (notesEl && notesEl.value.trim()) {
+        data.notes = notesEl.value.trim();
+        hasAny = true;
+    }
+    if (!hasAny) {
+        showToast('Ingresa al menos una medida para guardar');
+        return;
+    }
+    const res = await api(eel.create_body_measurement, data);
+    if (res && res.ok) {
+        showToast('✨ Medidas guardadas');
+        navigate('health');
+    } else {
+        showToast('Error al guardar');
+    }
+}
+
+function showMeasurementGoalsModal() {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    const metrics = getMeasurementMetricsConfig(isDark);
+    const goals = state.measurementGoals || {};
+    const latest = getLatestMetricValues(state.lastMeasurementsList || []);
+
+    let html = `<form id="modalGoalsForm">
+        <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:12px">
+            Define tus metas ideales. Se dibujarán como líneas punteadas (🎯) en el gráfico de evolución para que veas qué tan cerca estás. Deja vacío lo que no quieras fijar como meta.
+        </p>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">`;
+    metrics.forEach(m => {
+        const cur = latest[m.key] ? `Actual: ${latest[m.key].val} ${m.unit}` : `Sin registro previo`;
+        const val = goals[m.key] !== undefined && goals[m.key] !== null ? goals[m.key] : '';
+        html += `<div class="form-group" style="margin-bottom:4px">
+            <label style="display:flex;justify-content:space-between;align-items:center">
+                <span><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${m.color};margin-right:4px"></span>${esc(m.label)}</span>
+            </label>
+            <input type="number" step="${m.step}" class="form-control" name="${m.key}" value="${val}" placeholder="${cur}">
+        </div>`;
+    });
+    html += `</div></form>`;
+    openModal('🎯 Configurar Metas Corporales', html);
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('modalGoalsForm'));
+        const newGoals = {};
+        metrics.forEach(m => {
+            const v = parseFloat(f.get(m.key));
+            if (!isNaN(v) && v > 0) newGoals[m.key] = v;
+        });
+        const res = await api(eel.save_measurement_goals, newGoals);
+        if (res && res.ok) {
+            state.measurementGoals = res.goals || newGoals;
+            showToast('🎯 Metas actualizadas');
+            closeModal();
+            navigate('health');
+        } else {
+            showToast('Error al guardar metas');
+        }
+    };
+}
+
+function drawMeasurementChart(rawData, metrics, goals = {}) {
     setTimeout(() => {
         const canvas = document.getElementById('measurementChart');
         if (!canvas) return;
-        const setup = setupCanvas(canvas);
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        const gridColor = isDark ? '#362832' : '#F0E6E2';
+        const labelColor = isDark ? '#B89CA8' : '#9C8B8D';
+
+        // Filter data by range
+        let data = rawData || [];
+        const rangeDays = state.measurementRange || 0;
+        if (rangeDays > 0 && data.length > 0) {
+            const cut = new Date();
+            cut.setDate(cut.getDate() - rangeDays);
+            const cutStr = cut.toISOString().split('T')[0];
+            const filtered = data.filter(d => d.date >= cutStr);
+            if (filtered.length > 0) data = filtered;
+        }
+
+        const setup = setupCanvas(canvas, 260);
         const ctx = setup.ctx;
         const W = setup.W, H = setup.H;
-        const PAD = { top: 20, bottom: 30, left: 45, right: 20 };
+        const PAD = { top: 22, bottom: 32, left: 46, right: 105 };
         const plotW = W - PAD.left - PAD.right;
         const plotH = H - PAD.top - PAD.bottom;
 
@@ -2248,124 +3572,283 @@ function drawMeasurementChart(data, metrics) {
         const active = Array.from(toggles).map(t => ({
             key: t.dataset.key,
             color: t.dataset.color,
+            short: t.dataset.short || t.dataset.key,
+            unit: t.dataset.unit || '',
+            label: t.dataset.label || (metrics.find(x => x.key === t.dataset.key)?.label || t.dataset.key),
         }));
-        if (active.length === 0 || data.length < 2) {
-            ctx.fillStyle = '#9C8B8D';
+        state.selectedMeasurementKeys = active.map(a => a.key);
+
+        const showGoalsToggle = document.getElementById('toggleShowGoalsLine');
+        const showGoals = showGoalsToggle ? showGoalsToggle.checked : true;
+        state.showMeasurementGoals = showGoals;
+
+        // Bind events
+        document.querySelectorAll('.metric-toggle').forEach(t => {
+            t.onchange = () => drawMeasurementChart(rawData, metrics, goals);
+        });
+        if (showGoalsToggle) {
+            showGoalsToggle.onchange = () => drawMeasurementChart(rawData, metrics, goals);
+        }
+
+        if (active.length === 0 || data.length === 0) {
+            ctx.fillStyle = labelColor;
             ctx.font = '14px Outfit';
             ctx.textAlign = 'center';
-            ctx.fillText(active.length === 0 ? 'Seleccioná una métrica' : 'Se necesitan al menos 2 registros', W/2, H/2);
+            ctx.fillText(active.length === 0 ? 'Selecciona al menos una métrica arriba' : 'Sin registros en este período', W/2, H/2);
             return;
         }
 
-        // Find value range
+        // Find value range including goals of active metrics
         let min = Infinity, max = -Infinity;
         for (const m of active) {
             for (const d of data) {
                 const v = parseFloat(d[m.key]);
                 if (!isNaN(v)) { min = Math.min(min, v); max = Math.max(max, v); }
             }
+            if (showGoals && goals && goals[m.key] !== undefined && goals[m.key] !== null) {
+                const gv = parseFloat(goals[m.key]);
+                if (!isNaN(gv)) { min = Math.min(min, gv); max = Math.max(max, gv); }
+            }
         }
-        if (min === Infinity) return;
-        const range = max - min || 1; // Prevent division by zero
-        const pad = range * 0.1;
+        if (min === Infinity) {
+            ctx.fillStyle = labelColor;
+            ctx.font = '13px Outfit';
+            ctx.textAlign = 'center';
+            ctx.fillText('Aún no hay valores registrados para las métricas seleccionadas', W/2, H/2);
+            return;
+        }
 
-        // X axis: dates as indices
+        const valSpan = (max - min) || 4;
+        const pad = valSpan * 0.14;
+        const yMin = min - pad;
+        const yMax = max + pad;
+        const yRange = yMax - yMin || 1;
         const count = data.length;
 
-        // Draw grid lines
-        ctx.strokeStyle = '#F0E6E2';
-        ctx.lineWidth = 1;
-        for (let i = 0; i <= 4; i++) {
-            const y = PAD.top + plotH * (1 - i/4);
-            ctx.beginPath();
-            ctx.moveTo(PAD.left, y);
-            ctx.lineTo(W - PAD.right, y);
-            ctx.stroke();
-            const val = (min - pad) + (range + 2*pad) * (i/4);
-            ctx.fillStyle = '#9C8B8D';
-            ctx.font = '10px Outfit';
-            ctx.textAlign = 'right';
-            ctx.fillText(val.toFixed(1), PAD.left - 6, y + 3);
-        }
+        const xForIndex = (i) => count <= 1 ? (PAD.left + plotW / 2) : (PAD.left + plotW * (i / (count - 1)));
+        const yForVal = (v) => PAD.top + plotH * (1 - (v - yMin) / yRange);
 
-        // Draw lines for each metric
-        active.forEach((m, mi) => {
-            const pts = [];
-            for (let i = 0; i < count; i++) {
-                const v = parseFloat(data[i][m.key]);
-                if (isNaN(v)) continue;
-                const x = PAD.left + plotW * (i / Math.max(count - 1, 1));
-                const y = PAD.top + plotH * (1 - (v - (min - pad)) / (range + 2*pad));
-                pts.push({x, y});
-            }
-            if (pts.length < 2) return;
-
-            // Shadow
-            ctx.strokeStyle = m.color;
-            ctx.lineWidth = 2.5;
-            ctx.lineJoin = 'round';
-            ctx.beginPath();
-            pts.forEach((p, pi) => {
-                if (pi === 0) ctx.moveTo(p.x, p.y);
-                else ctx.lineTo(p.x, p.y);
-            });
-            ctx.stroke();
-
-            // Dots
-            pts.forEach(p => {
+        const renderScene = () => {
+            ctx.clearRect(0, 0, W, H);
+            // Draw grid lines
+            ctx.strokeStyle = gridColor;
+            ctx.lineWidth = 1;
+            for (let i = 0; i <= 4; i++) {
+                const y = PAD.top + plotH * (1 - i/4);
                 ctx.beginPath();
-                ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+                ctx.moveTo(PAD.left, y);
+                ctx.lineTo(W - PAD.right, y);
+                ctx.stroke();
+                const val = yMin + yRange * (i/4);
+                ctx.fillStyle = labelColor;
+                ctx.font = '10px Outfit';
+                ctx.textAlign = 'right';
+                ctx.fillText(val.toFixed(1), PAD.left - 6, y + 3);
+            }
+
+            // Draw Goal lines (dashed)
+            if (showGoals && goals) {
+                active.forEach(m => {
+                    const gv = parseFloat(goals[m.key]);
+                    if (isNaN(gv)) return;
+                    const gy = yForVal(gv);
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.setLineDash([6, 4]);
+                    ctx.strokeStyle = m.color;
+                    ctx.globalAlpha = 0.75;
+                    ctx.lineWidth = 1.6;
+                    ctx.moveTo(PAD.left, gy);
+                    ctx.lineTo(W - PAD.right, gy);
+                    ctx.stroke();
+                    ctx.restore();
+
+                    ctx.fillStyle = m.color;
+                    ctx.font = '600 9.5px Outfit';
+                    ctx.textAlign = 'left';
+                    ctx.fillText(`🎯 ${m.short}: ${gv}`, W - PAD.right + 5, gy + 3);
+                });
+            }
+
+            // Draw lines & points for each metric
+            const allRenderedPts = [];
+            active.forEach((m) => {
+                const pts = [];
+                for (let i = 0; i < count; i++) {
+                    const v = parseFloat(data[i][m.key]);
+                    if (isNaN(v)) continue;
+                    const x = xForIndex(i);
+                    const y = yForVal(v);
+                    pts.push({ x, y, val: v, date: data[i].date, metric: m });
+                    allRenderedPts.push({ x, y, val: v, date: data[i].date, metric: m });
+                }
+                if (pts.length === 0) return;
+
+                if (pts.length >= 2) {
+                    ctx.strokeStyle = m.color;
+                    ctx.lineWidth = 2.4;
+                    ctx.lineJoin = 'round';
+                    ctx.beginPath();
+                    pts.forEach((p, pi) => {
+                        if (pi === 0) ctx.moveTo(p.x, p.y);
+                        else ctx.lineTo(p.x, p.y);
+                    });
+                    ctx.stroke();
+                }
+
+                // Dots (compact if many points, larger if few)
+                const dotRadius = pts.length > 25 ? 2.8 : 4;
+                pts.forEach(p => {
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, dotRadius, 0, Math.PI * 2);
+                    ctx.fillStyle = m.color;
+                    ctx.fill();
+                    ctx.strokeStyle = isDark ? '#211920' : '#FFFFFF';
+                    ctx.lineWidth = 1.3;
+                    ctx.stroke();
+                });
+
+                // Label at last point
+                const last = pts[pts.length - 1];
                 ctx.fillStyle = m.color;
-                ctx.fill();
+                ctx.font = '600 10px Outfit';
+                ctx.textAlign = 'left';
+                ctx.fillText(`${m.short} (${last.val})`, Math.min(last.x + 6, W - PAD.right + 5), last.y - 5);
             });
 
-            // Label at last point
-            const last = pts[pts.length - 1];
-            ctx.fillStyle = m.color;
+            // X labels
+            ctx.fillStyle = labelColor;
             ctx.font = '10px Outfit';
-            ctx.textAlign = 'left';
-            ctx.fillText(m.label, last.x + 6, last.y + 3);
-        });
+            ctx.textAlign = 'center';
+            const step = Math.max(1, Math.ceil(count / 7));
+            for (let i = 0; i < count; i += step) {
+                const x = xForIndex(i);
+                const dStr = data[i].date || '';
+                const label = dStr.length >= 10 ? dStr.slice(2, 10) : dStr;
+                ctx.fillText(label, x, H - 8);
+            }
+            if (count > 1 && (count - 1) % step !== 0) {
+                const dStr = data[count - 1].date || '';
+                ctx.fillText(dStr.slice(2, 10), xForIndex(count - 1), H - 8);
+            }
+            return allRenderedPts;
+        };
 
-        // X labels (show every few dates)
-        ctx.fillStyle = '#9C8B8D';
-        ctx.font = '9px Outfit';
-        ctx.textAlign = 'center';
-        const step = Math.max(1, Math.floor(count / 8));
-        for (let i = 0; i < count; i += step) {
-            const x = PAD.left + plotW * (i / Math.max(count - 1, 1));
-            const label = data[i].date ? data[i].date.slice(5) : '';
-            ctx.fillText(label, x, H - 6);
-        }
+        const allPts = renderScene();
 
-        // Re-draw on toggle change
-        document.querySelectorAll('.metric-toggle').forEach(t => {
-            t.onchange = () => drawMeasurementChart(data, metrics);
-        });
+        // Tooltip on hover / touch
+        const tooltip = document.getElementById('measChartTooltip') || (() => {
+            const el = document.createElement('div');
+            el.id = 'measChartTooltip';
+            canvas.parentElement.style.position = 'relative';
+            canvas.parentElement.appendChild(el);
+            return el;
+        })();
+        tooltip.style.cssText = isDark
+            ? 'position:absolute;background:#211920;color:#F7EAF0;border:1px solid #F28BA8;border-radius:8px;padding:6px 10px;font-size:0.78rem;font-weight:500;pointer-events:none;display:none;z-index:100;box-shadow:0 4px 14px rgba(0,0,0,0.5)'
+            : 'position:absolute;background:#FFFFFF;color:#2D2327;border:1px solid #F0E6E2;border-radius:8px;padding:6px 10px;font-size:0.78rem;font-weight:500;pointer-events:none;display:none;z-index:100;box-shadow:0 2px 8px rgba(0,0,0,0.1)';
+
+        const handlePointer = (clientX, clientY) => {
+            if (!allPts || allPts.length === 0) return;
+            const r = canvas.getBoundingClientRect();
+            const mx = clientX - r.left;
+            const my = clientY - r.top;
+            if (mx < PAD.left - 10 || mx > W - PAD.right + 10) {
+                tooltip.style.display = 'none';
+                renderScene();
+                return;
+            }
+            let best = null, bestDist = Infinity;
+            for (const p of allPts) {
+                const dx = p.x - mx;
+                const dy = (p.y - my) * 0.5;
+                const dist = Math.hypot(dx, dy);
+                if (dist < bestDist) { bestDist = dist; best = p; }
+            }
+            if (!best || bestDist > 45) {
+                tooltip.style.display = 'none';
+                renderScene();
+                return;
+            }
+            renderScene();
+            ctx.beginPath();
+            ctx.arc(best.x, best.y, 5.5, 0, Math.PI * 2);
+            ctx.fillStyle = best.metric.color;
+            ctx.fill();
+            ctx.strokeStyle = isDark ? '#FFFFFF' : '#2D2327';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            const gv = goals ? parseFloat(goals[best.metric.key]) : NaN;
+            const goalDiff = !isNaN(gv) ? ` · 🎯 Meta: ${gv} (${(gv - best.val) > 0 ? '+' : ''}${(gv - best.val).toFixed(1)})` : '';
+            tooltip.style.display = 'block';
+            tooltip.style.left = Math.max(8, Math.min(best.x - 40, W - 210)) + 'px';
+            tooltip.style.top = Math.max(4, best.y - 36) + 'px';
+            tooltip.innerHTML = `<strong>${esc(best.metric.short)}: ${best.val} ${best.metric.unit}</strong> · ${fmtDate(best.date)}${goalDiff}`;
+        };
+
+        canvas.onmousemove = (e) => handlePointer(e.clientX, e.clientY);
+        canvas.ontouchmove = (e) => {
+            if (e.touches && e.touches[0]) handlePointer(e.touches[0].clientX, e.touches[0].clientY);
+        };
+        canvas.onmouseleave = () => {
+            tooltip.style.display = 'none';
+            renderScene();
+        };
     }, 50);
 }
 
-function showMeasurementForm() {
+function showMeasurementForm(editId = null) {
+    const existing = editId ? (state.lastMeasurementsList || []).find(x => x.id === editId) : null;
+    const v = (k) => (existing && existing[k] !== null && existing[k] !== undefined) ? existing[k] : '';
     const html = `<form id="modalForm">
-        <div class="form-group"><label>Fecha *</label><input type="date" class="form-control" name="date" value="${todayStr()}"></div>
-        <div class="form-row"><div class="form-group"><label>Peso (kg)</label><input type="number" step="0.1" class="form-control" name="weight"></div>
-        <div class="form-group"><label>Busto (cm)</label><input type="number" step="0.5" class="form-control" name="bust_cm"></div></div>
-        <div class="form-row"><div class="form-group"><label>Cintura (cm)</label><input type="number" step="0.5" class="form-control" name="waist_cm"></div>
-        <div class="form-group"><label>Cadera (cm)</label><input type="number" step="0.5" class="form-control" name="hips_cm"></div></div>
-        <div class="form-row"><div class="form-group"><label>Muslo (cm)</label><input type="number" step="0.5" class="form-control" name="thigh_cm"></div>
-        <div class="form-group"><label>Brazo (cm)</label><input type="number" step="0.5" class="form-control" name="arm_cm"></div></div>
-        <div class="form-group"><label>Notas</label><textarea class="form-control" name="notes" placeholder="Ej: después de la dosis semanal..."></textarea></div>
+        <div class="form-group"><label>Fecha *</label><input type="date" class="form-control" name="date" value="${existing ? existing.date : todayStr()}"></div>
+        <div class="form-row">
+            <div class="form-group"><label>Peso (kg)</label><input type="number" step="0.1" class="form-control" name="weight" value="${v('weight')}"></div>
+            <div class="form-group"><label>Ancho bideltoideo (cm)</label><input type="number" step="0.5" class="form-control" name="bideltoid_cm" value="${v('bideltoid_cm')}"></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Busto (cm)</label><input type="number" step="0.5" class="form-control" name="bust_cm" value="${v('bust_cm')}"></div>
+            <div class="form-group"><label>Bajo busto (cm)</label><input type="number" step="0.5" class="form-control" name="underbust_cm" value="${v('underbust_cm')}"></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Cintura (cm)</label><input type="number" step="0.5" class="form-control" name="waist_cm" value="${v('waist_cm')}"></div>
+            <div class="form-group"><label>Crestas ilíacas / Hip dip (cm)</label><input type="number" step="0.5" class="form-control" name="iliac_crest_cm" value="${v('iliac_crest_cm')}"></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Cadera (cm)</label><input type="number" step="0.5" class="form-control" name="hips_cm" value="${v('hips_cm')}"></div>
+            <div class="form-group"><label>Muslo (cm)</label><input type="number" step="0.5" class="form-control" name="thigh_cm" value="${v('thigh_cm')}"></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Brazo (cm)</label><input type="number" step="0.5" class="form-control" name="arm_cm" value="${v('arm_cm')}"></div>
+            <div class="form-group"></div>
+        </div>
+        <div class="form-group"><label>Notas</label><textarea class="form-control" name="notes" placeholder="Ej: en ayunas, post entrenamiento...">${esc(v('notes'))}</textarea></div>
     </form>`;
-    openModal('Registrar medidas', html);
+    openModal(existing ? 'Editar medidas' : 'Registrar medidas', html);
     document.getElementById('modalSave').onclick = async () => {
         const f = new FormData(document.getElementById('modalForm'));
-        const data = { date: f.get('date'), weight: parseFloat(f.get('weight')) || null,
-            bust_cm: parseFloat(f.get('bust_cm')) || null, waist_cm: parseFloat(f.get('waist_cm')) || null,
-            hips_cm: parseFloat(f.get('hips_cm')) || null, thigh_cm: parseFloat(f.get('thigh_cm')) || null,
-            arm_cm: parseFloat(f.get('arm_cm')) || null, notes: f.get('notes') };
+        const parseNum = (name) => {
+            const raw = f.get(name);
+            return (raw !== null && raw !== '' && !isNaN(parseFloat(raw))) ? parseFloat(raw) : null;
+        };
+        const data = {
+            id: existing ? existing.id : null,
+            date: f.get('date'),
+            weight: parseNum('weight'),
+            bideltoid_cm: parseNum('bideltoid_cm'),
+            bust_cm: parseNum('bust_cm'),
+            underbust_cm: parseNum('underbust_cm'),
+            waist_cm: parseNum('waist_cm'),
+            iliac_crest_cm: parseNum('iliac_crest_cm'),
+            hips_cm: parseNum('hips_cm'),
+            thigh_cm: parseNum('thigh_cm'),
+            arm_cm: parseNum('arm_cm'),
+            notes: f.get('notes')
+        };
         if (!data.date) { showToast('La fecha es obligatoria'); return; }
         const res = await api(eel.create_body_measurement, data);
-        if (res && res.ok) { showToast('Registrado'); closeModal(); navigate('health'); }
+        if (res && res.ok) { showToast('Guardado'); closeModal(); navigate('health'); }
         else showToast('Error');
     };
 }
@@ -2378,6 +3861,7 @@ async function deleteMeasurement(id) {
 }
 
 function buildHabitGraph(logs, habitCount) {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
     const now = new Date();
     const start = new Date(now.getFullYear(), 0, 1);
     const end = new Date(now.getFullYear(), 11, 31);
@@ -2423,14 +3907,16 @@ function buildHabitGraph(logs, habitCount) {
         }
     });
 
-    const colors = ['var(--bg-card)', '#e8f5e9', '#a5d6a7', '#66bb6a', '#2e7d32'];
+    const colors = isDark
+        ? ['var(--border-light)', '#4A2533', '#7A354E', '#B85478', '#F28BA8']
+        : ['var(--border-light)', '#FFE4E1', '#F7C2BE', '#EE9E97', '#E07A72'];
     let html = `<div class="habit-graph" style="margin-top:16px">
         <div style="font-size:0.75rem;font-weight:600;color:var(--text-muted);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.05em">Registro anual</div>
         <div style="display:flex;gap:2px;overflow-x:auto;padding-bottom:4px">`;
     monthLabels.forEach(ml => {
         html += `<div style="font-size:0.6rem;color:var(--text-light);width:0;position:relative;left:${ml.col * 12}px">${ml.month}</div>`;
     });
-    html += '</div><div style="display:flex;gap:2px">';
+    html += '</div><div style="display:flex;gap:2px;overflow-x:auto;padding-bottom:4px">';
     for (const week of weeks) {
         html += '<div style="display:flex;flex-direction:column;gap:2px">';
         for (const day of week) {
@@ -2658,12 +4144,46 @@ async function deletePrintOrder(id) {
 
 // ===================== SETTINGS =====================
 async function renderSettings(el) {
-    const config = await api(eel.get_all_config) || {};
-    const perGram = config.print3d_price_per_gram || '1.5';
-    const perHour = config.print3d_price_per_hour || '5.0';
+    const [config, lan] = await Promise.all([
+        api(eel.get_all_config),
+        window.eel && window.eel.get_lan_info ? api(eel.get_lan_info).catch(() => ({})) : Promise.resolve({})
+    ]);
+    const cfg = config || {};
+    const perGram = cfg.print3d_price_per_gram || '1.5';
+    const perHour = cfg.print3d_price_per_hour || '5.0';
+    const lanUrl = (lan && lan.url) ? lan.url.replace('/index.html', '') : `http://${window.location.hostname}:8080`;
+    const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&margin=8&data=${encodeURIComponent((lan && lan.url) || lanUrl)}`;
 
     el.innerHTML = `<div class="page-header">
-        <div><h1>Ajustes</h1><div class="subtitle">Configuración</div></div>
+        <div><h1>Ajustes</h1><div class="subtitle">Configuración · Acceso móvil</div></div>
+    </div>
+    <div class="settings-section">
+        <h3>📱 Acceso desde tu iPhone / Celular</h3>
+        <div class="card">
+            <div style="display:flex;gap:24px;align-items:center;flex-wrap:wrap">
+                <div style="background:#fff;padding:10px;border-radius:14px;border:1px solid var(--border);flex-shrink:0">
+                    <img src="${qrSrc}" alt="QR Acceso iPhone" style="width:140px;height:140px;display:block" onerror="this.style.display='none'">
+                </div>
+                <div style="flex:1;min-width:240px">
+                    <div style="font-size:0.95rem;font-weight:600;margin-bottom:6px">1. En casa (misma red Wi-Fi)</div>
+                    <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:10px">
+                        Con tu PC encendida y la app abierta, escanea el código QR con la cámara de tu iPhone o escribe esta dirección en <strong>Safari</strong>:
+                    </p>
+                    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:14px">
+                        <code style="padding:8px 14px;border-radius:10px;background:var(--primary-light);color:var(--primary);font-size:1rem;font-weight:700;user-select:all">${esc(lanUrl)}</code>
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="copyLanUrl('${esc(lanUrl)}')">📋 Copiar enlace</button>
+                    </div>
+                    <div style="font-size:0.84rem;background:var(--bg);padding:12px 14px;border-radius:12px;border:1px solid var(--border-light)">
+                        <strong>✨ Tip para instalarla como App en iPhone (sin App Store):</strong><br>
+                        Cuando abras el enlace en Safari, toca el botón <strong>Compartir</strong> (el cuadrado con la flecha hacia arriba) y selecciona <strong>"Agregar a inicio"</strong>. Te creará el ícono de <em>Nicole</em> en tu pantalla de inicio a pantalla completa.
+                    </div>
+                </div>
+            </div>
+            <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border-light);font-size:0.83rem;color:var(--text-muted)">
+                <strong>🌍 ¿Cómo entrar desde fuera de casa (con datos móviles / en el gimnasio)?</strong><br>
+                Puedes instalar <strong>Tailscale</strong> (gratis en tu PC y desde el App Store en tu iPhone) para conectar tu iPhone a tu PC desde cualquier lugar sin abrir puertos del router, o alojar la aplicación en un servidor gratuito en la nube (Render / Railway / PythonAnywhere) si quieres que funcione incluso con tu PC apagada.
+            </div>
+        </div>
     </div>
     <div class="settings-section">
         <h3>Impresión 3D · Precios</h3>
@@ -2682,6 +4202,14 @@ async function renderSettings(el) {
             <button class="btn btn-secondary" onclick="showToast('Próximamente')">Exportar datos</button>
         </div>
     </div>`;
+}
+
+function copyLanUrl(url) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(() => showToast('Enlace copiado al portapapeles ✨'));
+    } else {
+        showToast(url);
+    }
 }
 
 async function savePrint3dConfig() {
@@ -2751,3 +4279,35 @@ window.deleteInjection = deleteInjection;
 window.switchHealthTab = switchHealthTab;
 window.showMeasurementForm = showMeasurementForm;
 window.deleteMeasurement = deleteMeasurement;
+window.saveQuickMeasurement = saveQuickMeasurement;
+window.showMeasurementGoalsModal = showMeasurementGoalsModal;
+window.setMeasurementRange = setMeasurementRange;
+window.setMeasurementMetricPreset = setMeasurementMetricPreset;
+window.buscarRucSunat = buscarRucSunat;
+window.convertQuoteToInvoice = convertQuoteToInvoice;
+window.changeLindleyValPeriod = changeLindleyValPeriod;
+window.toggleTheme = toggleTheme;
+window.switchPersonalTab = switchPersonalTab;
+window.selectRoutineDay = selectRoutineDay;
+window.selectLiveWorkoutStep = selectLiveWorkoutStep;
+window.copyLanUrl = copyLanUrl;
+window.showWorkoutDayForm = showWorkoutDayForm;
+window.deleteWorkoutDay = deleteWorkoutDay;
+window.showWorkoutExerciseForm = showWorkoutExerciseForm;
+window.deleteWorkoutExercise = deleteWorkoutExercise;
+window.startLiveWorkout = startLiveWorkout;
+window.updateLiveSet = updateLiveSet;
+window.addLiveSetRow = addLiveSetRow;
+window.toggleLiveSetDone = toggleLiveSetDone;
+window.startRestTimer = startRestTimer;
+window.adjustRestTimer = adjustRestTimer;
+window.skipRestTimer = skipRestTimer;
+window.cancelLiveWorkout = cancelLiveWorkout;
+window.finishLiveWorkout = finishLiveWorkout;
+window.changeWorkoutProgressEx = changeWorkoutProgressEx;
+window.changeWorkoutProgressMetric = changeWorkoutProgressMetric;
+window.deleteWorkoutSession = deleteWorkoutSession;
+window.showQuickExerciseLogModal = showQuickExerciseLogModal;
+
+
+

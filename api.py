@@ -904,7 +904,15 @@ def delete_assignment(id):
 def get_habits():
     conn = get_connection()
     try:
-        rows = conn.execute("SELECT * FROM habits ORDER BY name ASC").fetchall()
+        t = today()
+        rows = conn.execute("""
+            SELECT h.*,
+                   CASE WHEN EXISTS (
+                       SELECT 1 FROM habit_logs hl WHERE hl.habit_id = h.id AND hl.date = ?
+                   ) THEN 1 ELSE 0 END as done_today
+            FROM habits h
+            ORDER BY h.name ASC
+        """, (t,)).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
@@ -1318,14 +1326,100 @@ def get_body_measurements():
 def create_body_measurement(data):
     conn = get_connection()
     try:
+        fields = [
+            'weight', 'bideltoid_cm', 'bust_cm', 'underbust_cm',
+            'waist_cm', 'iliac_crest_cm', 'hips_cm', 'thigh_cm', 'arm_cm'
+        ]
+        rec_id = data.get('id')
+        dt = data['date']
+
+        if rec_id:
+            # Explicit edit of an existing row
+            conn.execute("""
+                UPDATE body_measurements
+                SET date=?, weight=?, bideltoid_cm=?, bust_cm=?, underbust_cm=?,
+                    waist_cm=?, iliac_crest_cm=?, hips_cm=?, thigh_cm=?, arm_cm=?, notes=?
+                WHERE id=?
+            """, (
+                dt, data.get('weight'), data.get('bideltoid_cm'), data.get('bust_cm'),
+                data.get('underbust_cm'), data.get('waist_cm'), data.get('iliac_crest_cm'),
+                data.get('hips_cm'), data.get('thigh_cm'), data.get('arm_cm'),
+                data.get('notes'), rec_id
+            ))
+            conn.commit()
+            return {'ok': True, 'id': rec_id}
+
+        # Check if a row for this date already exists to merge non-null fields
+        existing = conn.execute("SELECT * FROM body_measurements WHERE date=?", (dt,)).fetchone()
+        if existing:
+            ex = dict(existing)
+            merged = {}
+            for f in fields:
+                val = data.get(f)
+                merged[f] = val if (val is not None and val != '') else ex.get(f)
+            notes = data.get('notes') if data.get('notes') else ex.get('notes')
+            conn.execute("""
+                UPDATE body_measurements
+                SET weight=?, bideltoid_cm=?, bust_cm=?, underbust_cm=?,
+                    waist_cm=?, iliac_crest_cm=?, hips_cm=?, thigh_cm=?, arm_cm=?, notes=?
+                WHERE id=?
+            """, (
+                merged['weight'], merged['bideltoid_cm'], merged['bust_cm'], merged['underbust_cm'],
+                merged['waist_cm'], merged['iliac_crest_cm'], merged['hips_cm'],
+                merged['thigh_cm'], merged['arm_cm'], notes, ex['id']
+            ))
+            conn.commit()
+            return {'ok': True, 'id': ex['id'], 'merged': True}
+
         cur = conn.execute("""
-            INSERT INTO body_measurements (date, weight, bust_cm, waist_cm, hips_cm, thigh_cm, arm_cm, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (data['date'], data.get('weight'), data.get('bust_cm'),
-              data.get('waist_cm'), data.get('hips_cm'), data.get('thigh_cm'),
-              data.get('arm_cm'), data.get('notes')))
+            INSERT INTO body_measurements
+            (date, weight, bideltoid_cm, bust_cm, underbust_cm, waist_cm, iliac_crest_cm, hips_cm, thigh_cm, arm_cm, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            dt, data.get('weight'), data.get('bideltoid_cm'), data.get('bust_cm'),
+            data.get('underbust_cm'), data.get('waist_cm'), data.get('iliac_crest_cm'),
+            data.get('hips_cm'), data.get('thigh_cm'), data.get('arm_cm'), data.get('notes')
+        ))
         conn.commit()
         return {'ok': True, 'id': cur.lastrowid}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+@eel.expose
+def get_measurement_goals():
+    import json
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT value FROM config WHERE key='measurement_goals'").fetchone()
+        if row and row['value']:
+            try:
+                return json.loads(row['value'])
+            except Exception:
+                return {}
+        return {}
+    finally:
+        conn.close()
+
+@eel.expose
+def save_measurement_goals(goals):
+    import json
+    conn = get_connection()
+    try:
+        clean = {}
+        for k, v in (goals or {}).items():
+            if v is not None and str(v).strip() != '':
+                try:
+                    clean[k] = float(v)
+                except ValueError:
+                    pass
+        conn.execute(
+            "INSERT OR REPLACE INTO config (key, value) VALUES ('measurement_goals', ?)",
+            (json.dumps(clean),)
+        )
+        conn.commit()
+        return {'ok': True, 'goals': clean}
     except Exception as e:
         return {'ok': False, 'error': str(e)}
     finally:
@@ -1469,9 +1563,15 @@ def _calc_hours(hi, hs, traslado):
     try:
         h1, m1 = hi.split(':')
         h2, m2 = hs.split(':')
-        total_min = (int(h2)*60+int(m2)) - (int(h1)*60+int(m1)) - 60  # -1h almuerzo
-        if total_min < 0:
-            total_min = 0
+        min_in = int(h1) * 60 + int(m1)
+        min_out = int(h2) * 60 + int(m2)
+        if min_out < min_in:
+            # Soporta turnos nocturnos que cruzan la medianoche (ej. 22:00 a 02:00)
+            min_out += 24 * 60
+        raw_min = min_out - min_in
+        # Se descuenta 1h de almuerzo (no se registra aparte) cuando la jornada supera las 5 horas
+        lunch_deduction = 60 if raw_min > 300 else 0
+        total_min = max(raw_min - lunch_deduction, 0)
         t = min(traslado or 0, 60)
         return round(total_min / 60 + t / 60, 2)
     except:
@@ -1538,8 +1638,9 @@ def get_service_records(fecha=None, employee_id=None, status=None):
 def create_service_record(data):
     conn = get_connection()
     try:
-        w = data.get('semana') or conn.execute("SELECT strftime('%W',?)", (data['fecha'],)).fetchone()[0]
-        y = data.get('año') or conn.execute("SELECT strftime('%Y',?)", (data['fecha'],)).fetchone()[0]
+        iso = date.fromisoformat(data['fecha']).isocalendar()
+        w = data.get('semana') or iso[1]
+        y = data.get('año') or iso[0]
         cur = conn.execute("""
             INSERT INTO service_records (fecha, employee_id, client_site_id, hora_ingreso,
                 traslado_min, status, semana, año)
@@ -1591,8 +1692,9 @@ def clock_in(data):
     """Registro rápido de entrada (clock-in)."""
     conn = get_connection()
     try:
-        w = conn.execute("SELECT strftime('%W',?)", (data['fecha'],)).fetchone()[0]
-        y = conn.execute("SELECT strftime('%Y',?)", (data['fecha'],)).fetchone()[0]
+        iso = date.fromisoformat(data['fecha']).isocalendar()
+        w = iso[1]
+        y = iso[0]
         cur = conn.execute("""
             INSERT INTO service_records (fecha, employee_id, client_site_id, hora_ingreso, status, semana, año)
             VALUES (?, ?, ?, ?, 'active', ?, ?)
@@ -1627,6 +1729,11 @@ def delete_service_record(id):
 def get_daily_control(fecha=None):
     conn = get_connection()
     try:
+        if fecha:
+            active_emps = conn.execute("SELECT id FROM employees WHERE is_active=1").fetchall()
+            for emp in active_emps:
+                _sync_daily_control(conn, fecha, emp['id'])
+            conn.commit()
         sql = """
             SELECT dc.*, e.full_name as employee_name
             FROM daily_control dc JOIN employees e ON dc.employee_id=e.id
@@ -2453,3 +2560,409 @@ La descripción debe incluir metodología paso a paso (Paso 1, Paso 2, Paso 3) c
         return {'ok': False, 'error': f'Ollama error: {resp.status_code}'}
     except Exception as e:
         return {'ok': False, 'error': f'No se pudo conectar con Ollama: {str(e)}'}
+
+# ===================== NEW FEATURES: RUC, CONVERSION & LINDLEY VALIDATION =====================
+
+@eel.expose
+def lookup_ruc(ruc):
+    """Consulta RUC en API pública (SUNAT padron) para autocompletar razón social y dirección."""
+    import requests
+    ruc = str(ruc or '').strip()
+    if len(ruc) != 11 or not ruc.isdigit():
+        return {'ok': False, 'error': 'El RUC debe tener 11 dígitos numéricos'}
+    try:
+        resp = requests.get(f"https://api.apis.net.pe/v1/ruc?numero={ruc}", timeout=8)
+        if resp.status_code == 200:
+            d = resp.json()
+            address = d.get('direccion', '') or ''
+            dist = d.get('distrito', '') or ''
+            prov = d.get('provincia', '') or ''
+            if dist and dist not in address:
+                address = f"{address} - {dist}".strip(' -')
+            return {
+                'ok': True,
+                'business_name': d.get('nombre', ''),
+                'address': address,
+                'distrito': dist,
+                'estado': d.get('estado', ''),
+                'condicion': d.get('condicion', '')
+            }
+        return {'ok': False, 'error': 'No se encontró el RUC en el padrón'}
+    except Exception as e:
+        return {'ok': False, 'error': f'No se pudo consultar RUC online: {str(e)}'}
+
+@eel.expose
+def convert_quote_to_invoice(quote_id):
+    """Convierte una cotización en una factura emitida y marca la cotización como aceptada."""
+    conn = get_connection()
+    try:
+        quote = conn.execute("SELECT * FROM quotes WHERE id=?", (quote_id,)).fetchone()
+        if not quote:
+            return {'ok': False, 'error': 'Cotización no encontrada'}
+        items = conn.execute("""
+            SELECT qi.*, st.name as service_name
+            FROM quote_items qi
+            LEFT JOIN service_types st ON qi.service_type_id = st.id
+            WHERE qi.quote_id=?
+            ORDER BY qi.sort_order ASC
+        """, (quote_id,)).fetchall()
+
+        service_names = []
+        for it in items:
+            sname = it['service_name'] or it['description_text'] or 'Servicio'
+            if sname not in service_names:
+                service_names.append(sname)
+        service_str = ', '.join(service_names) if service_names else f"Según {quote['number']}"
+
+        issue = today()
+        pt = (quote['payment_terms'] or '').upper()
+        payment_type = 'contado' if 'CONTADO' in pt else 'credito'
+        days_credit = 30
+        if '15' in pt:
+            days_credit = 15
+        elif '60' in pt:
+            days_credit = 60
+        elif payment_type == 'contado':
+            days_credit = 0
+        due = (date.today() + timedelta(days=days_credit)).isoformat() if days_credit > 0 else issue
+
+        mb = date.today().month
+        yb = date.today().year
+
+        cur = conn.execute("""
+            INSERT INTO invoices (client_id, client_site_id, series, number, service, payment_type,
+                amount, igv, total, issue_date, due_date, status, month_billed, year_billed)
+            VALUES (?, ?, 'F001', '', ?, ?, ?, ?, ?, ?, ?, 'issued', ?, ?)
+        """, (quote['client_id'], quote['client_site_id'], service_str, payment_type,
+              quote['subtotal'], quote['igv'], quote['total'], issue, due, mb, yb))
+
+        conn.execute("UPDATE quotes SET status='aceptada' WHERE id=?", (quote_id,))
+        conn.commit()
+        return {'ok': True, 'invoice_id': cur.lastrowid}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+@eel.expose
+def get_lindley_validation(year=None, month=None):
+    """
+    Cruza los técnicos activos con sus documentos obligatorios (EMO, MATPEL, Inducción, SCTR)
+    y valida si estarán vigentes durante todo el mes consultado (por defecto, el mes siguiente).
+    """
+    import calendar
+    conn = get_connection()
+    try:
+        now = date.today()
+        if not year or not month:
+            if now.month == 12:
+                year, month = now.year + 1, 1
+            else:
+                year, month = now.year, now.month + 1
+        year, month = int(year), int(month)
+        last_day = calendar.monthrange(year, month)[1]
+        start_month = date(year, month, 1).isoformat()
+        end_month = date(year, month, last_day).isoformat()
+
+        emps = conn.execute("SELECT * FROM employees WHERE is_active=1 ORDER BY full_name ASC").fetchall()
+        docs = conn.execute("SELECT * FROM employee_documents ORDER BY expiry_date DESC").fetchall()
+
+        required_types = ['EMO', 'MATPEL', 'Inducción']
+        result = []
+
+        for e in emps:
+            emp_docs = [d for d in docs if d['employee_id'] == e['id']]
+            doc_status = {}
+            overall = 'ok'  # 'ok' (verde), 'warning' (vence durante ese mes), 'blocked' (vencido o falta)
+            issues = []
+
+            for req in required_types:
+                # Match flexible (ej. 'Induccion' o 'Inducción')
+                req_norm = req.lower().replace('ó', 'o')
+                matches = [d for d in emp_docs if d['doc_type'] and req_norm in d['doc_type'].lower().replace('ó', 'o')]
+                if not matches:
+                    doc_status[req] = {'status': 'missing', 'expiry_date': None, 'label': 'Sin registro'}
+                    overall = 'blocked'
+                    issues.append(f'Falta {req}')
+                else:
+                    best = matches[0]
+                    exp = best['expiry_date']
+                    if not exp:
+                        doc_status[req] = {'status': 'ok', 'expiry_date': None, 'label': 'Registrado (s/fecha)'}
+                    elif exp < start_month:
+                        doc_status[req] = {'status': 'expired', 'expiry_date': exp, 'label': f'Vencido ({exp})'}
+                        overall = 'blocked'
+                        issues.append(f'{req} vencido el {exp}')
+                    elif exp <= end_month:
+                        doc_status[req] = {'status': 'expiring_in_month', 'expiry_date': exp, 'label': f'Vence en el mes ({exp})'}
+                        if overall != 'blocked':
+                            overall = 'warning'
+                        issues.append(f'{req} vence el {exp}')
+                    else:
+                        doc_status[req] = {'status': 'ok', 'expiry_date': exp, 'label': f'Vigente ({exp})'}
+
+            result.append({
+                'employee_id': e['id'],
+                'full_name': e['full_name'],
+                'document_number': e['document_number'],
+                'position': e['position'],
+                'docs': doc_status,
+                'overall': overall,
+                'issues': issues,
+            })
+
+        return {
+            'year': year,
+            'month': month,
+            'start_month': start_month,
+            'end_month': end_month,
+            'employees': result,
+        }
+    finally:
+        conn.close()
+
+# ===================== WORKOUT / ENTRENAMIENTO =====================
+
+@eel.expose
+def get_workout_routine():
+    conn = get_connection()
+    try:
+        days = conn.execute("SELECT * FROM workout_days ORDER BY sort_order ASC, day_number ASC, id ASC").fetchall()
+        exs = conn.execute("SELECT * FROM workout_exercises ORDER BY day_id ASC, sort_order ASC, id ASC").fetchall()
+        ex_by_day = {}
+        for ex in exs:
+            did = ex['day_id']
+            if did not in ex_by_day:
+                ex_by_day[did] = []
+            ex_by_day[did].append(dict(ex))
+
+        # Get last logged weight for each exercise to pre-fill in live workout
+        last_weights = {}
+        weight_rows = conn.execute("""
+            SELECT exercise_name, weight_kg, reps
+            FROM workout_set_logs
+            WHERE weight_kg > 0
+            ORDER BY date DESC, id DESC
+        """).fetchall()
+        for wr in weight_rows:
+            if wr['exercise_name'] not in last_weights:
+                last_weights[wr['exercise_name']] = {'weight_kg': wr['weight_kg'], 'reps': wr['reps']}
+
+        result = []
+        for d in days:
+            dd = dict(d)
+            day_exs = ex_by_day.get(d['id'], [])
+            for x in day_exs:
+                lw = last_weights.get(x['name'])
+                x['last_weight_kg'] = lw['weight_kg'] if lw else x['default_weight_kg']
+                x['last_reps'] = lw['reps'] if lw else None
+            dd['exercises'] = day_exs
+            result.append(dd)
+        return result
+    finally:
+        conn.close()
+
+@eel.expose
+def save_workout_day(data):
+    conn = get_connection()
+    try:
+        day_id = data.get('id')
+        if day_id:
+            conn.execute("""
+                UPDATE workout_days SET day_number=?, name=?, subtitle=?, warmup_notes=?, cooldown_notes=?
+                WHERE id=?
+            """, (data.get('day_number', 1), data['name'], data.get('subtitle'),
+                  data.get('warmup_notes'), data.get('cooldown_notes'), day_id))
+        else:
+            max_s = conn.execute("SELECT COALESCE(MAX(sort_order),0)+1 FROM workout_days").fetchone()[0]
+            cur = conn.execute("""
+                INSERT INTO workout_days (day_number, name, subtitle, warmup_notes, cooldown_notes, sort_order)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (data.get('day_number', max_s), data['name'], data.get('subtitle'),
+                  data.get('warmup_notes'), data.get('cooldown_notes'), max_s))
+            day_id = cur.lastrowid
+        conn.commit()
+        return {'ok': True, 'id': day_id}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+@eel.expose
+def delete_workout_day(day_id):
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM workout_exercises WHERE day_id=?", (day_id,))
+        conn.execute("DELETE FROM workout_days WHERE id=?", (day_id,))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+@eel.expose
+def save_workout_exercise(data):
+    conn = get_connection()
+    try:
+        ex_id = data.get('id')
+        if ex_id:
+            conn.execute("""
+                UPDATE workout_exercises
+                SET phase=?, name=?, sets=?, reps_text=?, equipment=?, default_weight_kg=?, rest_seconds=?
+                WHERE id=?
+            """, (data.get('phase', 'Principal'), data['name'], int(data.get('sets', 3)),
+                  data.get('reps_text', '12'), data.get('equipment', ''),
+                  float(data.get('default_weight_kg') or 0), int(data.get('rest_seconds') or 60), ex_id))
+        else:
+            day_id = data['day_id']
+            max_s = conn.execute("SELECT COALESCE(MAX(sort_order),0)+1 FROM workout_exercises WHERE day_id=?", (day_id,)).fetchone()[0]
+            cur = conn.execute("""
+                INSERT INTO workout_exercises
+                (day_id, phase, name, sets, reps_text, equipment, default_weight_kg, rest_seconds, sort_order)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (day_id, data.get('phase', 'Principal'), data['name'], int(data.get('sets', 3)),
+                  data.get('reps_text', '12'), data.get('equipment', ''),
+                  float(data.get('default_weight_kg') or 0), int(data.get('rest_seconds') or 60), max_s))
+            ex_id = cur.lastrowid
+        conn.commit()
+        return {'ok': True, 'id': ex_id}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+@eel.expose
+def delete_workout_exercise(ex_id):
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM workout_exercises WHERE id=?", (ex_id,))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+@eel.expose
+def log_workout_session(data):
+    """
+    Guarda una sesión de entrenamiento completada y todos sus sets.
+    Además actualiza default_weight_kg del ejercicio si el usuario subió de peso.
+    """
+    conn = get_connection()
+    try:
+        session_date = data.get('date') or today()
+        cur = conn.execute("""
+            INSERT INTO workout_sessions (day_id, day_name, date, duration_minutes, notes)
+            VALUES (?, ?, ?, ?, ?)
+        """, (data.get('day_id'), data.get('day_name'), session_date,
+              int(data.get('duration_minutes') or 0), data.get('notes')))
+        session_id = cur.lastrowid
+
+        for s in data.get('sets', []):
+            w = float(s.get('weight_kg') or 0)
+            r = int(s.get('reps') or 0)
+            dur = int(s.get('duration_sec') or 0)
+            ex_name = s.get('exercise_name')
+            if not ex_name:
+                continue
+            conn.execute("""
+                INSERT INTO workout_set_logs (session_id, exercise_name, set_number, weight_kg, reps, duration_sec, completed, date)
+                VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+            """, (session_id, ex_name, int(s.get('set_number') or 1), w, r, dur, session_date))
+            if w > 0:
+                conn.execute("UPDATE workout_exercises SET default_weight_kg=? WHERE name=?", (w, ex_name))
+
+        conn.commit()
+        return {'ok': True, 'id': session_id}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+@eel.expose
+def get_workout_history():
+    conn = get_connection()
+    try:
+        sessions = conn.execute("""
+            SELECT * FROM workout_sessions ORDER BY date DESC, id DESC LIMIT 100
+        """).fetchall()
+        logs = conn.execute("""
+            SELECT * FROM workout_set_logs ORDER BY session_id DESC, id ASC
+        """).fetchall()
+        logs_by_sess = {}
+        for l in logs:
+            sid = l['session_id']
+            if sid not in logs_by_sess:
+                logs_by_sess[sid] = []
+            logs_by_sess[sid].append(dict(l))
+
+        result = []
+        for s in sessions:
+            sd = dict(s)
+            sd['sets'] = logs_by_sess.get(s['id'], [])
+            result.append(sd)
+        return result
+    finally:
+        conn.close()
+
+@eel.expose
+def delete_workout_session(session_id):
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM workout_set_logs WHERE session_id=?", (session_id,))
+        conn.execute("DELETE FROM workout_sessions WHERE id=?", (session_id,))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+@eel.expose
+def get_workout_progress():
+    """
+    Retorna lista de ejercicios y serie histórica por fecha (peso máximo, volumen total y reps máximas)
+    para graficar la evolución de fuerza/progresión.
+    """
+    conn = get_connection()
+    try:
+        rows = conn.execute("""
+            SELECT exercise_name, date,
+                   MAX(weight_kg) as max_weight,
+                   SUM(weight_kg * CASE WHEN reps > 0 THEN reps ELSE 1 END) as volume,
+                   MAX(reps) as max_reps,
+                   COUNT(*) as total_sets
+            FROM workout_set_logs
+            WHERE completed = 1
+            GROUP BY exercise_name, date
+            ORDER BY date ASC
+        """).fetchall()
+
+        by_exercise = {}
+        for r in rows:
+            name = r['exercise_name']
+            if name not in by_exercise:
+                by_exercise[name] = []
+            by_exercise[name].append({
+                'date': r['date'],
+                'max_weight': round(r['max_weight'] or 0, 2),
+                'volume': round(r['volume'] or 0, 2),
+                'max_reps': r['max_reps'] or 0,
+                'total_sets': r['total_sets'] or 0,
+            })
+
+        # All known exercise names from routine + logs
+        ex_names = [r[0] for r in conn.execute("SELECT DISTINCT name FROM workout_exercises ORDER BY id ASC").fetchall()]
+        for k in by_exercise.keys():
+            if k not in ex_names:
+                ex_names.append(k)
+
+        return {
+            'exercises': ex_names,
+            'series': by_exercise,
+        }
+    finally:
+        conn.close()
+

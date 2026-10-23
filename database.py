@@ -216,8 +216,11 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date TEXT NOT NULL,
             weight REAL,
+            bideltoid_cm REAL,
             bust_cm REAL,
+            underbust_cm REAL,
             waist_cm REAL,
+            iliac_crest_cm REAL,
             hips_cm REAL,
             thigh_cm REAL,
             arm_cm REAL,
@@ -380,6 +383,53 @@ def init_db():
         "CREATE TABLE IF NOT EXISTS quotes (id INTEGER PRIMARY KEY AUTOINCREMENT, number TEXT NOT NULL, client_id INTEGER NOT NULL, client_site_id INTEGER, issue_date TEXT, valid_until TEXT, payment_terms TEXT, subtotal REAL DEFAULT 0, igv REAL DEFAULT 0, total REAL DEFAULT 0, status TEXT DEFAULT 'borrador', created_at TEXT DEFAULT (datetime('now','localtime')), FOREIGN KEY (client_id) REFERENCES clients(id), FOREIGN KEY (client_site_id) REFERENCES client_sites(id))",
         "CREATE TABLE IF NOT EXISTS quote_items (id INTEGER PRIMARY KEY AUTOINCREMENT, quote_id INTEGER NOT NULL, service_type_id INTEGER, description_id INTEGER, description_text TEXT, productos_text TEXT, equipos_text TEXT, quantity REAL DEFAULT 1, unit_price REAL DEFAULT 0, total REAL DEFAULT 0, sort_order INTEGER DEFAULT 0, FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE, FOREIGN KEY (service_type_id) REFERENCES service_types(id), FOREIGN KEY (description_id) REFERENCES service_descriptions(id))",
         "ALTER TABLE quote_items ADD COLUMN sort_order INTEGER DEFAULT 0",
+        """CREATE TABLE IF NOT EXISTS workout_days (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            day_number INTEGER,
+            name TEXT NOT NULL,
+            subtitle TEXT,
+            warmup_notes TEXT,
+            cooldown_notes TEXT,
+            sort_order INTEGER DEFAULT 0
+        )""",
+        """CREATE TABLE IF NOT EXISTS workout_exercises (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            day_id INTEGER NOT NULL,
+            phase TEXT DEFAULT 'Principal',
+            name TEXT NOT NULL,
+            sets INTEGER DEFAULT 3,
+            reps_text TEXT,
+            equipment TEXT,
+            default_weight_kg REAL DEFAULT 0,
+            rest_seconds INTEGER DEFAULT 60,
+            is_trackable INTEGER DEFAULT 1,
+            sort_order INTEGER DEFAULT 0,
+            FOREIGN KEY (day_id) REFERENCES workout_days(id) ON DELETE CASCADE
+        )""",
+        """CREATE TABLE IF NOT EXISTS workout_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            day_id INTEGER,
+            day_name TEXT,
+            date TEXT NOT NULL,
+            duration_minutes INTEGER DEFAULT 0,
+            notes TEXT,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        )""",
+        """CREATE TABLE IF NOT EXISTS workout_set_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            exercise_name TEXT NOT NULL,
+            set_number INTEGER DEFAULT 1,
+            weight_kg REAL DEFAULT 0,
+            reps INTEGER DEFAULT 0,
+            duration_sec INTEGER DEFAULT 0,
+            completed INTEGER DEFAULT 1,
+            date TEXT NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES workout_sessions(id) ON DELETE CASCADE
+        )""",
+        "ALTER TABLE body_measurements ADD COLUMN bideltoid_cm REAL",
+        "ALTER TABLE body_measurements ADD COLUMN underbust_cm REAL",
+        "ALTER TABLE body_measurements ADD COLUMN iliac_crest_cm REAL",
     ]:
         try:
             conn.execute(stmt)
@@ -387,4 +437,72 @@ def init_db():
             pass
 
     conn.commit()
+    seed_default_workouts(conn)
     conn.close()
+
+def seed_default_workouts(conn):
+    count = conn.execute("SELECT COUNT(*) FROM workout_days").fetchone()[0]
+    if count > 0:
+        return
+
+    post_stretch = (
+        "Estiramientos Post-Entrenamiento (Obligatorio para proteger postura y elongar aductores):\n"
+        "• Estiramiento de Mariposa: Sentada con plantas de los pies juntas, empujando suavemente rodillas hacia el piso (45 seg).\n"
+        "• Figura de 4 (Pie base en el piso): Acostada boca arriba, cruzando un tobillo sobre la rodilla opuesta (30 seg por pierna).\n"
+        "• Estiramiento 90-90: Sentada en el piso con ambas piernas flexionadas a 90°, una rotada hacia afuera y otra hacia adentro (30 seg por lado)."
+    )
+    warmup_std = "Flow de isquiotibiales + Lunges para el psoas (5 - 10 minutos · Peso corporal)"
+
+    days_data = [
+        (1, "Día 1: Ensanchamiento Lateral y Zancadas", "Glúteo medio, abducción y piernas", warmup_std, post_stretch, 1, [
+            ("Principal", "Clamshells (Almejas)", 3, "15 (por lado)", "Banda nivel Medio", 0, 45, 1),
+            ("Principal", "Abducción Tumbada", 4, "15 (por lado)", "Disco Suelto sobre el muslo", 5.0, 60, 1),
+            ("Principal", "Zancadas", 3, "12 (por pierna)", "Par de Mancuernas (4kg totales)", 4.0, 60, 1),
+            ("Principal", "Abducción Sentada", 4, "20", "Banda nivel Fuerte", 0, 45, 1),
+        ]),
+        (2, "Día 2: Abdomen de Corsé (Vacuums 1)", "Core profundo, cintura y estabilidad", None, None, 2, [
+            ("Principal", "Levantamiento de piernas", 2, "15", "Peso corporal", 0, 45, 1),
+            ("Principal", "Stomach Vacuums", 5, "15 segundos", "Peso corporal", 0, 30, 1),
+            ("Principal", "Plancha Frontal (Plank)", 4, "Fallo", "Peso corporal", 0, 60, 1),
+            ("Principal", "Plancha Lateral", 3, "30 segundos (por lado)", "Peso corporal", 0, 45, 1),
+        ]),
+        (3, "Día 3: Proyección", "Fuerza e hipertrofia de glúteo e isquios", warmup_std, post_stretch, 3, [
+            ("Principal", "Real Hip Thrust", 3, "12", "Barra Armada (9.5kg)", 9.5, 90, 1),
+            ("Principal", "Split Squat (Sentadilla Dividida)", 3, "12 (por pierna)", "Par de Mancuernas (4kg c/u)", 8.0, 75, 1),
+            ("Principal", "Peso Muerto Rumano (Normal)", 3, "12", "Par de Mancuernas (4kg c/u)", 8.0, 75, 1),
+        ]),
+        (4, "Día 4: Bombeo Lateral (Vacuums 2)", "Aislamiento de glúteo con bandas y core", None, post_stretch, 4, [
+            ("Principal", "Caminata Lateral (Monster Walks)", 4, "20 pasos totales", "Banda nivel Fuerte", 0, 45, 1),
+            ("Principal", "Donkey Kicks (Patadas de burro)", 3, "12 (por pierna)", "Banda nivel Medio", 0, 45, 1),
+            ("Principal", "Patada Lateral de Pie", 4, "15 (por lado)", "Banda nivel Fuerte", 0, 45, 1),
+            ("Principal", "Stomach Vacuums", 5, "15 segundos", "Peso corporal", 0, 30, 1),
+        ]),
+        (5, "Día 5: Glúteo Integral", "Trabajo completo de tren inferior", warmup_std, post_stretch, 5, [
+            ("Principal", "Hip Thrust Acostada (Puente)", 3, "15", "Mancuerna Pesada (8kg cadera)", 8.0, 60, 1),
+            ("Principal", "Sentadilla Copa (Goblet Squat)", 4, "12", "Mancuerna Pesada (en pecho)", 8.0, 75, 1),
+            ("Principal", "Zancadas Inversas", 3, "12 (por pierna)", "Par de Mancuernas ligeras", 4.0, 60, 1),
+        ]),
+        (6, "Día 6: Postura, Flexibilidad y Relax (Circuito Continuo)", "Realizar el circuito principal de 3 a 4 rondas seguidas, fluyendo de un movimiento al otro", None, None, 6, [
+            ("Circuito (3-4 Rondas)", "Flow de isquiotibiales", 4, "Fluido", "Peso corporal", 0, 20, 1),
+            ("Circuito (3-4 Rondas)", "Lunges para el psoas", 4, "Fluido", "Peso corporal", 0, 20, 1),
+            ("Circuito (3-4 Rondas)", "Estiramiento 90-90", 4, "Fluido", "Peso corporal", 0, 20, 1),
+            ("Circuito (3-4 Rondas)", "Alcance de pies sentada", 4, "Fluido", "Peso corporal", 0, 20, 1),
+            ("Cierre", "Apertura de pecho en marco de puerta", 3, "30 segundos", "Marco de puerta", 0, 30, 1),
+            ("Cierre", "Stomach Vacuums", 5, "15 segundos", "Peso corporal", 0, 30, 1),
+        ]),
+    ]
+
+    for day_num, name, subtitle, warmup, cooldown, sort_ord, exercises in days_data:
+        cur = conn.execute("""
+            INSERT INTO workout_days (day_number, name, subtitle, warmup_notes, cooldown_notes, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (day_num, name, subtitle, warmup, cooldown, sort_ord))
+        day_id = cur.lastrowid
+        for idx, (phase, ex_name, sets, reps_text, equip, weight, rest_s, trackable) in enumerate(exercises, start=1):
+            conn.execute("""
+                INSERT INTO workout_exercises
+                (day_id, phase, name, sets, reps_text, equipment, default_weight_kg, rest_seconds, is_trackable, sort_order)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (day_id, phase, ex_name, sets, reps_text, equip, weight, rest_s, trackable, idx))
+    conn.commit()
+

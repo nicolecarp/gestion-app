@@ -1,0 +1,20 @@
+{
+  "name": "Nicole",
+  "short_name": "Nicole",
+  "start_url": "/index.html",
+  "display": "standalone",
+  "background_color": "#151014",
+  "theme_color": "#151014",
+  "icons": [
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    },
+    {
+      "src": "/img/asa-icon.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

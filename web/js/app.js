@@ -102,8 +102,13 @@ function showToast(msg) {
 function openModal(title, bodyHtml) {
     document.getElementById('modalTitle').textContent = title;
     document.getElementById('modalBody').innerHTML = bodyHtml;
-    document.getElementById('modalSave').style.display = '';
-    document.getElementById('modalCancel').style.display = '';
+    const saveBtn = document.getElementById('modalSave');
+    const cancelBtn = document.getElementById('modalCancel');
+    saveBtn.style.display = '';
+    saveBtn.textContent = 'Guardar';
+    cancelBtn.style.display = '';
+    cancelBtn.textContent = 'Cancelar';
+    cancelBtn.onclick = closeModal;
     document.getElementById('modalOverlay').classList.add('open');
 }
 
@@ -259,10 +264,10 @@ async function renderDashboard(el) {
                 <div class="stat-value" style="font-size:1.05rem;line-height:1.25;margin:4px 0">${esc(nextWorkout)}</div>
                 <div class="stat-label">Toca hoy · ${workoutsMonth} este mes</div>
             </div>
-            <div class="stat-card ${injOverdue ? 'rose' : 'lavender'}" style="cursor:pointer" onclick="state.healthTab='injections';navigate('health')">
+            <div class="stat-card ${injOverdue || (stats && stats.estradiol_stock !== null && stats.estradiol_stock <= 2) ? 'rose' : 'lavender'}" style="cursor:pointer" onclick="state.healthTab='injections';navigate('health')">
                 <div class="stat-icon">💉</div>
                 <div class="stat-value">${injLabel}</div>
-                <div class="stat-label">Próxima dosis E₂</div>
+                <div class="stat-label">${stats && stats.estradiol_stock !== null ? (stats.estradiol_stock <= 2 ? `⚠️ Quedan ${stats.estradiol_stock} dosis` : `E₂ · Stock: ${stats.estradiol_stock} dosis`) : 'Próxima dosis E₂'}</div>
             </div>
             <div class="stat-card sage" style="cursor:pointer" onclick="state.healthTab='measurements';navigate('health')">
                 <div class="stat-icon">⚖️</div>
@@ -1871,6 +1876,8 @@ async function renderUniversity(el) {
     const subjects = await api(eel.get_subjects) || [];
     const allExams = await api(eel.get_exams) || [];
     const allAssignments = await api(eel.get_assignments) || [];
+    window.__uniExams = allExams;
+    window.__uniAssignments = allAssignments;
 
     let html = `<div class="page-header">
         <div><h1>Universidad</h1><div class="subtitle">Ingeniería Industrial · UTN Avellaneda</div></div>
@@ -1883,16 +1890,59 @@ async function renderUniversity(el) {
         return;
     }
 
+    // Weekly schedule summary for active subjects
+    const activeWithSched = subjects.filter(s => s.status === 'current' && s.schedule);
+    if (activeWithSched.length > 0) {
+        html += `<div class="card" style="margin-bottom:16px;padding:14px 18px">
+            <div style="font-size:0.78rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">🗓️ Horarios de Cursada</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px">
+                ${activeWithSched.map(s => `<div style="background:var(--bg);padding:8px 12px;border-radius:10px;border-left:3px solid var(--primary)">
+                    <div style="font-weight:700;font-size:0.88rem">${esc(s.name)}</div>
+                    <div style="font-size:0.8rem;color:var(--text-muted)">🕒 ${esc(s.schedule)}</div>
+                </div>`).join('')}
+            </div>
+        </div>`;
+    }
+
     for (const s of subjects) {
         const exams = allExams.filter(e => e.subject_id === s.id);
         const assignments = allAssignments.filter(a => a.subject_id === s.id);
         const stCls = s.status === 'current' ? 'current' : s.status === 'passed' ? 'passed' : 'failed';
 
+        // Calculate average and cursada condition
+        const gradedExams = exams.filter(e => e.grade !== null && e.grade !== undefined && e.grade !== '');
+        const gradedTPs = assignments.filter(a => a.grade !== null && a.grade !== undefined && a.grade !== '');
+        const allGrades = [...gradedExams.map(e => parseFloat(e.grade)), ...gradedTPs.map(a => parseFloat(a.grade))].filter(g => !isNaN(g));
+        const examGrades = gradedExams.map(e => parseFloat(e.grade)).filter(g => !isNaN(g));
+        const avg = allGrades.length > 0 ? (allGrades.reduce((a, b) => a + b, 0) / allGrades.length) : null;
+
+        let condBadge = '';
+        if (s.status === 'passed') {
+            condBadge = `<span class="tag tag-sage">✅ Aprobada${avg !== null ? ` · Prom ${avg.toFixed(1)}` : ''}</span>`;
+        } else if (s.status === 'failed') {
+            condBadge = `<span class="tag tag-rose">Recursar</span>`;
+        } else if (examGrades.length > 0) {
+            const minExam = Math.min(...examGrades);
+            const avgExam = examGrades.reduce((a, b) => a + b, 0) / examGrades.length;
+            if (minExam < 4) {
+                condBadge = `<span class="tag tag-rose">⚠️ Recuperatorio · Prom ${avgExam.toFixed(1)}</span>`;
+            } else if (minExam >= 7 && avgExam >= 7) {
+                condBadge = `<span class="tag tag-sage">✨ En Promoción · Prom ${avgExam.toFixed(1)}</span>`;
+            } else {
+                condBadge = `<span class="tag tag-lavender">📘 Regular · Prom ${avgExam.toFixed(1)}</span>`;
+            }
+        } else if (avg !== null) {
+            condBadge = `<span class="tag tag-primary">Prom TPs: ${avg.toFixed(1)}</span>`;
+        }
+
         html += `<div class="subject-card" style="margin-bottom:14px">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-wrap:wrap;gap:8px">
                 <div>
-                    <div class="subject-name"><span class="status-dot ${stCls}" style="margin-right:8px"></span>${esc(s.name)}</div>
-                    <div class="subject-meta">${esc(s.professor || '')}${s.schedule ? ' · '+esc(s.schedule) : ''}</div>
+                    <div class="subject-name" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                        <span><span class="status-dot ${stCls}" style="margin-right:8px"></span>${esc(s.name)}</span>
+                        ${condBadge}
+                    </div>
+                    <div class="subject-meta">${esc(s.professor || '')}${s.schedule ? ' · 🕒 '+esc(s.schedule) : ''}</div>
                 </div>
                 <div style="display:flex;gap:4px">
                     <button class="btn btn-ghost btn-sm" onclick="showExamForm(${s.id})">+ Examen</button>
@@ -1907,8 +1957,9 @@ async function renderUniversity(el) {
             html += '<span style="font-size:0.8rem;color:var(--text-light)">Sin exámenes</span>';
         } else {
             for (const e of exams) {
-                html += `<div class="calendar-event"><div class="event-dot exam"></div>
-                    <div class="event-text">${esc(e.type || 'Examen')}: ${fmtDate(e.date)}${e.grade ? ' · Nota: '+e.grade : ''}</div>
+                const gradeBadge = e.grade ? ` · <strong style="color:${e.grade >= 7 ? 'var(--sage)' : e.grade >= 4 ? 'var(--primary)' : 'var(--rose)'}">Nota: ${e.grade}</strong>` : '';
+                html += `<div class="calendar-event" style="cursor:pointer" onclick="editExamById(${e.id}, ${s.id})" title="Clic para editar o cargar nota"><div class="event-dot exam"></div>
+                    <div class="event-text">${esc(e.type || 'Examen')}: ${fmtDate(e.date)}${e.topic ? ' ('+esc(e.topic)+')' : ''}${gradeBadge}</div>
                 </div>`;
             }
         }
@@ -1917,14 +1968,25 @@ async function renderUniversity(el) {
             html += '<span style="font-size:0.8rem;color:var(--text-light)">Sin TPs</span>';
         } else {
             for (const a of assignments) {
-                html += `<div class="calendar-event"><div class="event-dot assignment"></div>
-                    <div class="event-text">${esc(a.title)}${a.due_date ? ' · Entrega: '+fmtDate(a.due_date) : ''}${a.group_name ? ' · '+esc(a.group_name) : ''}</div>
+                const tpGrade = a.grade ? ` · <strong>Nota: ${a.grade}</strong>` : '';
+                html += `<div class="calendar-event" style="cursor:pointer" onclick="editAssignmentById(${a.id}, ${s.id})" title="Clic para editar o cargar nota"><div class="event-dot assignment"></div>
+                    <div class="event-text">${esc(a.title)}${a.due_date ? ' · Entrega: '+fmtDate(a.due_date) : ''}${a.group_name ? ' · '+esc(a.group_name) : ''}${tpGrade}</div>
                 </div>`;
             }
         }
         html += '</div></div></div>';
     }
     el.innerHTML = html;
+}
+
+function editExamById(examId, subjectId) {
+    const ex = (window.__uniExams || []).find(x => x.id === examId);
+    if (ex) showExamModal(ex, subjectId);
+}
+
+function editAssignmentById(assignId, subjectId) {
+    const a = (window.__uniAssignments || []).find(x => x.id === assignId);
+    if (a) showAssignmentModal(a, subjectId);
 }
 
 function showSubjectForm(id) {
@@ -1940,7 +2002,7 @@ function showSubjectModal(subj) {
     const html = `<form id="modalForm">
         <div class="form-group"><label>Nombre *</label><input class="form-control" name="name" value="${esc(subj ? subj.name : '')}"></div>
         <div class="form-row"><div class="form-group"><label>Profesor</label><input class="form-control" name="professor" value="${esc(subj ? subj.professor : '')}"></div>
-        <div class="form-group"><label>Horario</label><input class="form-control" name="schedule" value="${esc(subj ? subj.schedule : '')}"></div></div>
+        <div class="form-group"><label>Horario (ej. Mar 18:30 - 22:30)</label><input class="form-control" name="schedule" value="${esc(subj ? subj.schedule : '')}"></div></div>
         <div class="form-row"><div class="form-group"><label>Año</label><input type="number" class="form-control" name="year" value="${subj ? subj.year : new Date().getFullYear()}"></div>
         <div class="form-group"><label>Estado</label><select class="form-control" name="status">
             <option value="current" ${!subj || subj.status === 'current' ? 'selected' : ''}>En curso</option>
@@ -1982,7 +2044,7 @@ function showExamModal(exam, subjectId) {
         <div class="form-row"><div class="form-group"><label>Fecha *</label><input type="date" class="form-control" name="date" value="${exam ? exam.date : ''}"></div>
         <div class="form-group"><label>Hora</label><input type="time" class="form-control" name="time" value="${exam ? exam.time : ''}"></div></div>
         <div class="form-group"><label>Tema</label><input class="form-control" name="topic" value="${esc(exam ? exam.topic : '')}"></div>
-        <div class="form-row"><div class="form-group"><label>Nota</label><input type="number" step="0.5" class="form-control" name="grade" value="${exam ? exam.grade : ''}"></div>
+        <div class="form-row"><div class="form-group"><label>Nota</label><input type="number" step="0.5" class="form-control" name="grade" value="${exam && exam.grade !== null ? exam.grade : ''}"></div>
         <div class="form-group"><label>Estado</label><select class="form-control" name="status">
             <option value="pending" ${!exam || exam.status === 'pending' ? 'selected' : ''}>Pendiente</option>
             <option value="passed" ${exam && exam.status === 'passed' ? 'selected' : ''}>Aprobado</option>
@@ -2076,16 +2138,24 @@ function fmtSec(sec) {
 
 function playBeep() {
     try {
+        if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+    } catch (_) {}
+    try {
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(880, ctx.currentTime);
-        gain.gain.setValueAtTime(0.15, ctx.currentTime);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.25);
+        const playTone = (freq, startOffset, duration) => {
+            const osc = ctx.createOscillator();
+            const gain = ctx.createGain();
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(freq, ctx.currentTime + startOffset);
+            gain.gain.setValueAtTime(0.22, ctx.currentTime + startOffset);
+            gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + startOffset + duration);
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start(ctx.currentTime + startOffset);
+            osc.stop(ctx.currentTime + startOffset + duration);
+        };
+        playTone(880, 0, 0.18);
+        playTone(1174.66, 0.2, 0.28);
     } catch (_) {}
 }
 
@@ -2114,6 +2184,36 @@ async function renderPersonalRoutine(el) {
     }
 
     let html = `<div id="liveWorkoutMount">${state.activeWorkout ? buildActiveWorkoutPlayer(state.activeWorkout) : ''}</div>`;
+
+    // Weekly consistency strip (Mon - Sun)
+    const trainedDates = new Set(hist.map(h => h.date));
+    const now = new Date();
+    const dow = (now.getDay() + 6) % 7; // 0 = Mon .. 6 = Sun
+    const mon = new Date(now);
+    mon.setDate(now.getDate() - dow);
+    const dayLabels = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
+    let weekTrainedCount = 0;
+    let weekCellsHtml = '';
+    for (let i = 0; i < 7; i++) {
+        const d = new Date(mon);
+        d.setDate(mon.getDate() + i);
+        const ds = d.toISOString().split('T')[0];
+        const isTrained = trainedDates.has(ds);
+        const isToday = ds === todayStr();
+        if (isTrained) weekTrainedCount++;
+        weekCellsHtml += `<div style="flex:1;min-width:38px;text-align:center;padding:6px 4px;border-radius:10px;background:${isTrained ? 'var(--primary-light)' : 'var(--bg)'};border:1px solid ${isToday ? 'var(--primary)' : 'var(--border-light)'}">
+            <div style="font-size:0.68rem;color:var(--text-muted);font-weight:600">${dayLabels[i]}</div>
+            <div style="font-size:0.95rem;margin-top:2px">${isTrained ? '🔥' : (isToday ? '✨' : '·')}</div>
+        </div>`;
+    }
+
+    html += `<div class="card" style="margin-bottom:14px;padding:12px 16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:6px">
+            <span style="font-size:0.8rem;font-weight:700;color:var(--text-secondary)">🔥 Constancia de esta semana</span>
+            <span class="tag ${weekTrainedCount >= 4 ? 'tag-sage' : 'tag-primary'}" style="font-size:0.72rem">${weekTrainedCount} / 6 días entrenados</span>
+        </div>
+        <div style="display:flex;gap:6px;overflow-x:auto">${weekCellsHtml}</div>
+    </div>`;
 
     if (days.length === 0) {
         html += '<div class="empty-state"><div class="empty-icon">🏋️‍♀️</div><h3>Sin días de rutina</h3><p>Crea tu primer día de entrenamiento</p></div>';
@@ -2968,14 +3068,18 @@ function drawWorkoutProgressChart(points, metric, exName) {
 
 // ===================== HEALTH =====================
 async function renderHealth(el) {
-    const [injections, measurements, proj, goals] = await Promise.all([
+    const [injections, measurements, proj, goals, e2StockRaw, nextLabRaw] = await Promise.all([
         api(eel.get_injections),
         api(eel.get_body_measurements),
         api(eel.get_estradiol_projection),
-        api(eel.get_measurement_goals)
+        api(eel.get_measurement_goals),
+        api(eel.get_config, 'estradiol_stock'),
+        api(eel.get_config, 'next_lab_date')
     ]);
     state.measurementGoals = goals || {};
     state.lastMeasurementsList = measurements || [];
+    state.estradiolStock = (e2StockRaw !== null && e2StockRaw !== undefined && e2StockRaw !== '') ? parseInt(e2StockRaw) : null;
+    state.nextLabDate = nextLabRaw || '';
 
     const tabs = ['injections', 'measurements'];
     const labels = ['Inyecciones', 'Medidas'];
@@ -3049,9 +3153,34 @@ function renderHealthInjections(el, injections, proj) {
         }
     }
 
-    // Add button
-    html += `<div style="display:flex;justify-content:flex-end;margin-bottom:14px">
-        <button class="btn btn-primary" onclick="showInjectionForm()">+ Registrar inyección</button>
+    // Stock of ampoules & Next Blood Lab reminder bar
+    const stockVal = (state.estradiolStock !== null && !isNaN(state.estradiolStock)) ? state.estradiolStock : null;
+    const lowStock = stockVal !== null && stockVal <= 2;
+    const labDays = state.nextLabDate ? daysUntil(state.nextLabDate) : null;
+    const labBadge = labDays !== null
+        ? (labDays < 0 ? `<span class="tag tag-rose" style="font-size:0.7rem">Vencido</span>`
+           : labDays === 0 ? `<span class="tag tag-primary" style="font-size:0.7rem">¡Hoy!</span>`
+           : `<span class="tag ${labDays <= 7 ? 'tag-gold' : 'tag-lavender'}" style="font-size:0.7rem">En ${labDays}d</span>`)
+        : '';
+
+    html += `<div class="card" style="margin-bottom:14px;padding:12px 16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                <span style="font-size:0.84rem;font-weight:700">📦 Stock de dosis / ampollas:</span>
+                <div style="display:flex;align-items:center;gap:6px">
+                    <button class="btn btn-secondary btn-sm" style="padding:2px 9px" onclick="adjustEstradiolStock(-1)">-</button>
+                    <strong style="min-width:26px;text-align:center;font-size:0.95rem;color:${lowStock ? 'var(--rose)' : 'var(--text)'}">${stockVal !== null ? stockVal : '--'}</strong>
+                    <button class="btn btn-secondary btn-sm" style="padding:2px 9px" onclick="adjustEstradiolStock(1)">+</button>
+                </div>
+                ${lowStock ? `<span class="tag tag-rose" style="font-size:0.72rem">⚠️ Comprar pronto</span>` : ''}
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                <span style="font-size:0.84rem;font-weight:700">🩸 Próximo laboratorio:</span>
+                <input type="date" class="form-control" style="width:auto;padding:4px 8px;font-size:0.82rem;height:30px" value="${esc(state.nextLabDate || '')}" onchange="saveNextLabDate(this.value)">
+                ${labBadge}
+            </div>
+            <button class="btn btn-primary" onclick="showInjectionForm()" style="margin-left:auto">+ Registrar inyección</button>
+        </div>
     </div>`;
 
     if (injections.length === 0) {
@@ -3291,6 +3420,21 @@ function setEstradiolRange(days) {
     navigate('health');
 }
 
+async function adjustEstradiolStock(delta) {
+    const cur = (state.estradiolStock !== null && !isNaN(state.estradiolStock)) ? state.estradiolStock : 0;
+    const next = Math.max(0, cur + delta);
+    state.estradiolStock = next;
+    await api(eel.set_config, 'estradiol_stock', String(next));
+    navigate('health');
+}
+
+async function saveNextLabDate(val) {
+    state.nextLabDate = val || '';
+    await api(eel.set_config, 'next_lab_date', state.nextLabDate);
+    showToast('Fecha de laboratorio guardada');
+    navigate('health');
+}
+
 // --- HEALTH: MEASUREMENTS WITH QUICK-ADD, GOALS & CHART ---
 function getMeasurementMetricsConfig(isDark) {
     return [
@@ -3369,6 +3513,42 @@ function renderHealthMeasurements(el, measurements, goals = {}) {
             <button class="btn btn-primary" onclick="saveQuickMeasurement()" style="padding:7px 18px">💾 Guardar medidas</button>
         </div>
     </div>`;
+
+    // 1.5 AUTOMATIC BODY PROPORTIONS STRIP
+    const wVal = latest.waist_cm?.val;
+    const hVal = latest.hips_cm?.val;
+    const bVal = latest.bust_cm?.val;
+    const ubVal = latest.underbust_cm?.val;
+    const biVal = latest.bideltoid_cm?.val;
+    const propCards = [];
+    if (wVal && hVal) {
+        const whr = (wVal / hVal).toFixed(2);
+        const diffHW = (hVal - wVal).toFixed(1);
+        propCards.push({ title: 'Cintura / Cadera (WHR)', val: whr, sub: `Dif: +${diffHW} cm cadera · Ideal ~0.70` });
+    }
+    if (bVal && ubVal) {
+        const diffCup = (bVal - ubVal).toFixed(1);
+        propCards.push({ title: 'Busto - Bajo busto', val: `+${diffCup} cm`, sub: `Busto ${bVal} / Bajo ${ubVal} cm` });
+    }
+    if (bVal && wVal) {
+        const wbr = (wVal / bVal).toFixed(2);
+        propCards.push({ title: 'Cintura / Busto', val: wbr, sub: `Dif: +${(bVal - wVal).toFixed(1)} cm busto` });
+    }
+    if (biVal && hVal) {
+        propCards.push({ title: 'Bideltoideo / Cadera', val: `${biVal} / ${hVal} cm`, sub: `Índice: ${(biVal / hVal).toFixed(2)}` });
+    }
+    if (propCards.length > 0) {
+        html += `<div class="card" style="margin-bottom:14px;padding:12px 16px">
+            <div style="font-size:0.8rem;font-weight:700;color:var(--text-secondary);margin-bottom:8px">✨ Proporciones actuales</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(175px,1fr));gap:8px">
+                ${propCards.map(c => `<div style="padding:8px 10px;border-radius:10px;background:var(--bg);border-left:3px solid var(--primary)">
+                    <div style="font-size:0.73rem;color:var(--text-muted);font-weight:600">${c.title}</div>
+                    <div style="font-size:1rem;font-weight:700;margin:2px 0;color:var(--primary)">${c.val}</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted)">${c.sub}</div>
+                </div>`).join('')}
+            </div>
+        </div>`;
+    }
 
     // 2. GOALS PROGRESS STRIP (if any goals configured)
     const goalKeys = metrics.filter(m => goals[m.key] !== undefined && goals[m.key] !== null && goals[m.key] !== '');
@@ -4071,8 +4251,16 @@ const COSPLAY_STATUS_CLASSES = {
 };
 
 async function renderCosplays(el) {
-    const projects = await api(eel.get_cosplay_projects) || [];
+    const [projectsRes, clientsRes] = await Promise.all([
+        api(eel.get_cosplay_projects),
+        api(eel.get_cosplay_clients)
+    ]);
+    const projects = projectsRes || [];
+    const clients = clientsRes || [];
     state.cosplayProjects = projects;
+    state.cosplayClients = clients;
+    if (!state.cosplayFilter) state.cosplayFilter = 'all';
+    if (state.cosplaySearch === undefined) state.cosplaySearch = '';
 
     const activeList = projects.filter(p => p.status !== 'entregado');
     const totalPendingBalance = activeList.reduce((acc, p) => acc + (parseFloat(p.balance_due) || 0), 0);
@@ -4081,10 +4269,14 @@ async function renderCosplays(el) {
 
     let html = `<div class="page-header">
         <div><h1>Cosplays</h1><div class="subtitle">Taller · Comisiones y proyectos</div></div>
-        <div class="page-actions"><button class="btn btn-primary" onclick="showCosplayProjectForm()">+ Nuevo cosplay</button></div>
+        <div class="page-actions" style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-secondary" onclick="showCosplayQuoteCalculator()">🧮 Cotizador</button>
+            <button class="btn btn-secondary" onclick="showCosplayClientsModal()">👥 Clientes (${clients.length})</button>
+            <button class="btn btn-primary" onclick="showCosplayProjectForm()">+ Nuevo cosplay</button>
+        </div>
     </div>
 
-    <div class="stats-row" style="margin-bottom:18px">
+    <div class="stats-row" style="margin-bottom:16px">
         <div class="stat-card coral">
             <div class="stat-icon">🎭</div>
             <div class="stat-value">${activeList.length}</div>
@@ -4112,14 +4304,77 @@ async function renderCosplays(el) {
             <div class="empty-icon">🎭</div>
             <h3>Sin proyectos de cosplay</h3>
             <p>Registra comisiones, trajes en venta, pelucas o props con sus materiales, medidas y señas.</p>
-            <button class="btn btn-primary" style="margin-top:12px" onclick="showCosplayProjectForm()">+ Crear primer cosplay</button>
+            <div style="display:flex;gap:8px;justify-content:center;margin-top:12px;flex-wrap:wrap">
+                <button class="btn btn-secondary" onclick="showCosplayQuoteCalculator()">🧮 Calcular presupuesto</button>
+                <button class="btn btn-primary" onclick="showCosplayProjectForm()">+ Crear primer cosplay</button>
+            </div>
         </div>`;
         el.innerHTML = html;
         return;
     }
 
-    html += `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px">`;
-    for (const p of projects) {
+    const filters = [
+        { id: 'all', label: `Todos (${projects.length})` },
+        { id: 'active', label: `Activos (${activeList.length})` },
+        { id: 'unpaid', label: `Por cobrar (${projects.filter(p => (p.balance_due || 0) > 0 && p.status !== 'entregado').length})` },
+        { id: 'stock', label: `Stock / Propio (${projects.filter(p => p.project_type === 'Stock / Venta' || p.project_type === 'Propio').length})` },
+        { id: 'done', label: `Entregados (${projects.filter(p => p.status === 'entregado').length})` },
+    ];
+
+    html += `<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+        <div class="subnav" style="margin-bottom:0">
+            ${filters.map(f => `<button class="subnav-item${state.cosplayFilter === f.id ? ' active' : ''}" onclick="setCosplayFilter('${f.id}')">${f.label}</button>`).join('')}
+        </div>
+        <input type="text" id="cosplaySearchInput" class="form-control" placeholder="🔍 Buscar personaje, serie o cliente..." value="${esc(state.cosplaySearch)}" oninput="onCosplaySearchInput(this.value)" style="max-width:260px;padding:6px 12px;font-size:0.84rem">
+    </div>
+    <div id="cosplaysGridMount">${buildCosplaysGridHTML(projects)}</div>`;
+
+    el.innerHTML = html;
+}
+
+function setCosplayFilter(filterId) {
+    state.cosplayFilter = filterId;
+    const mount = document.getElementById('cosplaysGridMount');
+    if (mount) {
+        mount.innerHTML = buildCosplaysGridHTML(state.cosplayProjects || []);
+        document.querySelectorAll('#view-cosplays .subnav-item').forEach((btn, idx) => {
+            const ids = ['all', 'active', 'unpaid', 'stock', 'done'];
+            btn.classList.toggle('active', ids[idx] === filterId);
+        });
+    } else {
+        navigate('cosplays');
+    }
+}
+
+function onCosplaySearchInput(val) {
+    state.cosplaySearch = val || '';
+    const mount = document.getElementById('cosplaysGridMount');
+    if (mount) {
+        mount.innerHTML = buildCosplaysGridHTML(state.cosplayProjects || []);
+    }
+}
+
+function buildCosplaysGridHTML(projects) {
+    const f = state.cosplayFilter || 'all';
+    const q = (state.cosplaySearch || '').trim().toLowerCase();
+    const filtered = projects.filter(p => {
+        if (f === 'active' && p.status === 'entregado') return false;
+        if (f === 'unpaid' && (!p.balance_due || p.balance_due <= 0 || p.status === 'entregado')) return false;
+        if (f === 'stock' && p.project_type !== 'Stock / Venta' && p.project_type !== 'Propio') return false;
+        if (f === 'done' && p.status !== 'entregado') return false;
+        if (q) {
+            const hay = `${p.character_name || ''} ${p.series_name || ''} ${p.client_name || ''} ${p.category || ''}`.toLowerCase();
+            if (!hay.includes(q)) return false;
+        }
+        return true;
+    });
+
+    if (filtered.length === 0) {
+        return `<div class="empty-state" style="padding:30px"><p>No hay cosplays en este filtro</p></div>`;
+    }
+
+    let html = `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px">`;
+    for (const p of filtered) {
         const sLabel = COSPLAY_STATUS_LABELS[p.status] || p.status;
         const sCls = COSPLAY_STATUS_CLASSES[p.status] || 'tag-primary';
         const items = p.items || [];
@@ -4186,7 +4441,7 @@ async function renderCosplays(el) {
         </div>`;
     }
     html += `</div>`;
-    el.innerHTML = html;
+    return html;
 }
 
 async function cycleCosplayStatus(id) {
@@ -4202,14 +4457,24 @@ async function cycleCosplayStatus(id) {
     }
 }
 
-function showCosplayProjectForm(id = null) {
-    const p = id ? (state.cosplayProjects || []).find(x => x.id === id) : null;
+function showCosplayProjectForm(id = null, prefill = null) {
+    const p = id ? (state.cosplayProjects || []).find(x => x.id === id) : prefill;
+    const clients = state.cosplayClients || [];
     const types = ['Comisión', 'Stock / Venta', 'Propio', 'Alquiler'];
     const cats = ['Traje completo', 'Costura / Traje', 'Props / Armadura', 'Peluca', 'Accesorios'];
+    const clientSelectHtml = clients.length > 0 ? `
+        <div class="form-group" style="margin-bottom:8px">
+            <label>⚡ Autocompletar cliente guardado</label>
+            <select class="form-control" onchange="applySavedCosplayClient(this.value)">
+                <option value="">— Seleccionar cliente anterior —</option>
+                ${clients.map((c, idx) => `<option value="${idx}">${esc(c.name)}${c.contact ? ' (' + esc(c.contact) + ')' : ''}</option>`).join('')}
+            </select>
+        </div>` : '';
+
     const html = `<form id="modalForm">
         <div class="form-row">
-            <div class="form-group"><label>Personaje *</label><input class="form-control" name="character_name" value="${esc(p ? p.character_name : '')}" placeholder="Ej: Asa Mitaka, 2B, Makima..."></div>
-            <div class="form-group"><label>Anime / Juego / Serie</label><input class="form-control" name="series_name" value="${esc(p ? p.series_name : '')}" placeholder="Ej: Chainsaw Man"></div>
+            <div class="form-group"><label>Personaje *</label><input class="form-control" name="character_name" value="${esc(p && p.character_name ? p.character_name : '')}" placeholder="Ej: Asa Mitaka, 2B, Makima..."></div>
+            <div class="form-group"><label>Anime / Juego / Serie</label><input class="form-control" name="series_name" value="${esc(p && p.series_name ? p.series_name : '')}" placeholder="Ej: Chainsaw Man"></div>
         </div>
         <div class="form-row">
             <div class="form-group"><label>Tipo</label><select class="form-control" name="project_type">
@@ -4219,29 +4484,30 @@ function showCosplayProjectForm(id = null) {
                 ${cats.map(c => `<option value="${c}" ${p && p.category === c ? 'selected' : ''}>${c}</option>`).join('')}
             </select></div>
         </div>
+        ${clientSelectHtml}
         <div class="form-row">
-            <div class="form-group"><label>Cliente</label><input class="form-control" name="client_name" value="${esc(p ? p.client_name : '')}"></div>
-            <div class="form-group"><label>Contacto (IG / WhatsApp)</label><input class="form-control" name="client_contact" value="${esc(p ? p.client_contact : '')}" placeholder="@usuario o celular"></div>
+            <div class="form-group"><label>Cliente</label><input class="form-control" id="cp_client_name" name="client_name" value="${esc(p && p.client_name ? p.client_name : '')}"></div>
+            <div class="form-group"><label>Contacto (IG / WhatsApp)</label><input class="form-control" id="cp_client_contact" name="client_contact" value="${esc(p && p.client_contact ? p.client_contact : '')}" placeholder="@usuario o celular"></div>
         </div>
-        <div class="form-group"><label>Talla / Medidas del cliente</label><input class="form-control" name="size_measurements" value="${esc(p ? p.size_measurements : '')}" placeholder="Ej: Talla S · Busto 86, Cintura 65, Cadera 92, Alt 1.62"></div>
+        <div class="form-group"><label>Talla / Medidas del cliente</label><input class="form-control" id="cp_size_meas" name="size_measurements" value="${esc(p && p.size_measurements ? p.size_measurements : '')}" placeholder="Ej: Talla S · Busto 86, Cintura 65, Cadera 92, Alt 1.62"></div>
         <div class="form-row">
-            <div class="form-group"><label>Precio total ($)</label><input type="number" step="1" class="form-control" name="price" value="${p ? p.price : ''}"></div>
-            <div class="form-group"><label>Seña / Adelanto recibido ($)</label><input type="number" step="1" class="form-control" name="deposit" value="${p ? p.deposit : ''}"></div>
+            <div class="form-group"><label>Precio total ($)</label><input type="number" step="1" class="form-control" name="price" value="${p && p.price !== undefined ? p.price : ''}"></div>
+            <div class="form-group"><label>Seña / Adelanto recibido ($)</label><input type="number" step="1" class="form-control" name="deposit" value="${p && p.deposit !== undefined ? p.deposit : ''}"></div>
         </div>
         <div class="form-row">
-            <div class="form-group"><label>Costo base materiales ($)</label><input type="number" step="1" class="form-control" name="materials_cost" value="${p ? p.materials_cost : ''}"></div>
+            <div class="form-group"><label>Costo base materiales ($)</label><input type="number" step="1" class="form-control" name="materials_cost" value="${p && p.materials_cost !== undefined ? p.materials_cost : ''}"></div>
             <div class="form-group"><label>Fecha de entrega / Evento</label><input type="date" class="form-control" name="due_date" value="${p && p.due_date ? p.due_date : ''}"></div>
         </div>
         <div class="form-group"><label>Estado</label><select class="form-control" name="status">
-            ${COSPLAY_STATUS_CYCLE.map(s => `<option value="${s}" ${(p ? p.status : 'cotizado') === s ? 'selected' : ''}>${COSPLAY_STATUS_LABELS[s]}</option>`).join('')}
+            ${COSPLAY_STATUS_CYCLE.map(s => `<option value="${s}" ${(p && p.status ? p.status : 'cotizado') === s ? 'selected' : ''}>${COSPLAY_STATUS_LABELS[s]}</option>`).join('')}
         </select></div>
-        <div class="form-group"><label>Notas / Referencias</label><textarea class="form-control" name="notes">${esc(p ? p.notes : '')}</textarea></div>
+        <div class="form-group"><label>Notas / Referencias</label><textarea class="form-control" name="notes">${esc(p && p.notes ? p.notes : '')}</textarea></div>
     </form>`;
-    openModal(p ? 'Editar cosplay' : 'Nuevo cosplay', html);
+    openModal(id ? 'Editar cosplay' : 'Nuevo cosplay', html);
     document.getElementById('modalSave').onclick = async () => {
         const f = new FormData(document.getElementById('modalForm'));
         const data = {
-            id: p ? p.id : null,
+            id: id || null,
             character_name: f.get('character_name'),
             series_name: f.get('series_name'),
             project_type: f.get('project_type'),
@@ -4261,6 +4527,163 @@ function showCosplayProjectForm(id = null) {
         if (res && res.ok) { showToast('Guardado'); closeModal(); navigate('cosplays'); }
         else showToast('Error');
     };
+}
+
+function applySavedCosplayClient(idxStr) {
+    if (idxStr === '' || idxStr === null) return;
+    const c = (state.cosplayClients || [])[parseInt(idxStr)];
+    if (!c) return;
+    const nEl = document.getElementById('cp_client_name');
+    const cEl = document.getElementById('cp_client_contact');
+    const mEl = document.getElementById('cp_size_meas');
+    if (nEl) nEl.value = c.name || '';
+    if (cEl) cEl.value = c.contact || '';
+    if (mEl) mEl.value = c.size_measurements || '';
+}
+
+function showCosplayQuoteCalculator() {
+    const savedRate = localStorage.getItem('nicole_cosplay_hourly_rate') || '4000';
+    const html = `<div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Costo estimado de telas y materiales ($)</label>
+                <input type="number" id="cq_mat" class="form-control" value="25000" oninput="recalcCosplayQuote()">
+            </div>
+            <div class="form-group">
+                <label>Horas de confección / trabajo</label>
+                <input type="number" id="cq_hours" class="form-control" value="10" oninput="recalcCosplayQuote()">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Tu valor por hora ($)</label>
+                <input type="number" id="cq_rate" class="form-control" value="${esc(savedRate)}" oninput="recalcCosplayQuote()">
+            </div>
+            <div class="form-group">
+                <label>Insumos extra / complejidad (%)</label>
+                <input type="number" id="cq_margin" class="form-control" value="15" oninput="recalcCosplayQuote()">
+            </div>
+        </div>
+        <div class="card" style="background:var(--bg);padding:14px 16px;margin-top:8px">
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center">
+                <div>
+                    <div style="font-size:0.74rem;color:var(--text-muted)">Precio Sugerido</div>
+                    <div id="cq_total" style="font-size:1.25rem;font-weight:700;color:var(--primary)">$ 0</div>
+                </div>
+                <div>
+                    <div style="font-size:0.74rem;color:var(--text-muted)">Seña (50%)</div>
+                    <div id="cq_deposit" style="font-size:1.15rem;font-weight:700">$ 0</div>
+                </div>
+                <div>
+                    <div style="font-size:0.74rem;color:var(--text-muted)">Ganancia Neta</div>
+                    <div id="cq_profit" style="font-size:1.15rem;font-weight:700;color:var(--sage)">$ 0</div>
+                </div>
+            </div>
+        </div>
+    </div>`;
+    openModal('🧮 Calculadora de Comisión', html);
+    const saveBtn = document.getElementById('modalSave');
+    saveBtn.textContent = '✨ Crear cosplay con este precio';
+    saveBtn.onclick = () => {
+        const { mat, total, deposit } = recalcCosplayQuote();
+        saveBtn.textContent = 'Guardar';
+        showCosplayProjectForm(null, {
+            price: total,
+            deposit: deposit,
+            materials_cost: mat,
+            status: 'cotizado'
+        });
+    };
+    recalcCosplayQuote();
+}
+
+function recalcCosplayQuote() {
+    const mat = parseFloat(document.getElementById('cq_mat')?.value) || 0;
+    const hours = parseFloat(document.getElementById('cq_hours')?.value) || 0;
+    const rate = parseFloat(document.getElementById('cq_rate')?.value) || 0;
+    const marginPct = parseFloat(document.getElementById('cq_margin')?.value) || 0;
+    if (rate > 0) localStorage.setItem('nicole_cosplay_hourly_rate', String(rate));
+
+    const labor = hours * rate;
+    const subtotal = mat + labor;
+    const total = Math.round(subtotal * (1 + marginPct / 100));
+    const deposit = Math.round(total * 0.5);
+    const profit = Math.max(0, total - mat);
+
+    const tEl = document.getElementById('cq_total');
+    const dEl = document.getElementById('cq_deposit');
+    const pEl = document.getElementById('cq_profit');
+    if (tEl) tEl.textContent = '$ ' + total.toLocaleString('es-AR');
+    if (dEl) dEl.textContent = '$ ' + deposit.toLocaleString('es-AR');
+    if (pEl) pEl.textContent = '$ ' + profit.toLocaleString('es-AR');
+    return { mat, total, deposit, profit };
+}
+
+async function showCosplayClientsModal() {
+    const clients = await api(eel.get_cosplay_clients) || [];
+    state.cosplayClients = clients;
+
+    let html = `<div>
+        <div style="background:var(--bg);padding:10px 12px;border-radius:10px;margin-bottom:12px">
+            <div style="font-size:0.78rem;font-weight:700;margin-bottom:6px">+ Guardar / Actualizar ficha de cliente</div>
+            <div class="form-row">
+                <div class="form-group" style="margin-bottom:6px"><input id="cc_name" class="form-control" placeholder="Nombre del cliente *"></div>
+                <div class="form-group" style="margin-bottom:6px"><input id="cc_contact" class="form-control" placeholder="@instagram o WhatsApp"></div>
+            </div>
+            <div style="display:flex;gap:6px">
+                <input id="cc_meas" class="form-control" placeholder="Medidas (Ej: Talla S · Busto 86, Cintura 65, Cadera 92, Alt 1.62)" style="flex:1">
+                <button type="button" class="btn btn-primary btn-sm" onclick="saveCosplayClientFromModal()">Guardar</button>
+            </div>
+        </div>`;
+
+    if (clients.length === 0) {
+        html += `<div class="empty-state" style="padding:18px"><p>Aún no hay fichas de clientes guardadas</p></div>`;
+    } else {
+        html += `<div style="max-height:280px;overflow-y:auto">`;
+        clients.forEach((c, idx) => {
+            html += `<div class="card" style="padding:10px 12px;margin-bottom:8px;background:var(--bg);display:flex;justify-content:space-between;align-items:center;gap:8px">
+                <div style="flex:1;cursor:pointer" onclick="fillCosplayClientForm(${idx})" title="Clic para editar arriba">
+                    <div style="font-weight:700;font-size:0.9rem">👤 ${esc(c.name)} ${c.contact ? `<span style="font-weight:400;color:var(--text-muted)">(${esc(c.contact)})</span>` : ''}</div>
+                    <div style="font-size:0.8rem;color:var(--text-muted);margin-top:2px">📏 ${esc(c.size_measurements || 'Sin medidas registradas')}</div>
+                </div>
+                <div style="display:flex;gap:4px">
+                    <button class="btn btn-secondary btn-sm" onclick="closeModal();showCosplayProjectForm(null,{client_name:'${esc(c.name)}',client_contact:'${esc(c.contact||'')}',size_measurements:'${esc(c.size_measurements||'')}'})">+ Cosplay</button>
+                    ${c.id ? `<button class="btn btn-ghost btn-sm" onclick="deleteCosplayClientFromModal(${c.id})">✕</button>` : ''}
+                </div>
+            </div>`;
+        });
+        html += `</div>`;
+    }
+    html += `</div>`;
+
+    openModal('👥 Fichas de Clientes y Medidas', html);
+    document.getElementById('modalSave').style.display = 'none';
+    document.getElementById('modalCancel').textContent = 'Cerrar';
+    document.getElementById('modalCancel').onclick = () => { closeModal(); navigate('cosplays'); };
+}
+
+function fillCosplayClientForm(idx) {
+    const c = (state.cosplayClients || [])[idx];
+    if (!c) return;
+    document.getElementById('cc_name').value = c.name || '';
+    document.getElementById('cc_contact').value = c.contact || '';
+    document.getElementById('cc_meas').value = c.size_measurements || '';
+}
+
+async function saveCosplayClientFromModal() {
+    const name = document.getElementById('cc_name')?.value.trim();
+    const contact = document.getElementById('cc_contact')?.value.trim();
+    const size_measurements = document.getElementById('cc_meas')?.value.trim();
+    if (!name) { showToast('Ingresa el nombre del cliente'); return; }
+    await api(eel.save_cosplay_client, { name, contact, size_measurements });
+    showToast('Ficha guardada');
+    showCosplayClientsModal();
+}
+
+async function deleteCosplayClientFromModal(id) {
+    if (!confirm('¿Eliminar esta ficha de cliente?')) return;
+    await api(eel.delete_cosplay_client, id);
+    showCosplayClientsModal();
 }
 
 async function deleteCosplayProject(id) {

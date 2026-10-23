@@ -1057,6 +1057,12 @@ def get_dashboard_stats():
             "SELECT character_name, due_date FROM cosplay_projects WHERE status NOT IN ('entregado') AND due_date IS NOT NULL AND due_date != '' ORDER BY due_date ASC LIMIT 1"
         ).fetchone()
 
+        # Estradiol stock & next lab date
+        stock_row = conn.execute("SELECT value FROM config WHERE key='estradiol_stock'").fetchone()
+        lab_row = conn.execute("SELECT value FROM config WHERE key='next_lab_date'").fetchone()
+        estradiol_stock = int(stock_row['value']) if (stock_row and stock_row['value'] and str(stock_row['value']).lstrip('-').isdigit()) else None
+        next_lab_date = lab_row['value'] if (lab_row and lab_row['value']) else None
+
         return {
             'overdue_tasks': overdue,
             'pending_tasks': pending,
@@ -1066,6 +1072,8 @@ def get_dashboard_stats():
             'overdue_injection': overdue_injection,
             'next_injection_date': next_injection_date,
             'next_injection_days': next_injection_days,
+            'estradiol_stock': estradiol_stock,
+            'next_lab_date': next_lab_date,
             'workouts_month': workouts_month,
             'last_workout_date': last_session['date'] if last_session else None,
             'next_workout_name': next_workout_name,
@@ -1224,6 +1232,19 @@ def save_cosplay_project(data):
     conn = get_connection()
     try:
         pid = data.get('id')
+        cname = (data.get('client_name') or '').strip()
+        if cname and cname.lower() not in ('propio', 'stock', 'propio / stock'):
+            try:
+                conn.execute("""
+                    INSERT INTO cosplay_clients (name, contact, size_measurements)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(name) DO UPDATE SET
+                        contact = COALESCE(NULLIF(excluded.contact, ''), cosplay_clients.contact),
+                        size_measurements = COALESCE(NULLIF(excluded.size_measurements, ''), cosplay_clients.size_measurements)
+                """, (cname, data.get('client_contact') or '', data.get('size_measurements') or ''))
+            except Exception:
+                pass
+
         if pid:
             conn.execute("""
                 UPDATE cosplay_projects
@@ -1257,6 +1278,75 @@ def save_cosplay_project(data):
             ))
             conn.commit()
             return {'ok': True, 'id': cur.lastrowid}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+@eel.expose
+def get_cosplay_clients():
+    conn = get_connection()
+    try:
+        rows = conn.execute("SELECT * FROM cosplay_clients ORDER BY name ASC").fetchall()
+        clients = [dict(r) for r in rows]
+        # Also include any distinct clients from cosplay_projects not yet in cosplay_clients
+        known = {c['name'].lower() for c in clients}
+        proj_rows = conn.execute("""
+            SELECT client_name, client_contact, size_measurements
+            FROM cosplay_projects
+            WHERE client_name IS NOT NULL AND TRIM(client_name) != ''
+            ORDER BY id DESC
+        """).fetchall()
+        for pr in proj_rows:
+            nm = (pr['client_name'] or '').strip()
+            if nm and nm.lower() not in known and nm.lower() not in ('propio', 'stock', 'propio / stock'):
+                known.add(nm.lower())
+                clients.append({
+                    'id': None,
+                    'name': nm,
+                    'contact': pr['client_contact'] or '',
+                    'size_measurements': pr['size_measurements'] or '',
+                    'notes': ''
+                })
+        return clients
+    finally:
+        conn.close()
+
+@eel.expose
+def save_cosplay_client(data):
+    conn = get_connection()
+    try:
+        cid = data.get('id')
+        name = (data.get('name') or '').strip()
+        if not name:
+            return {'ok': False, 'error': 'Nombre obligatorio'}
+        if cid:
+            conn.execute("""
+                UPDATE cosplay_clients SET name=?, contact=?, size_measurements=?, notes=? WHERE id=?
+            """, (name, data.get('contact') or '', data.get('size_measurements') or '', data.get('notes') or '', cid))
+        else:
+            conn.execute("""
+                INSERT INTO cosplay_clients (name, contact, size_measurements, notes)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    contact=excluded.contact,
+                    size_measurements=excluded.size_measurements,
+                    notes=excluded.notes
+            """, (name, data.get('contact') or '', data.get('size_measurements') or '', data.get('notes') or ''))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+@eel.expose
+def delete_cosplay_client(id):
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM cosplay_clients WHERE id=?", (id,))
+        conn.commit()
+        return {'ok': True}
     except Exception as e:
         return {'ok': False, 'error': str(e)}
     finally:
@@ -1423,6 +1513,11 @@ def create_injection(data):
             INSERT INTO injections (date, dose_mg, injection_site, notes)
             VALUES (?, ?, ?, ?)
         """, (data['date'], data.get('dose_mg', 4.0), data.get('injection_site'), data.get('notes')))
+        # Auto-decrement estradiol_stock if configured
+        stock_row = conn.execute("SELECT value FROM config WHERE key='estradiol_stock'").fetchone()
+        if stock_row and stock_row['value'] and str(stock_row['value']).lstrip('-').isdigit():
+            new_stock = max(0, int(stock_row['value']) - 1)
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('estradiol_stock', ?)", (str(new_stock),))
         conn.commit()
         return {'ok': True, 'id': cur.lastrowid}
     except Exception as e:

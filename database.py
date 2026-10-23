@@ -456,6 +456,14 @@ def init_db():
             done INTEGER DEFAULT 0,
             FOREIGN KEY (project_id) REFERENCES cosplay_projects(id) ON DELETE CASCADE
         )""",
+        """CREATE TABLE IF NOT EXISTS cosplay_clients (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            contact TEXT,
+            size_measurements TEXT,
+            notes TEXT,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        )""",
     ]:
         try:
             conn.execute(stmt)

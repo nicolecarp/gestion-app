@@ -2278,14 +2278,8 @@ function playBeep(withRestNotification = false) {
         }
     } catch (_) {}
 
-    if (withRestNotification && localStorage.getItem('nicole_notif_rest') !== '0') {
-        sendLocalNotification(
-            '⏰ ¡Descanso terminado!',
-            '¡Tiempo cumplido! A por la siguiente serie 💪',
-            'workout-rest-timer',
-            '/?view=personal'
-        );
-    }
+    // La notificación de fin de descanso la dispara únicamente el Service Worker
+    // (programada en startRestTimer), así no se duplica.
 }
 
 async function sendLocalNotification(title, body, tag = 'nicole-general', url = '/') {
@@ -3036,7 +3030,6 @@ function startRestTimer(seconds, exName = '') {
             clearInterval(state.activeWorkout.restTimerId);
             state.activeWorkout.restTimerId = null;
             state.activeWorkout.restEndTime = 0;
-            cancelRestNotificationInSW();
             playBeep(true);
             showToast('⏰ ¡Descanso terminado!');
             const bar = document.getElementById('awRestBar');

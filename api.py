@@ -1,4 +1,12 @@
-import eel
+try:
+    import eel
+except ImportError:
+    class _DummyEel:
+        @staticmethod
+        def expose(fn):
+            return fn
+    eel = _DummyEel()
+
 from datetime import date, datetime, timedelta
 from database import get_connection
 

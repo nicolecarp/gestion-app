@@ -4,16 +4,29 @@ Reemplaza el puente WebSocket de Eel por HTTP/JSON estándar + un shim automáti
 para que toda la interfaz funcione idéntico en la nube y en iPhone sin abrir navegador de escritorio.
 """
 import os
-import inspect
+import sys
+import glob
+import subprocess
 from functools import wraps
+from types import ModuleType
 from flask import Flask, request, jsonify, send_from_directory, Response, session, redirect, url_for
+
+# Asegurar que `import eel` nunca falle en servidores cloud donde eel no está instalado
+if "eel" not in sys.modules:
+    try:
+        import eel  # noqa: F401
+    except ImportError:
+        dummy_eel = ModuleType("eel")
+        dummy_eel.expose = lambda fn: fn
+        sys.modules["eel"] = dummy_eel
 
 from database import init_db
 import api as api_module
 
 init_db()
 
-WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "web")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+WEB_DIR = os.path.join(BASE_DIR, "web")
 app = Flask(__name__, static_folder=WEB_DIR, static_url_path="")
 app.secret_key = os.environ.get("SECRET_KEY", "nicole-gestion-secret-key-2026")
 
@@ -31,6 +44,39 @@ def login_required(f):
             return redirect(url_for("login_page"))
         return f(*args, **kwargs)
     return decorated
+
+
+def _pull_and_reload():
+    """Hace git pull del repositorio y toca el archivo WSGI de PythonAnywhere para recargar."""
+    try:
+        proc = subprocess.run(
+            ["git", "pull", "origin", "master"],
+            cwd=BASE_DIR,
+            capture_output=True,
+            text=True,
+            timeout=25
+        )
+        output = (proc.stdout or "") + (proc.stderr or "")
+        # Tocar el archivo WSGI en PythonAnywhere para que recargue solo sin entrar al panel
+        for wsgi_file in glob.glob("/var/www/*_wsgi.py"):
+            try:
+                os.utime(wsgi_file, None)
+            except Exception:
+                pass
+        return {"ok": proc.returncode == 0, "output": output.strip()}
+    except Exception as e:
+        return {"ok": False, "output": str(e)}
+
+
+# Exponer también como función de api_module para poder llamarla desde Ajustes en la app
+api_module.sync_cloud_from_github = _pull_and_reload
+
+
+@app.route("/webhook/github", methods=["GET", "POST"])
+def github_webhook():
+    """Endpoint para que GitHub (o un clic manual) actualice y recargue PythonAnywhere automáticamente."""
+    res = _pull_and_reload()
+    return jsonify(res)
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -132,7 +178,6 @@ def index():
 
 @app.route("/<path:path>")
 def static_files(path):
-    # Permitir iconos públicos para que iOS cargue el apple-touch-icon en la pantalla de login
     if APP_PASSWORD and not session.get("authenticated"):
         allowed_public = {"apple-touch-icon.png", "apple-touch-icon-precomposed.png", "favicon.png", "favicon.ico", "manifest.json"}
         if path not in allowed_public:

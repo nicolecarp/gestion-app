@@ -4196,13 +4196,35 @@ async function renderSettings(el) {
         </div>
     </div>
     <div class="settings-section">
-        <h3>Datos</h3>
+        <h3>☁️ Servidor en la Nube (PythonAnywhere / GitHub)</h3>
         <div class="card">
-            <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px">Exporta o respalda tu información.</p>
-            <button class="btn btn-secondary" onclick="showToast('Próximamente')">Exportar datos</button>
+            <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px">
+                Cuando hagamos mejoras y las subamos a GitHub, toca este botón para descargar los últimos cambios y recargar el servidor en la nube automáticamente (sin perder tu base de datos):
+            </p>
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                <button class="btn btn-primary" onclick="syncCloudFromGithub()">🔄 Actualizar app desde GitHub</button>
+                <button class="btn btn-secondary" onclick="showToast('Próximamente')">Exportar datos</button>
+            </div>
         </div>
     </div>`;
 }
+
+async function syncCloudFromGithub() {
+    showToast('Descargando cambios desde GitHub...');
+    try {
+        const res = await fetch('/webhook/github', { method: 'POST' });
+        const data = await res.json();
+        if (data && data.ok) {
+            showToast('✨ Actualizado! Recargando en 3 segundos...');
+            setTimeout(() => window.location.reload(), 3000);
+        } else {
+            showToast('Resultado: ' + (data.output || 'Usa git pull en local'));
+        }
+    } catch (e) {
+        showToast('Esta función es para el servidor en la nube');
+    }
+}
+window.syncCloudFromGithub = syncCloudFromGithub;
 
 function copyLanUrl(url) {
     if (navigator.clipboard && navigator.clipboard.writeText) {

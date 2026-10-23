@@ -2147,70 +2147,18 @@ function fmtSec(sec) {
 
 // --- AUDIO, HAPTICS & NOTIFICATIONS (iPhone / PWA / Desktop) ---
 let __sharedAudioCtx = null;
-let __chimeAudioEl = null;
 let __audioUnlocked = false;
 let __swRegistration = null;
 
-function buildChimeWavDataUri() {
-    const sampleRate = 22050;
-    const durationSec = 0.65;
-    const numSamples = Math.floor(sampleRate * durationSec);
-    const buffer = new ArrayBuffer(44 + numSamples * 2);
-    const view = new DataView(buffer);
-    const writeStr = (offset, str) => {
-        for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
-    };
-    writeStr(0, 'RIFF');
-    view.setUint32(4, 36 + numSamples * 2, true);
-    writeStr(8, 'WAVE');
-    writeStr(12, 'fmt ');
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true); // PCM
-    view.setUint16(22, 1, true); // Mono
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * 2, true);
-    view.setUint16(32, 2, true);
-    view.setUint16(34, 16, true);
-    writeStr(36, 'data');
-    view.setUint32(40, numSamples * 2, true);
-
-    // 3-note ascending chime: A5 (880Hz) -> D6 (1174.66Hz) -> F#6 (1479.98Hz)
-    const notes = [
-        { start: 0.00, end: 0.17, freq: 880.0 },
-        { start: 0.18, end: 0.36, freq: 1174.66 },
-        { start: 0.37, end: 0.64, freq: 1479.98 },
-    ];
-    for (let i = 0; i < numSamples; i++) {
-        const t = i / sampleRate;
-        let sample = 0;
-        for (const n of notes) {
-            if (t >= n.start && t <= n.end) {
-                const localT = t - n.start;
-                const len = n.end - n.start;
-                const env = Math.sin(Math.min(1, localT / 0.015) * (Math.PI / 2)) * Math.exp(-localT * (4.5 / len));
-                sample = (Math.sin(2 * Math.PI * n.freq * localT) * 0.75 + Math.sin(4 * Math.PI * n.freq * localT) * 0.25) * env;
-                break;
-            }
-        }
-        const pcm = Math.max(-1, Math.min(1, sample));
-        view.setInt16(44 + i * 2, pcm < 0 ? pcm * 0x8000 : pcm * 0x7FFF, true);
-    }
-
-    const bytes = new Uint8Array(buffer);
-    let binary = '';
-    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-    return 'data:audio/wav;base64,' + btoa(binary);
-}
-
 function initAudioAndNotifications() {
     try {
-        // Force iOS 17+ Safari/PWA to play sound even when the physical Silent switch is muted
+        // 'ambient' mixes our chime on top of Spotify / Apple Music / YouTube without ever pausing your music!
         if (navigator.audioSession) {
-            navigator.audioSession.type = 'playback';
+            navigator.audioSession.type = 'ambient';
         }
     } catch (_) {}
 
-    // Create hidden iOS 17.4+ / iOS 18 Taptic Engine switch element for native iPhone vibration
+    // Create hidden iOS 17.4+ / iOS 18 Taptic Engine switch element
     if (!document.getElementById('iosHapticLabel')) {
         const lbl = document.createElement('label');
         lbl.id = 'iosHapticLabel';
@@ -2223,14 +2171,7 @@ function initAudioAndNotifications() {
         document.body.appendChild(lbl);
     }
 
-    // Prepare reusable HTML5 <audio> element with synthesized WAV chime
-    if (!__chimeAudioEl) {
-        __chimeAudioEl = new Audio(buildChimeWavDataUri());
-        __chimeAudioEl.preload = 'auto';
-        __chimeAudioEl.playsInline = true;
-    }
-
-    // Unlock audio on first touch/click anywhere in the app
+    // Unlock WebAudio on first touch/click anywhere in the app (does NOT pause background music)
     const onceUnlock = () => {
         unlockAudioOnUserTap();
     };
@@ -2255,7 +2196,7 @@ function initAudioAndNotifications() {
 function unlockAudioOnUserTap() {
     try {
         if (navigator.audioSession) {
-            navigator.audioSession.type = 'playback';
+            navigator.audioSession.type = 'ambient';
         }
     } catch (_) {}
     try {
@@ -2271,30 +2212,17 @@ function unlockAudioOnUserTap() {
                 src.buffer = buf;
                 src.connect(__sharedAudioCtx.destination);
                 src.start(0);
-            }
-        }
-    } catch (_) {}
-    try {
-        if (__chimeAudioEl && !__audioUnlocked) {
-            __chimeAudioEl.volume = 0.01;
-            const p = __chimeAudioEl.play();
-            if (p && typeof p.then === 'function') {
-                p.then(() => {
-                    __chimeAudioEl.pause();
-                    __chimeAudioEl.currentTime = 0;
-                    __chimeAudioEl.volume = 1.0;
-                    __audioUnlocked = true;
-                }).catch(() => {});
+                __audioUnlocked = true;
             }
         }
     } catch (_) {}
 }
 
-function triggerHaptic(doublePulse = false) {
+function triggerHaptic(strongBurst = false) {
     // 1. Standard Vibration API (Android)
     try {
         if (navigator.vibrate) {
-            navigator.vibrate(doublePulse ? [220, 100, 260] : [60]);
+            navigator.vibrate(strongBurst ? [250, 100, 250, 100, 350] : [70]);
         }
     } catch (_) {}
     // 2. iOS 17.4+ / iOS 18 Taptic Engine Switch Haptic (iPhone)
@@ -2302,9 +2230,10 @@ function triggerHaptic(doublePulse = false) {
         const lbl = document.getElementById('iosHapticLabel');
         if (lbl) {
             lbl.click();
-            if (doublePulse) {
-                setTimeout(() => { try { lbl.click(); } catch (_) {} }, 180);
-                setTimeout(() => { try { lbl.click(); } catch (_) {} }, 360);
+            if (strongBurst) {
+                [80, 160, 260, 360, 460].forEach(ms => {
+                    setTimeout(() => { try { lbl.click(); } catch (_) {} }, ms);
+                });
             }
         }
     } catch (_) {}
@@ -2314,47 +2243,38 @@ function playBeep(withRestNotification = false) {
     triggerHaptic(true);
 
     try {
+        // Keep 'ambient' so Spotify / Apple Music / YouTube never pauses
         if (navigator.audioSession) {
-            navigator.audioSession.type = 'playback';
+            navigator.audioSession.type = 'ambient';
         }
     } catch (_) {}
 
-    // Play HTML5 WAV Chime (works on iPhone even with Silent Switch when playback session or unlocked)
-    let playedWav = false;
-    try {
-        if (!__chimeAudioEl) {
-            __chimeAudioEl = new Audio(buildChimeWavDataUri());
-        }
-        __chimeAudioEl.volume = 1.0;
-        __chimeAudioEl.currentTime = 0;
-        const playPromise = __chimeAudioEl.play();
-        if (playPromise && typeof playPromise.catch === 'function') {
-            playPromise.catch(() => {});
-        }
-        playedWav = true;
-    } catch (_) {}
-
-    // Also play on shared WebAudio context as reinforcement
+    // Play pure WebAudio chime + low sub-bass thump (mixes over music without pausing it)
     try {
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
         if (AudioCtx) {
             if (!__sharedAudioCtx) __sharedAudioCtx = new AudioCtx();
             if (__sharedAudioCtx.state === 'suspended') __sharedAudioCtx.resume();
-            const playTone = (freq, startOffset, duration) => {
+            const playTone = (freq, startOffset, duration, peakGain = 0.42, type = 'triangle') => {
                 const osc = __sharedAudioCtx.createOscillator();
                 const gain = __sharedAudioCtx.createGain();
-                osc.type = 'sine';
+                osc.type = type;
                 osc.frequency.setValueAtTime(freq, __sharedAudioCtx.currentTime + startOffset);
-                gain.gain.setValueAtTime(playedWav ? 0.15 : 0.35, __sharedAudioCtx.currentTime + startOffset);
+                gain.gain.setValueAtTime(peakGain, __sharedAudioCtx.currentTime + startOffset);
                 gain.gain.exponentialRampToValueAtTime(0.008, __sharedAudioCtx.currentTime + startOffset + duration);
                 osc.connect(gain);
                 gain.connect(__sharedAudioCtx.destination);
                 osc.start(__sharedAudioCtx.currentTime + startOffset);
                 osc.stop(__sharedAudioCtx.currentTime + startOffset + duration);
             };
-            playTone(880, 0, 0.18);
-            playTone(1174.66, 0.19, 0.22);
-            playTone(1479.98, 0.38, 0.28);
+            // 3-note ascending chime that cuts clearly over music without pausing it
+            playTone(880, 0.00, 0.18, 0.40, 'triangle');
+            playTone(1174.66, 0.19, 0.20, 0.42, 'triangle');
+            playTone(1479.98, 0.39, 0.32, 0.48, 'triangle');
+            // Subtle tactile sub-bass thump (70Hz) for headphones/speakers
+            playTone(72, 0.00, 0.15, 0.50, 'sine');
+            playTone(72, 0.19, 0.15, 0.50, 'sine');
+            playTone(85, 0.39, 0.25, 0.55, 'sine');
         }
     } catch (_) {}
 
@@ -3332,7 +3252,7 @@ async function renderPersonalProgress(el) {
             const summary = Object.entries(byEx).map(([k, v]) => `<strong>${esc(k)}:</strong> ${v.join(', ')}`).join(' · ');
             html += `<tr>
                 <td style="white-space:nowrap">
-                    <span style="cursor:pointer;border-bottom:1px dashed var(--border)" title="Cambiar fecha" onclick="editWorkoutSessionDate(${sess.id}, '${esc(sess.date)}')">
+                    <span style="cursor:pointer;border-bottom:1px dashed var(--border)" title="Cambiar fecha" onclick="editWorkoutSessionDate(${Number(sess.id)}, ${esc(JSON.stringify(String(sess.date || '')))})">
                         <strong>${fmtDate(sess.date)}</strong> <span style="font-size:0.72rem;opacity:0.7">✏️</span>
                     </span>
                 </td>
@@ -5115,7 +5035,7 @@ async function showCosplayClientsModal() {
                     <div style="font-size:0.8rem;color:var(--text-muted);margin-top:2px">📏 ${esc(c.size_measurements || 'Sin medidas registradas')}</div>
                 </div>
                 <div style="display:flex;gap:4px">
-                    <button class="btn btn-secondary btn-sm" onclick="closeModal();showCosplayProjectForm(null,{client_name:'${esc(c.name)}',client_contact:'${esc(c.contact||'')}',size_measurements:'${esc(c.size_measurements||'')}'})">+ Cosplay</button>
+                    <button class="btn btn-secondary btn-sm" onclick="closeModal();showCosplayProjectForm(null,${esc(JSON.stringify({client_name: c.name || '', client_contact: c.contact || '', size_measurements: c.size_measurements || ''}))})">+ Cosplay</button>
                     ${c.id ? `<button class="btn btn-ghost btn-sm" onclick="deleteCosplayClientFromModal(${c.id})">✕</button>` : ''}
                 </div>
             </div>`;

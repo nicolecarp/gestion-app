@@ -83,6 +83,10 @@ function todayStr() {
     return localDateStr(new Date());
 }
 
+function today() {
+    return todayStr();
+}
+
 function fmtDate(d) {
     if (!d) return '-';
     const p = d.split('-');
@@ -2008,7 +2012,7 @@ function renderUniversitySchedule(el, subjects, allExams, allAssignments) {
     timelineItems.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
 
     // Find next upcoming milestone
-    const nowStr = today();
+    const nowStr = todayStr();
     const upcomingNext = timelineItems.find(t => t.date && t.date >= nowStr && t.status !== 'passed' && t.status !== 'graded');
 
     let html = '';

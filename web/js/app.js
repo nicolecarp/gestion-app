@@ -2402,20 +2402,21 @@ async function checkSmartDailyNotifications(force = false) {
     if (!force && lastCheck === today) return;
 
     try {
-        const [proj, deadlines, stockRaw, labDate] = await Promise.all([
+        const [proj, deadlines, stockRaw, labDate, cosplays] = await Promise.all([
             api(eel.get_estradiol_projection).catch(() => null),
             api(eel.get_soon_deadlines).catch(() => []),
             api(eel.get_config, 'estradiol_stock').catch(() => null),
             api(eel.get_config, 'next_lab_date').catch(() => null),
+            api(eel.get_cosplay_projects).catch(() => []),
         ]);
 
         const alerts = [];
 
         // 1. Health alerts (Estradiol injection, lab, stock)
         if (localStorage.getItem('nicole_notif_health') !== '0') {
-            if (proj && proj.next_injection_date) {
-                const d = daysUntil(proj.next_injection_date);
-                if (d === 0) alerts.push('💉 Hoy toca tu inyección de Estradiol');
+            if (proj && (proj.next_dose_date || proj.next_injection_date)) {
+                const d = daysUntil(proj.next_dose_date || proj.next_injection_date);
+                if (d !== null && d <= 0) alerts.push(d < 0 ? '💉 Tu inyección de Estradiol está atrasada' : '💉 Hoy toca tu inyección de Estradiol');
                 else if (d === 1) alerts.push('💉 Mañana te toca inyección de Estradiol');
             }
             if (labDate) {
@@ -2430,15 +2431,33 @@ async function checkSmartDailyNotifications(force = false) {
             }
         }
 
-        // 2. Tasks, University Exams & Cosplay Deadlines due today or tomorrow
-        if (localStorage.getItem('nicole_notif_tasks') !== '0' && Array.isArray(deadlines)) {
-            const urgent = deadlines.filter(item => {
-                const d = daysUntil(item.date);
+        // 2. Tareas y entregas de cosplay para hoy / mañana
+        if (localStorage.getItem('nicole_notif_tasks') !== '0') {
+            const dayDiff = (dateStr) => {
+                if (!dateStr) return null;
+                const p = String(dateStr).slice(0, 10).split('-').map(Number);
+                if (p.length !== 3 || p.some(isNaN)) return null;
+                const t = new Date();
+                const a = new Date(t.getFullYear(), t.getMonth(), t.getDate());
+                const b = new Date(p[0], p[1] - 1, p[2]);
+                return Math.round((b - a) / 86400000);
+            };
+            const urgentTasks = (Array.isArray(deadlines) ? deadlines : []).filter(item => {
+                const d = dayDiff(item.due_date || item.date);
                 return d !== null && d >= 0 && d <= 1;
             });
-            if (urgent.length > 0) {
-                const names = urgent.slice(0, 2).map(u => u.title).join(', ');
-                alerts.push(`📌 Para hoy/mañana: ${names}${urgent.length > 2 ? ` (+${urgent.length - 2} más)` : ''}`);
+            if (urgentTasks.length > 0) {
+                const names = urgentTasks.slice(0, 2).map(u => u.title).join(', ');
+                alerts.push(`📌 Tareas para hoy/mañana: ${names}${urgentTasks.length > 2 ? ` (+${urgentTasks.length - 2} más)` : ''}`);
+            }
+            const urgentCosplays = (Array.isArray(cosplays) ? cosplays : []).filter(p => {
+                if (p.status === 'entregado') return false;
+                const d = dayDiff(p.due_date);
+                return d !== null && d >= 0 && d <= 2;
+            });
+            if (urgentCosplays.length > 0) {
+                const names = urgentCosplays.slice(0, 2).map(p => p.character_name).join(', ');
+                alerts.push(`🧵 Entrega de cosplay próxima: ${names}${urgentCosplays.length > 2 ? ` (+${urgentCosplays.length - 2} más)` : ''}`);
             }
         }
 
@@ -2448,8 +2467,10 @@ async function checkSmartDailyNotifications(force = false) {
                 alerts.join(' · '),
                 'nicole-daily-' + today
             );
+            localStorage.setItem('nicole_last_notif_date', today);
+        } else if (force) {
+            showToast('No hay nada pendiente para avisar hoy ✨');
         }
-        localStorage.setItem('nicole_last_notif_date', today);
     } catch (_) {}
 }
 
@@ -2573,6 +2594,120 @@ function formatStretchGuideHTML(rawText, accentColor = 'var(--primary)') {
 }
 
 const EXERCISE_HOWTO_GUIDES = {
+    'clamshells (almejas)': [
+        'Acuéstate de lado con las rodillas flexionadas (unos 45°), los pies juntos y la banda justo encima de las rodillas.',
+        'Apoya la cabeza en tu brazo y mantén la cadera apilada, sin rodar hacia atrás.',
+        'Manteniendo los pies pegados, abre la rodilla de arriba como una almeja, sin mover la pelvis.',
+        'Sostén 1 segundo arriba apretando el glúteo y baja lento (3 segundos). Haz todas las repeticiones y luego cambia de lado.'
+    ],
+    'abducción tumbada': [
+        'Acuéstate de lado con el cuerpo en línea recta y el disco apoyado sobre el muslo de arriba (sujétalo con la mano).',
+        'Flexiona levemente la pierna de abajo para estabilizarte.',
+        'Sube la pierna de arriba estirada, con la punta mirando al frente (no hacia el techo), hasta unos 45°.',
+        'Baja lento sin apoyar del todo y repite. Haz todas las repeticiones y cambia de lado.'
+    ],
+    'zancadas': [
+        'Párate con las mancuernas a los costados y los pies a la altura de la cadera.',
+        'Da un paso largo hacia adelante y baja hasta que ambas rodillas formen 90°.',
+        'Mantén el torso derecho y la rodilla delantera alineada con el pie, sin pasar mucho la punta.',
+        'Empuja con el talón de adelante para volver al inicio. Alterna las piernas o completa una y luego la otra.'
+    ],
+    'abducción sentada': [
+        'Siéntate en una silla o banco con la espalda derecha y la banda fuerte justo encima de las rodillas.',
+        'Mantén los pies apoyados y las rodillas juntas al inicio.',
+        'Abre las rodillas hacia afuera contra la resistencia de la banda, apretando el glúteo.',
+        'Sostén 1 segundo abierta y vuelve lento sin soltar la tensión de la banda.'
+    ],
+    'levantamiento de piernas': [
+        'Acuéstate boca arriba con las piernas estiradas y las manos bajo la cadera o a los lados.',
+        'Pega la zona lumbar al piso contrayendo el abdomen.',
+        'Sube ambas piernas juntas hasta formar 90° con el torso.',
+        'Baja lento sin tocar el piso y sin despegar la espalda baja. Si se arquea, flexiona un poco las rodillas.'
+    ],
+    'stomach vacuums': [
+        'Puedes hacerlo de pie, en cuatro apoyos o acostada. En cuatro apoyos es lo más fácil para empezar.',
+        'Exhala todo el aire por la boca hasta vaciar los pulmones.',
+        'Sin inhalar, mete el ombligo hacia la columna lo más que puedas, como si quisieras tocar la espalda con él.',
+        'Sostén el tiempo indicado respirando superficialmente por el pecho. Relaja y repite.'
+    ],
+    'plancha frontal (plank)': [
+        'Apoya los antebrazos en el piso con los codos justo debajo de los hombros y las piernas estiradas.',
+        'Forma una línea recta de cabeza a talones: aprieta abdomen y glúteos.',
+        'No dejes caer la cadera ni la subas. Mira un punto del piso entre tus manos.',
+        'Respira con calma y sostén hasta el fallo técnico (cuando la cadera empiece a caer, termina).'
+    ],
+    'plancha lateral': [
+        'Acuéstate de lado y apoya el antebrazo con el codo justo debajo del hombro.',
+        'Apila los pies (o pon el de arriba adelante para más equilibrio).',
+        'Levanta la cadera hasta que el cuerpo quede en línea recta, apretando el abdomen.',
+        'Sostén el tiempo indicado y cambia de lado.'
+    ],
+    'real hip thrust': [
+        'Apoya la parte alta de la espalda (debajo de los omóplatos) en un banco o sillón estable, con la barra sobre la cadera (usa una almohadilla).',
+        'Pies al ancho de la cadera, rodillas flexionadas a unos 90° arriba.',
+        'Mete el mentón, mira hacia adelante y empuja con los talones hasta que el cuerpo quede recto de hombros a rodillas.',
+        'Aprieta fuerte el glúteo 1-2 segundos arriba y baja controlado sin apoyar del todo.'
+    ],
+    'split squat (sentadilla dividida)': [
+        'Párate en posición de zancada con un pie adelante y el otro atrás, pies fijos en el piso, mancuernas a los costados.',
+        'Baja recto hacia el piso, doblando ambas rodillas hasta unos 90°, con el torso derecho.',
+        'La rodilla de adelante sigue la línea del pie y el peso va sobre el talón delantero.',
+        'Sube empujando con la pierna de adelante. Haz todas las repeticiones de un lado y luego cambia.'
+    ],
+    'peso muerto rumano (normal)': [
+        'Párate con los pies al ancho de la cadera y una mancuerna en cada mano frente a los muslos.',
+        'Rodillas apenas flexionadas y fijas; empuja la cadera hacia atrás como si cerraras una puerta con la cola.',
+        'Baja las mancuernas pegadas a las piernas manteniendo la espalda recta hasta sentir el estirón en la parte trasera de los muslos.',
+        'Sube empujando la cadera hacia adelante y apretando el glúteo arriba.'
+    ],
+    'caminata lateral (monster walks)': [
+        'Coloca la banda fuerte sobre las rodillas (o los tobillos para más intensidad) y baja a un cuarto de sentadilla.',
+        'Pies al ancho de la cadera, torso levemente inclinado y pecho arriba.',
+        'Da pasos laterales amplios manteniendo la tensión de la banda en todo momento, sin juntar los pies.',
+        'Camina 10 pasos hacia un lado y 10 de vuelta (20 en total) sin subir ni bajar la cadera.'
+    ],
+    'donkey kicks (patadas de burro)': [
+        'Ponte en cuatro apoyos con manos bajo los hombros, rodillas bajo la cadera y la banda sobre los muslos o en el pie.',
+        'Mantén la espalda neutra y el abdomen apretado.',
+        'Empuja un talón hacia el techo manteniendo la rodilla a 90°, sin arquear la espalda baja.',
+        'Aprieta el glúteo arriba 1 segundo y baja lento. Haz todas las repeticiones y cambia de pierna.'
+    ],
+    'patada lateral de pie': [
+        'Párate derecha con la banda fuerte sobre las rodillas o los tobillos, apoyándote en una pared o silla si lo necesitas.',
+        'Mantén el torso recto y el abdomen firme.',
+        'Lleva la pierna libre hacia el costado con la punta al frente, sin inclinar el cuerpo.',
+        'Vuelve lento y repite. Haz todas las repeticiones y cambia de lado.'
+    ],
+    'hip thrust acostada (puente)': [
+        'Acuéstate boca arriba con las rodillas flexionadas y los pies apoyados al ancho de la cadera.',
+        'Coloca la mancuerna pesada sobre la cadera sujetándola con ambas manos.',
+        'Empuja con los talones y sube la cadera hasta formar una línea recta de hombros a rodillas.',
+        'Aprieta el glúteo arriba 1-2 segundos y baja controlado sin descansar del todo en el piso.'
+    ],
+    'sentadilla copa (goblet squat)': [
+        'Sostén la mancuerna verticalmente contra el pecho con ambas manos, pies un poco más abiertos que los hombros y puntas levemente hacia afuera.',
+        'Pecho arriba y espalda recta.',
+        'Baja llevando la cadera hacia atrás y abajo hasta que los muslos queden paralelos al piso o un poco más.',
+        'Empuja con todo el pie para subir y aprieta glúteos arriba.'
+    ],
+    'zancadas inversas': [
+        'Párate derecha con las mancuernas ligeras a los costados.',
+        'Da un paso largo hacia atrás y baja hasta que ambas rodillas formen 90°.',
+        'Mantén el torso recto y el peso en el talón de la pierna de adelante.',
+        'Empuja con la pierna delantera para volver al inicio. Alterna las piernas.'
+    ],
+    'alcance de pies sentada': [
+        'Siéntate en el piso con las piernas estiradas al frente y la espalda larga.',
+        'Inhala alargando la columna y al exhalar inclínate desde la cadera hacia los pies.',
+        'Lleva las manos hacia las piernas o los pies sin encorvar la espalda ni forzar.',
+        'Mantén la posición respirando profundo y vuelve lento.'
+    ],
+    'apertura de pecho en marco de puerta': [
+        'Párate en un marco de puerta con los antebrazos apoyados en los costados, codos a la altura de los hombros.',
+        'Da un pequeño paso hacia adelante con un pie.',
+        'Deja que el pecho avance suavemente por el marco hasta sentir el estiramiento en el pecho y los hombros.',
+        'Mantén 30 segundos con el abdomen firme, sin arquear la espalda baja.'
+    ],
     'flow de isquiotibiales': [
         'Párate con los pies separados al ancho de tus hombros.',
         'Agáchate en una sentadilla profunda y sujeta las puntas de tus pies (o tus tobillos si no llegas).',

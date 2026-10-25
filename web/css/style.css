@@ -1464,5 +1464,271 @@ tr:hover td { background: var(--bg); }
     }
 }
 
+/* =========================================================
+   UNIVERSITY & INTERACTIVE CURRICULUM MESH (UTN FRA)
+   ========================================================= */
+
+.uni-schedule-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 14px;
+    margin-bottom: 24px;
+}
+
+.day-schedule-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    transition: transform 0.15s ease, border-color 0.15s ease;
+}
+
+.day-schedule-card:hover {
+    border-color: rgba(242, 139, 168, 0.4);
+}
+
+.day-schedule-card.is-active-day {
+    border-left: 4px solid var(--primary);
+}
+
+.day-schedule-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 8px;
+    border-bottom: 1px dashed var(--border);
+}
+
+.day-schedule-name {
+    font-size: 0.95rem;
+    font-weight: 700;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.exam-timeline-item {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+}
+
+.exam-timeline-item:hover {
+    background: var(--bg-card-hover);
+    border-color: var(--primary);
+    transform: translateX(2px);
+}
+
+.exam-countdown-badge {
+    padding: 4px 8px;
+    border-radius: 8px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.countdown-urgent {
+    background: rgba(242, 139, 168, 0.2);
+    color: var(--primary);
+    border: 1px solid var(--primary);
+}
+
+.countdown-soon {
+    background: rgba(235, 178, 85, 0.2);
+    color: #ebb255;
+    border: 1px solid #ebb255;
+}
+
+.countdown-normal {
+    background: rgba(164, 140, 224, 0.15);
+    color: #a48ce0;
+    border: 1px solid rgba(164, 140, 224, 0.3);
+}
+
+.countdown-past {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-muted);
+}
+
+/* --- Malla Curricular Layout --- */
+.mesh-container {
+    display: flex;
+    gap: 14px;
+    overflow-x: auto;
+    padding-bottom: 18px;
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+}
+
+.mesh-column {
+    flex: 1 0 250px;
+    min-width: 250px;
+    max-width: 290px;
+    background: rgba(33, 25, 32, 0.6);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.mesh-column-header {
+    padding: 8px 10px;
+    background: var(--bg);
+    border-radius: 8px;
+    border-bottom: 2px solid var(--primary);
+    text-align: center;
+}
+
+.mesh-column-title {
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: var(--text);
+    margin: 0;
+}
+
+.mesh-column-subtitle {
+    font-size: 0.74rem;
+    color: var(--text-muted);
+}
+
+/* --- Malla Card Nodes --- */
+.mesh-card {
+    background: var(--bg-card);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    position: relative;
+    user-select: none;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.2);
+}
+
+.mesh-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+}
+
+.mesh-card.is-prereq-highlight {
+    border-color: #ebb255 !important;
+    box-shadow: 0 0 16px rgba(235, 178, 85, 0.55) !important;
+    transform: scale(1.02);
+    z-index: 5;
+}
+
+.mesh-card.is-unlock-highlight {
+    border-color: #5cb38e !important;
+    box-shadow: 0 0 16px rgba(92, 179, 142, 0.55) !important;
+    transform: scale(1.02);
+    z-index: 5;
+}
+
+.mesh-card.is-active-subject {
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 18px rgba(242, 139, 168, 0.6) !important;
+    transform: scale(1.03);
+    z-index: 6;
+}
+
+.mesh-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    margin-bottom: 4px;
+}
+
+.mesh-card-id {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: var(--text-muted);
+}
+
+.mesh-card-title {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.25;
+    margin-bottom: 4px;
+}
+
+.mesh-card-meta {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.mesh-card-reqs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    font-size: 0.68rem;
+    color: var(--text-light);
+    border-top: 1px dashed rgba(255, 255, 255, 0.08);
+    padding-top: 5px;
+    margin-top: 4px;
+}
+
+.req-pill {
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-weight: 600;
+    background: rgba(255, 255, 255, 0.06);
+}
+
+.req-pill.is-met {
+    color: #5cb38e;
+    background: rgba(92, 179, 142, 0.15);
+}
+
+.req-pill.is-missing {
+    color: #e06c75;
+    background: rgba(224, 108, 117, 0.15);
+}
+
+/* --- Legend bar --- */
+.mesh-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    padding: 12px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-top: 14px;
+}
+
+.legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.78rem;
+    color: var(--text);
+}
+
+.legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+}
+
 
 

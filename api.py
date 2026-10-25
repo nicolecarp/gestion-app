@@ -729,7 +729,22 @@ def update_lindley_form(id, data):
 def get_subjects():
     conn = get_connection()
     try:
-        rows = conn.execute("SELECT * FROM subjects ORDER BY status, name ASC").fetchall()
+        rows = conn.execute("""
+            SELECT * FROM subjects
+            ORDER BY
+                CASE WHEN status='current' THEN 0 WHEN status='passed' THEN 1 ELSE 2 END,
+                CASE day_of_week
+                    WHEN 'Lunes' THEN 1
+                    WHEN 'Martes' THEN 2
+                    WHEN 'Miércoles' THEN 3
+                    WHEN 'Jueves' THEN 4
+                    WHEN 'Viernes' THEN 5
+                    WHEN 'Sábado' THEN 6
+                    ELSE 7
+                END,
+                start_time ASC,
+                name ASC
+        """).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
@@ -739,10 +754,14 @@ def create_subject(data):
     conn = get_connection()
     try:
         cur = conn.execute("""
-            INSERT INTO subjects (name, professor, schedule, year, status)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO subjects (name, professor, schedule, year, status,
+                commission, classroom, virtual_link, zoom_id, subject_code, current_status_note, day_of_week, start_time, end_time, shift)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (data['name'], data.get('professor'), data.get('schedule'),
-              data.get('year'), data.get('status', 'current')))
+              data.get('year', 2026), data.get('status', 'current'),
+              data.get('commission'), data.get('classroom'), data.get('virtual_link'), data.get('zoom_id'),
+              data.get('subject_code'), data.get('current_status_note'), data.get('day_of_week'),
+              data.get('start_time'), data.get('end_time'), data.get('shift')))
         conn.commit()
         return {'ok': True, 'id': cur.lastrowid}
     except Exception as e:
@@ -755,10 +774,59 @@ def update_subject(id, data):
     conn = get_connection()
     try:
         conn.execute("""
-            UPDATE subjects SET name=?, professor=?, schedule=?, year=?, status=?
+            UPDATE subjects SET name=?, professor=?, schedule=?, year=?, status=?,
+                commission=?, classroom=?, virtual_link=?, zoom_id=?, subject_code=?, current_status_note=?, day_of_week=?, start_time=?, end_time=?, shift=?
             WHERE id=?
         """, (data['name'], data.get('professor'), data.get('schedule'),
-              data.get('year'), data.get('status'), id))
+              data.get('year'), data.get('status'),
+              data.get('commission'), data.get('classroom'), data.get('virtual_link'), data.get('zoom_id'),
+              data.get('subject_code'), data.get('current_status_note'), data.get('day_of_week'),
+              data.get('start_time'), data.get('end_time'), data.get('shift'), id))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+@eel.expose
+def get_curriculum_status():
+    conn = get_connection()
+    try:
+        rows = conn.execute("SELECT * FROM curriculum_status").fetchall()
+        result = {}
+        for r in rows:
+            result[r["subject_id"]] = {
+                "subject_id": r["subject_id"],
+                "status": r["status"],
+                "grade": r["grade"],
+                "note": r["note"],
+                "updated_at": r["updated_at"]
+            }
+        return result
+    finally:
+        conn.close()
+
+@eel.expose
+def update_curriculum_status(subject_id, status, grade=None, note=None):
+    conn = get_connection()
+    try:
+        conn.execute("""
+            INSERT INTO curriculum_status (subject_id, status, grade, note, updated_at)
+            VALUES (?, ?, ?, ?, datetime('now','localtime'))
+            ON CONFLICT(subject_id) DO UPDATE SET
+                status=excluded.status,
+                grade=COALESCE(excluded.grade, curriculum_status.grade),
+                note=COALESCE(excluded.note, curriculum_status.note),
+                updated_at=excluded.updated_at
+        """, (int(subject_id), status, grade, note))
+
+        # Synchronize status with enrolled subjects if exists
+        subj_status = 'passed' if status == 'APROBADA' else ('current' if status in ('CURSANDO', 'REGULAR', 'LIBRE_DISPONIBLE') else 'current')
+        conn.execute("""
+            UPDATE subjects SET status=? WHERE subject_code=?
+        """, (subj_status, str(subject_id)))
+
         conn.commit()
         return {'ok': True}
     except Exception as e:
@@ -2760,7 +2828,8 @@ def generate_quote_word(quote_id):
         }
     except Exception as e:
         import traceback
-        return {'ok': False, 'error': str(e) + '\n' + traceback.format_exc()}
+        traceback.print_exc()
+        return {'ok': False, 'error': str(e)}
     finally:
         conn.close()
 

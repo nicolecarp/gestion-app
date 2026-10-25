@@ -165,6 +165,14 @@ def init_db():
             FOREIGN KEY (subject_id) REFERENCES subjects(id)
         );
 
+        CREATE TABLE IF NOT EXISTS curriculum_status (
+            subject_id INTEGER PRIMARY KEY,
+            status TEXT NOT NULL,
+            grade REAL,
+            note TEXT,
+            updated_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+
         CREATE TABLE IF NOT EXISTS habits (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -470,6 +478,27 @@ def init_db():
         except:
             pass
 
+    # Ensure extra columns exist on subjects
+    existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(subjects)").fetchall()}
+    subject_cols = [
+        ("commission", "TEXT"),
+        ("classroom", "TEXT"),
+        ("virtual_link", "TEXT"),
+        ("zoom_id", "TEXT"),
+        ("subject_code", "TEXT"),
+        ("current_status_note", "TEXT"),
+        ("day_of_week", "TEXT"),
+        ("start_time", "TEXT"),
+        ("end_time", "TEXT"),
+        ("shift", "TEXT"),
+    ]
+    for col_name, col_type in subject_cols:
+        if col_name not in existing_cols:
+            try:
+                conn.execute(f"ALTER TABLE subjects ADD COLUMN {col_name} {col_type}")
+            except Exception:
+                pass
+
     conn.commit()
     seed_default_workouts(conn)
     apply_cleanups_and_seeds(conn)
@@ -591,6 +620,271 @@ def apply_cleanups_and_seeds(conn):
         conn.execute("UPDATE workout_days SET warmup_notes=? WHERE warmup_notes IS NOT NULL AND TRIM(warmup_notes) != ''", (warmup_full,))
         conn.execute("UPDATE workout_days SET cooldown_notes=? WHERE cooldown_notes IS NOT NULL AND TRIM(cooldown_notes) != ''", (cooldown_full,))
         conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('update_warmup_cooldown_guides_v1', '1')")
+
+    # 6. Seed UTN Industrial 2026 courses, exams, assignments and curriculum status
+    seed_utn = conn.execute("SELECT value FROM config WHERE key='seed_utn_industrial_2026_v2'").fetchone()
+    if not seed_utn:
+        courses = [
+            {
+                "name": "Informática II",
+                "commission": "2-51-N",
+                "day_of_week": "Lunes",
+                "start_time": "18:15",
+                "end_time": "20:30",
+                "shift": "NOCHE",
+                "classroom": "Sede Villa Domínico (Lab. PC)",
+                "virtual_link": "https://utn.zoom.us/j/6241424085?omn=83018473600",
+                "zoom_id": "624 142 4085",
+                "professor": "Arq. Ricardo Filipič / Lic. David Fernández / Ing. Mariano Esains",
+                "schedule": "Lunes 18:15 a 20:30 hs",
+                "year": 2026,
+                "status": "current",
+                "subject_code": "15",
+                "current_status_note": "Debe 1° Parcial (Temario: Bases de Datos/Access/SQL y CATIA V5)"
+            },
+            {
+                "name": "Física I",
+                "commission": "1-11-R (Lab Grupo 6)",
+                "day_of_week": "Martes",
+                "start_time": "18:15",
+                "end_time": "22:15",
+                "shift": "NOCHE",
+                "classroom": "Sede Villa Domínico (Aula turno noche y Lab. de Física)",
+                "virtual_link": None,
+                "zoom_id": None,
+                "professor": "Mg. Sonia Páez / Ing. Juan Carlos Ruiz / Ing. Gastón Acerbi",
+                "schedule": "Martes 18:15 a 22:15 hs",
+                "year": 2026,
+                "status": "current",
+                "subject_code": "6",
+                "current_status_note": "Debe 1° Parcial. Lab Grupo 6: 7/7 presentes, regularizar TPs 2-5 y 7"
+            },
+            {
+                "name": "Álgebra y Geometría Analítica",
+                "commission": "1-103",
+                "day_of_week": "Miércoles",
+                "start_time": "08:45",
+                "end_time": "12:45",
+                "shift": "MANANA",
+                "classroom": "Aula F102 (1° Piso Edificio Industrial, Sede Villa Domínico)",
+                "virtual_link": "https://utn.zoom.us/j/9833843504",
+                "zoom_id": "983 384 3504",
+                "professor": "Prof. Gabriela Frankel / Prof. María Cristina La Marca",
+                "schedule": "Miércoles 08:45 a 12:45 hs",
+                "year": 2026,
+                "status": "current",
+                "subject_code": "7",
+                "current_status_note": "Debe 1° Parcial (U1 a U6). Se aprueba con 60%"
+            },
+            {
+                "name": "Química General",
+                "commission": "1-1-S (1°1° Noche)",
+                "day_of_week": "Jueves",
+                "start_time": "18:15",
+                "end_time": "22:15",
+                "shift": "NOCHE",
+                "classroom": "Sede Villa Domínico (Aula turno noche y Lab. de Química 19:00 hs)",
+                "virtual_link": None,
+                "zoom_id": None,
+                "professor": "Prof. Ricardo Krotki / Lic. Eduardo R. Godoy / Ing. Rubén Fernández",
+                "schedule": "Jueves 18:15 a 22:15 hs",
+                "year": 2026,
+                "status": "current",
+                "subject_code": "2",
+                "current_status_note": "Cursando en com. 1°1° Jueves Noche. TPs de Lab hasta TP 8 Electroquímica"
+            },
+            {
+                "name": "Análisis Matemático I",
+                "commission": "1-1-S (1°1° Noche)",
+                "day_of_week": "Viernes",
+                "start_time": "18:15",
+                "end_time": "22:15",
+                "shift": "NOCHE",
+                "classroom": "Sede Villa Domínico (Aula turno noche asignada por Bedelía)",
+                "virtual_link": None,
+                "zoom_id": None,
+                "professor": "UDB Matemática FRA / Prof. Stella Boutet",
+                "schedule": "Viernes 18:15 a 22:15 hs",
+                "year": 2026,
+                "status": "current",
+                "subject_code": "1",
+                "current_status_note": "Debe 1° Parcial (TPs 1 a 6). Examen Bloque AND (Regularidad) y AD"
+            },
+            {
+                "name": "Sistemas de Representación",
+                "commission": "1-32-O / [1-8, 1-9, 1-57]",
+                "day_of_week": "Sábado",
+                "start_time": "08:00",
+                "end_time": "10:15",
+                "shift": "MANANA",
+                "classroom": "Sede Villa Domínico",
+                "virtual_link": "https://utn.zoom.us/j/4540223852?pwd=b0FRRUZaT2wwZDNiT0YreG50ZHd1UT09",
+                "zoom_id": "454 022 3852 (Código: 15ASN)",
+                "professor": "Ing. Diego E. Valdez / Ing. Ariel Martín Garijo",
+                "schedule": "Sábados 08:00 a 10:15 hs",
+                "year": 2026,
+                "status": "current",
+                "subject_code": "3",
+                "current_status_note": "SolidWorks + Plano Final impreso físicamente en hoja A4/A3"
+            },
+            {
+                "name": "Inglés I / II",
+                "commission": "2°73° / Final Libre",
+                "day_of_week": "Libre",
+                "start_time": None,
+                "end_time": None,
+                "shift": "LIBRE",
+                "classroom": "Mesa de Examen Final (Sede Villa Domínico)",
+                "virtual_link": None,
+                "zoom_id": None,
+                "professor": "Dra. Karina Cecilia Ferrando (UDB Cultura e Idiomas)",
+                "schedule": "Examen Final Libre / Suficiencia",
+                "year": 2026,
+                "status": "current",
+                "subject_code": "16",
+                "current_status_note": "Habilitada para rendir Examen Final Libre / Suficiencia"
+            },
+            {
+                "name": "Informática I",
+                "commission": "1°54 (2025)",
+                "day_of_week": None,
+                "start_time": None,
+                "end_time": None,
+                "shift": None,
+                "classroom": "UTN FRA",
+                "virtual_link": None,
+                "zoom_id": None,
+                "professor": "Lic. David Fernández / Arq. Ricardo Filipič",
+                "schedule": "Cursada en 2025 (Promocionada)",
+                "year": 2025,
+                "status": "passed",
+                "subject_code": "4",
+                "current_status_note": "Aprobada / Promocionada en 2025 con nota 9"
+            },
+            {
+                "name": "Pensamiento Sistémico (Integradora I)",
+                "commission": "1°54 (2025)",
+                "day_of_week": None,
+                "start_time": None,
+                "end_time": None,
+                "shift": None,
+                "classroom": "UTN FRA",
+                "virtual_link": None,
+                "zoom_id": None,
+                "professor": "Ing. Fernando Cacciavillani / Ing. José Antonio Folino / Ing. Fernando Mieites",
+                "schedule": "Cursada en 2025 (Promocionada)",
+                "year": 2025,
+                "status": "passed",
+                "subject_code": "5",
+                "current_status_note": "Aprobada / Promocionada en 2025 con nota 8"
+            },
+            {
+                "name": "Ingeniería y Sociedad",
+                "commission": "1°103 (2025)",
+                "day_of_week": None,
+                "start_time": None,
+                "end_time": None,
+                "shift": None,
+                "classroom": "UTN FRA",
+                "virtual_link": None,
+                "zoom_id": None,
+                "professor": "Dra. Karina Cecilia Ferrando / Prof. Olga Páez",
+                "schedule": "Cursada en 2025 (Final aprobado)",
+                "year": 2025,
+                "status": "passed",
+                "subject_code": "8",
+                "current_status_note": "Aprobada con final en 2025 con nota 8"
+            }
+        ]
+
+        subj_id_map = {}
+        for c in courses:
+            row = conn.execute("SELECT id FROM subjects WHERE name=?", (c["name"],)).fetchone()
+            if not row:
+                cur = conn.execute("""
+                    INSERT INTO subjects (name, commission, day_of_week, start_time, end_time, shift,
+                        classroom, virtual_link, zoom_id, professor, schedule, year, status, subject_code, current_status_note)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (c["name"], c["commission"], c["day_of_week"], c["start_time"], c["end_time"], c["shift"],
+                      c["classroom"], c["virtual_link"], c["zoom_id"], c["professor"], c["schedule"], c["year"], c["status"], c["subject_code"], c["current_status_note"]))
+                subj_id_map[c["name"]] = cur.lastrowid
+            else:
+                subj_id_map[c["name"]] = row[0]
+                conn.execute("""
+                    UPDATE subjects SET commission=?, day_of_week=?, start_time=?, end_time=?, shift=?,
+                        classroom=?, virtual_link=?, zoom_id=?, professor=?, schedule=?, year=?, status=?, subject_code=?, current_status_note=?
+                    WHERE id=?
+                """, (c["commission"], c["day_of_week"], c["start_time"], c["end_time"], c["shift"],
+                      c["classroom"], c["virtual_link"], c["zoom_id"], c["professor"], c["schedule"], c["year"], c["status"], c["subject_code"], c["current_status_note"], row[0]))
+
+        # Exams seeding
+        exams_data = [
+            ("Física I", "Laboratorio", "2026-11-03", None, "Cierre de Actas Lab Grupo 6 (TPs 2-5, Cuestionario TP7 y TP8 Arquímedes)"),
+            ("Sistemas de Representación", "Entrega TP", "2026-11-14", "08:00", "Entrega TPs SolidWorks + Plano Final impreso físico A4/A3"),
+            ("Informática II", "2° Parcial", "2026-11-16", "18:15", "2° Parcial + Entrega TPs (CATIA V5 / Access-SQL)"),
+            ("Física I", "2° Parcial", "2026-11-17", "18:15", "2° Parcial por Bloques (Cuerpo Rígido, MOA y Fluidos)"),
+            ("Álgebra y Geometría Analítica", "Repaso", "2026-11-18", "08:45", "Clase de Repaso 2° Parcial (U7, U8, U9)"),
+            ("Química General", "2° Parcial", "2026-11-19", "18:15", "2° Parcial / Globalizador y Cierre de Laboratorio (incl. Electroquímica)"),
+            ("Análisis Matemático I", "2° Parcial", "2026-11-20", "18:15", "2° Parcial Bloque AND (TPs 7-12 Derivadas, Integrales, Series)"),
+            ("Álgebra y Geometría Analítica", "2° Parcial", "2026-11-25", "08:45", "2° Parcial Confirmado (U7 EV, U8 TL, U9 Autovalores/Diagonalización)"),
+            ("Álgebra y Geometría Analítica", "Revisión", "2026-12-02", "08:45", "Revisión de Examen 2° Parcial"),
+            ("Informática II", "Recuperatorio", "2026-12-07", "18:15", "Recuperatorio 1° Parcial (DER, Normalización, SQL / CATIA V5)"),
+            ("Álgebra y Geometría Analítica", "Recuperatorio", "2026-12-09", "08:45", "1° Recup. 1° Parcial (U1-U6 Matrices, SEL, Vectores, Cónicas, Cuádricas)"),
+            ("Álgebra y Geometría Analítica", "Recuperatorio", "2026-12-16", "08:45", "1° Recup. 2° Parcial (U7-U9)"),
+            ("Física I", "Recuperatorio", "2027-02-16", "18:15", "Recuperatorio 1° Parcial (Cinemática, Dinámica, Energía, Óptica)"),
+            ("Álgebra y Geometría Analítica", "Recuperatorio", "2027-02-17", "08:45", "2° Recup. P1 / Final (U1-U6)"),
+            ("Análisis Matemático I", "Recuperatorio", "2027-02-19", "18:15", "Recuperatorio 1° Parcial Bloque AND (TPs 1-6 Límites, Bolzano, Continuidad)"),
+            ("Inglés I / II", "Final Libre", "2027-02-22", None, "Examen Final Libre / Suficiencia (Lectura e interpretación técnica en español)"),
+            ("Álgebra y Geometría Analítica", "Recuperatorio", "2027-02-24", "08:45", "2° Recup. P2 / Final (U7-U9)"),
+        ]
+
+        for s_name, e_type, e_date, e_time, e_topic in exams_data:
+            s_id = subj_id_map.get(s_name)
+            if s_id:
+                ex_exists = conn.execute("SELECT id FROM exams WHERE subject_id=? AND date=? AND type=?", (s_id, e_date, e_type)).fetchone()
+                if not ex_exists:
+                    conn.execute("""
+                        INSERT INTO exams (subject_id, type, date, time, topic, status)
+                        VALUES (?, ?, ?, ?, ?, 'pending')
+                    """, (s_id, e_type, e_date, e_time, e_topic))
+
+        # Assignments seeding
+        assignments_data = [
+            ("Física I", "Cuestionario Online TP 7 (Péndulo Balístico)", "Entrega de cuestionario de péndulo balístico y regularización de informes TPs 2 a 5 con Ings. Ruiz y Acerbi", "2026-11-03", "Lab Grupo 6"),
+            ("Sistemas de Representación", "Plano Final impreso A4/A3 + Modelado SolidWorks", "Entrega de piezas modeladas en SolidWorks y plano final de ensamble impreso físicamente en papel", "2026-11-14", "Individual"),
+            ("Informática II", "Entrega de Proyecto y TPs CATIA V5 / Bases de Datos", "Modelado paramétrico 3D / Ensamble iso-restringido en CATIA V5 o consultas Access / SQL", "2026-11-16", "Individual/Grupo"),
+        ]
+        for s_name, a_title, a_desc, a_due, a_group in assignments_data:
+            s_id = subj_id_map.get(s_name)
+            if s_id:
+                as_exists = conn.execute("SELECT id FROM assignments WHERE subject_id=? AND title=?", (s_id, a_title)).fetchone()
+                if not as_exists:
+                    conn.execute("""
+                        INSERT INTO assignments (subject_id, title, description, due_date, group_name, status)
+                        VALUES (?, ?, ?, ?, ?, 'pending')
+                    """, (s_id, a_title, a_desc, a_due, a_group))
+
+        # Initial curriculum statuses for the curriculum grid:
+        initial_curriculum = [
+            (1, "CURSANDO", None, "Cursando 2026"),
+            (2, "CURSANDO", None, "Cursando 2026"),
+            (3, "CURSANDO", None, "Cursando 2026"),
+            (4, "APROBADA", 9.0, "Promocionada en 2025 con nota 9"),
+            (5, "APROBADA", 8.0, "Promocionada en 2025 con nota 8"),
+            (6, "CURSANDO", None, "Cursando 2026"),
+            (7, "CURSANDO", None, "Cursando 2026"),
+            (8, "APROBADA", 8.0, "Aprobada con final en 2025 con nota 8"),
+            (15, "CURSANDO", None, "Cursando 2026"),
+            (16, "LIBRE_DISPONIBLE", None, "Habilitada para rendir final libre"),
+            (33, "LIBRE_DISPONIBLE", None, "Habilitada para rendir final libre"),
+        ]
+        for sid, st, gr, nt in initial_curriculum:
+            conn.execute("""
+                INSERT OR REPLACE INTO curriculum_status (subject_id, status, grade, note)
+                VALUES (?, ?, ?, ?)
+            """, (sid, st, gr, nt))
+
+        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('seed_utn_industrial_2026_v2', '1')")
 
     conn.commit()
 

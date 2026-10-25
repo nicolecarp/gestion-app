@@ -2,13 +2,30 @@
 Servidor Web Cloud para Gestión Nicole (compatible con PythonAnywhere, Render, Railway, Fly.io).
 Reemplaza el puente WebSocket de Eel por HTTP/JSON estándar + un shim automático en /eel.js,
 para que toda la interfaz funcione idéntico en la nube y en iPhone sin abrir navegador de escritorio.
+
+Variables de entorno relevantes:
+  APP_PASSWORD            Contraseña de acceso (OBLIGATORIA salvo ALLOW_NO_PASSWORD=1).
+  SECRET_KEY              Clave para firmar cookies de sesión. Si falta, se genera una aleatoria
+                          y se guarda en .secret_key (excluido de git).
+  GITHUB_WEBHOOK_SECRET   Secreto configurado en el webhook de GitHub. Sin él, /webhook/github
+                          queda deshabilitado.
+  ALLOW_NO_PASSWORD       Pon "1" sólo si de verdad quieres la app sin contraseña (NO recomendado).
 """
 import os
 import sys
 import glob
+import hmac
+import html
+import time
+import hashlib
+import secrets
+import inspect
+import logging
 import subprocess
+from datetime import timedelta
 from functools import wraps
 from types import ModuleType
+from urllib.parse import urlparse
 from flask import Flask, request, jsonify, send_from_directory, Response, session, redirect, url_for
 
 # Asegurar que `import eel` nunca falle en servidores cloud donde eel no está instalado
@@ -25,25 +42,113 @@ import api as api_module
 
 init_db()
 
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("gestion.cloud")
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 WEB_DIR = os.path.join(BASE_DIR, "web")
 app = Flask(__name__, static_folder=WEB_DIR, static_url_path="")
-app.secret_key = os.environ.get("SECRET_KEY", "nicole-gestion-secret-key-2026")
+
+
+def _load_secret_key():
+    """Usa SECRET_KEY del entorno o genera/persiste una aleatoria (nunca una clave fija en el código)."""
+    env_key = os.environ.get("SECRET_KEY", "").strip()
+    if env_key:
+        return env_key
+    key_file = os.path.join(BASE_DIR, ".secret_key")
+    try:
+        with open(key_file, "r", encoding="utf-8") as fh:
+            key = fh.read().strip()
+            if len(key) >= 32:
+                return key
+    except FileNotFoundError:
+        pass
+    key = secrets.token_hex(32)
+    fd = os.open(key_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(key)
+    return key
+
+
+app.secret_key = _load_secret_key()
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.environ.get("INSECURE_COOKIES", "").strip() != "1",
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+    MAX_CONTENT_LENGTH=30 * 1024 * 1024,  # 30 MB (documentos subidos en base64)
+)
 
 # Si defines la variable de entorno APP_PASSWORD en el servidor en la nube,
 # pedirá esa contraseña antes de mostrar la app.
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "").strip()
+ALLOW_NO_PASSWORD = os.environ.get("ALLOW_NO_PASSWORD", "").strip() == "1"
+AUTH_MISCONFIGURED = not APP_PASSWORD and not ALLOW_NO_PASSWORD
+if AUTH_MISCONFIGURED:
+    log.error("APP_PASSWORD no está definida: la app quedará bloqueada hasta configurarla.")
+
+GITHUB_WEBHOOK_SECRET = os.environ.get("GITHUB_WEBHOOK_SECRET", "").strip()
+
+# --- Limitador simple de intentos de login (por IP, en memoria) ---
+_LOGIN_MAX_ATTEMPTS = 5
+_LOGIN_WINDOW_SECONDS = 15 * 60
+_login_attempts = {}
+
+
+def _client_ip():
+    fwd = request.headers.get("X-Forwarded-For", "")
+    return (fwd.split(",")[0].strip() if fwd else request.remote_addr) or "unknown"
+
+
+def _login_blocked(ip):
+    now = time.time()
+    attempts = [t for t in _login_attempts.get(ip, []) if now - t < _LOGIN_WINDOW_SECONDS]
+    _login_attempts[ip] = attempts
+    return len(attempts) >= _LOGIN_MAX_ATTEMPTS
+
+
+def _register_failed_login(ip):
+    _login_attempts.setdefault(ip, []).append(time.time())
+
+
+def _is_authenticated():
+    if AUTH_MISCONFIGURED:
+        return False
+    if not APP_PASSWORD:  # ALLOW_NO_PASSWORD=1 explícito
+        return True
+    return bool(session.get("authenticated"))
 
 
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        if APP_PASSWORD and not session.get("authenticated"):
+        if not _is_authenticated():
             if request.path.startswith("/api/"):
                 return jsonify({"ok": False, "error": "No autorizado"}), 401
             return redirect(url_for("login_page"))
         return f(*args, **kwargs)
     return decorated
+
+
+def _same_origin_request():
+    """Protección CSRF: si el navegador envía Origin/Referer, debe coincidir con este host."""
+    origin = request.headers.get("Origin") or request.headers.get("Referer")
+    if not origin:
+        return True
+    return urlparse(origin).netloc == request.host
+
+
+@app.after_request
+def _security_headers(resp):
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "same-origin")
+    resp.headers.setdefault("Content-Security-Policy", "frame-ancestors 'none'; object-src 'none'; base-uri 'self'")
+    if request.is_secure or request.headers.get("X-Forwarded-Proto") == "https":
+        resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+    if request.path.startswith("/api/"):
+        resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 def _pull_and_reload():
@@ -73,26 +178,57 @@ api_module.sync_cloud_from_github = _pull_and_reload
 api_module.check_reload = lambda: False
 api_module.get_lan_info = lambda: {"ip": "cloud", "port": 443, "url": "https://nicolecarp.pythonanywhere.com"}
 
+# Lista blanca de funciones invocables vía /api/<nombre>: sólo las definidas en api.py
+# (no módulos ni funciones importadas como get_connection) + las inyectadas arriba.
+_INJECTED_API = {"sync_cloud_from_github", "check_reload", "get_lan_info"}
+ALLOWED_API = {
+    name for name, obj in vars(api_module).items()
+    if not name.startswith("_")
+    and inspect.isfunction(obj)
+    and obj.__module__ == api_module.__name__
+} | _INJECTED_API
+
 
 @app.route("/webhook/github", methods=["GET", "POST"])
 def github_webhook():
-    """Endpoint para que GitHub (o un clic manual) actualice y recargue PythonAnywhere automáticamente."""
+    """Endpoint para que GitHub (o PowerShell/curl) actualice y recargue PythonAnywhere."""
+    if GITHUB_WEBHOOK_SECRET:
+        signature = request.headers.get("X-Hub-Signature-256", "")
+        expected = "sha256=" + hmac.new(
+            GITHUB_WEBHOOK_SECRET.encode(), request.get_data(), hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            return jsonify({"ok": False, "error": "Firma inválida"}), 403
     res = _pull_and_reload()
     return jsonify(res)
 
 
 @app.route("/login", methods=["GET", "POST"])
 def login_page():
+    if AUTH_MISCONFIGURED:
+        return Response(
+            "Servidor no configurado: define la variable de entorno APP_PASSWORD.",
+            status=503, mimetype="text/plain; charset=utf-8"
+        )
     if not APP_PASSWORD:
         return redirect("/")
     error = ""
     if request.method == "POST":
-        pwd = request.form.get("password", "")
-        if pwd == APP_PASSWORD:
-            session["authenticated"] = True
-            session.permanent = True
-            return redirect("/")
-        error = "Contraseña incorrecta"
+        ip = _client_ip()
+        if not _same_origin_request():
+            error = "Solicitud inválida"
+        elif _login_blocked(ip):
+            error = "Demasiados intentos. Espera unos minutos."
+        else:
+            pwd = request.form.get("password", "")
+            if hmac.compare_digest(pwd.encode("utf-8"), APP_PASSWORD.encode("utf-8")):
+                _login_attempts.pop(ip, None)
+                session.clear()
+                session["authenticated"] = True
+                session.permanent = True
+                return redirect("/")
+            _register_failed_login(ip)
+            error = "Contraseña incorrecta"
     return f"""<!DOCTYPE html>
 <html lang="es" data-theme="dark">
 <head>
@@ -117,10 +253,16 @@ button {{ width:100%; padding:11px; border-radius:10px; border:none; background:
     <div style="font-size:0.82rem;color:#B89CA8">Ingresa tu clave de acceso</div>
     <input type="password" name="password" placeholder="Contraseña..." autofocus required>
     <button type="submit">Entrar</button>
-    {f'<div class="err">{error}</div>' if error else ''}
+    {f'<div class="err">{html.escape(error)}</div>' if error else ''}
 </form>
 </body>
 </html>"""
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return redirect(url_for("login_page"))
 
 
 @app.route("/eel.js")
@@ -138,11 +280,13 @@ window.eel = new Proxy({
         if (prop in target) return target[prop];
         return function(...args) {
             return async function(callback) {
-                const res = await fetch('/api/' + String(prop), {
+                const res = await fetch('/api/' + encodeURIComponent(String(prop)), {
                     method: 'POST',
+                    credentials: 'same-origin',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ args: args })
                 });
+                if (res.status === 401) { window.location.href = '/login'; return; }
                 if (!res.ok) throw new Error('API Error: ' + res.status);
                 const data = await res.json();
                 if (typeof callback === 'function') callback(data.result);
@@ -158,18 +302,24 @@ window.eel = new Proxy({
 @app.route("/api/<func_name>", methods=["POST"])
 @login_required
 def call_api(func_name):
-    if func_name.startswith("_") or not hasattr(api_module, func_name):
-        return jsonify({"ok": False, "error": f"Función no encontrada: {func_name}"}), 404
-    fn = getattr(api_module, func_name)
+    # Exigir JSON + mismo origen: un formulario de otro sitio no puede invocar la API (CSRF)
+    if not request.is_json or not _same_origin_request():
+        return jsonify({"ok": False, "error": "Solicitud inválida"}), 400
+    if func_name not in ALLOWED_API:
+        return jsonify({"ok": False, "error": "Función no encontrada"}), 404
+    fn = getattr(api_module, func_name, None)
     if not callable(fn):
-        return jsonify({"ok": False, "error": f"{func_name} no es invocable"}), 400
+        return jsonify({"ok": False, "error": "Función no encontrada"}), 404
     payload = request.get_json(silent=True) or {}
-    args = payload.get("args", [])
+    args = payload.get("args", []) if isinstance(payload, dict) else []
+    if not isinstance(args, list):
+        return jsonify({"ok": False, "error": "Argumentos inválidos"}), 400
     try:
         result = fn(*args)
         return jsonify({"ok": True, "result": result})
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+    except Exception:
+        log.exception("Error en /api/%s", func_name)
+        return jsonify({"ok": False, "error": "Error interno del servidor"}), 500
 
 
 @app.route("/")
@@ -180,7 +330,7 @@ def index():
 
 @app.route("/<path:path>")
 def static_files(path):
-    if APP_PASSWORD and not session.get("authenticated"):
+    if not _is_authenticated():
         allowed_public = {"apple-touch-icon.png", "apple-touch-icon-precomposed.png", "favicon.png", "favicon.ico", "manifest.json", "sw.js"}
         if path not in allowed_public:
             return redirect(url_for("login_page"))

@@ -10,7 +10,8 @@ build/
 # Database
 gestion.db
 
-# Env
+# Env / secretos
+.secret_key
 .env
 *.env
 venv/

@@ -1881,37 +1881,289 @@ async function updateCtrlField(employee_id, field, value) {
 }
 
 // ===================== UNIVERSITY =====================
+
+function getExamCountdown(dateStr) {
+    if (!dateStr) return { text: '', cls: 'countdown-past' };
+    const now = new Date();
+    now.setHours(0, 0, 0, 0);
+    const target = new Date(dateStr + 'T00:00:00');
+    const diffDays = Math.round((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays < 0) {
+        return { text: `Hace ${Math.abs(diffDays)}d`, cls: 'countdown-past', diffDays };
+    }
+    if (diffDays === 0) {
+        return { text: '¡HOY!', cls: 'countdown-urgent', diffDays };
+    }
+    if (diffDays === 1) {
+        return { text: 'Mañana', cls: 'countdown-urgent', diffDays };
+    }
+    if (diffDays <= 7) {
+        return { text: `En ${diffDays} días`, cls: 'countdown-soon', diffDays };
+    }
+    if (diffDays <= 30) {
+        const w = Math.round(diffDays / 7);
+        return { text: `En ${w} sem${w !== 1 ? 's' : ''}`, cls: 'countdown-normal', diffDays };
+    }
+    const m = Math.round(diffDays / 30);
+    return { text: `En ${m} mes${m !== 1 ? 'es' : ''}`, cls: 'countdown-normal', diffDays };
+}
+
+function parseProfessorEmails(profText) {
+    if (!profText) return '';
+    const parts = profText.split('/');
+    return parts.map(p => {
+        const trimmed = p.trim();
+        const match = trimmed.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/);
+        if (match) {
+            const email = match[1];
+            const name = trimmed.replace(email, '').replace(/[()<>]/g, '').trim() || email;
+            return `<a href="mailto:${esc(email)}" class="tag tag-lavender" style="text-decoration:none;display:inline-flex;align-items:center;gap:4px" title="Escribir correo a ${esc(email)}">✉️ ${esc(name)}</a>`;
+        }
+        return `<span style="color:var(--text)">${esc(trimmed)}</span>`;
+    }).join(' <span style="color:var(--text-muted);opacity:0.6">/</span> ');
+}
+
 async function renderUniversity(el) {
-    const subjects = await api(eel.get_subjects) || [];
-    const allExams = await api(eel.get_exams) || [];
-    const allAssignments = await api(eel.get_assignments) || [];
+    state.uniTab = state.uniTab || 'schedule';
+    const [subjects, allExams, allAssignments, currStatus] = await Promise.all([
+        api(eel.get_subjects) || [],
+        api(eel.get_exams) || [],
+        api(eel.get_assignments) || [],
+        api(eel.get_curriculum_status) || {}
+    ]);
+    window.__uniSubjects = subjects;
     window.__uniExams = allExams;
     window.__uniAssignments = allAssignments;
+    window.__curriculumStatus = currStatus;
 
     let html = `<div class="page-header">
-        <div><h1>Universidad</h1><div class="subtitle">Ingeniería Industrial · UTN Avellaneda</div></div>
-        <div class="page-actions"><button class="btn btn-primary" onclick="showSubjectForm()">+ Materia</button></div>
-    </div>`;
+        <div>
+            <h1>Universidad</h1>
+            <div class="subtitle">Ingeniería Industrial · UTN FRA (Plan 2023)</div>
+        </div>
+        <div class="page-actions">
+            ${state.uniTab === 'schedule' ? '<button class="btn btn-primary" onclick="showSubjectForm()">+ Materia</button>' : ''}
+        </div>
+    </div>
+    <div class="subnav" style="margin-bottom:18px">
+        <button class="subnav-item ${state.uniTab === 'schedule' ? 'active' : ''}" onclick="switchUniTab('schedule')">📅 Cursada y Exámenes 2026</button>
+        <button class="subnav-item ${state.uniTab === 'mesh' ? 'active' : ''}" onclick="switchUniTab('mesh')">🗺️ Malla Curricular Interactiva</button>
+    </div>
+    <div id="uniTabContent"></div>`;
 
+    el.innerHTML = html;
+    const tabContainer = el.querySelector('#uniTabContent');
+    if (state.uniTab === 'mesh') {
+        renderUniversityMesh(tabContainer);
+    } else {
+        renderUniversitySchedule(tabContainer, subjects, allExams, allAssignments);
+    }
+}
+
+function switchUniTab(t) {
+    state.uniTab = t;
+    const uniEl = document.getElementById('view-university');
+    if (uniEl) renderUniversity(uniEl);
+}
+
+function renderUniversitySchedule(el, subjects, allExams, allAssignments) {
     if (subjects.length === 0) {
-        html += '<div class="empty-state"><div class="empty-icon">🎓</div><h3>Sin materias</h3><p>Agrega tus materias del año</p></div>';
-        el.innerHTML = html;
+        el.innerHTML = '<div class="empty-state"><div class="empty-icon">🎓</div><h3>Sin materias</h3><p>Agrega tus materias del año</p></div>';
         return;
     }
 
-    // Weekly schedule summary for active subjects
-    const activeWithSched = subjects.filter(s => s.status === 'current' && s.schedule);
-    if (activeWithSched.length > 0) {
-        html += `<div class="card" style="margin-bottom:16px;padding:14px 18px">
-            <div style="font-size:0.78rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">🗓️ Horarios de Cursada</div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px">
-                ${activeWithSched.map(s => `<div style="background:var(--bg);padding:8px 12px;border-radius:10px;border-left:3px solid var(--primary)">
-                    <div style="font-weight:700;font-size:0.88rem">${esc(s.name)}</div>
-                    <div style="font-size:0.8rem;color:var(--text-muted)">🕒 ${esc(s.schedule)}</div>
-                </div>`).join('')}
+    const currentSubjects = subjects.filter(s => s.status === 'current');
+    const passedSubjects = subjects.filter(s => s.status === 'passed');
+
+    // Upcoming exams/deliverables timeline
+    const timelineItems = [];
+    allExams.forEach(e => {
+        timelineItems.push({
+            id: e.id,
+            subject_id: e.subject_id,
+            subject_name: e.subject_name,
+            kind: 'exam',
+            type: e.type || 'Examen',
+            date: e.date,
+            time: e.time,
+            topic: e.topic,
+            grade: e.grade,
+            status: e.status
+        });
+    });
+    allAssignments.forEach(a => {
+        timelineItems.push({
+            id: a.id,
+            subject_id: a.subject_id,
+            subject_name: a.subject_name,
+            kind: 'assignment',
+            type: 'TP',
+            date: a.due_date,
+            time: null,
+            topic: a.title + (a.description ? ': ' + a.description : ''),
+            grade: a.grade,
+            status: a.status
+        });
+    });
+    timelineItems.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+    // Find next upcoming milestone
+    const nowStr = today();
+    const upcomingNext = timelineItems.find(t => t.date && t.date >= nowStr && t.status !== 'passed' && t.status !== 'graded');
+
+    let html = '';
+
+    // Quick Stats Bar
+    html += `<div class="stats-row" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:20px">
+        <div class="stat-card lavender">
+            <div class="stat-icon">📚</div>
+            <div class="stat-value">${currentSubjects.length}</div>
+            <div class="stat-label">Materias en curso (2026)</div>
+        </div>
+        <div class="stat-card sage">
+            <div class="stat-icon">✅</div>
+            <div class="stat-value">${passedSubjects.length}</div>
+            <div class="stat-label">Materias aprobadas (2025)</div>
+        </div>
+        <div class="stat-card ${upcomingNext ? 'rose' : 'lavender'}" style="cursor:pointer" onclick="document.getElementById('timelineSection')?.scrollIntoView({behavior:'smooth'})">
+            <div class="stat-icon">⏳</div>
+            <div class="stat-value" style="font-size:1.05rem;line-height:1.2">${upcomingNext ? esc(upcomingNext.subject_name) : 'Al día'}</div>
+            <div class="stat-label">${upcomingNext ? `${getExamCountdown(upcomingNext.date).text} (${fmtDate(upcomingNext.date)})` : 'Sin entregas pendientes'}</div>
+        </div>
+    </div>`;
+
+    // 🗓️ WEEKLY SCHEDULE CARDS (Lunes a Sábado + Final Libre)
+    html += `<div style="margin-bottom:26px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+            <div style="font-size:1rem;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px">
+                <span>🗓️</span> Cronograma Semanal de Cursada 2026
             </div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">Sede Villa Domínico · Ramón Franco 5050</div>
+        </div>
+        <div class="uni-schedule-grid">`;
+
+    const dayOrder = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Libre'];
+    const currentDayName = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'][new Date().getDay()];
+
+    dayOrder.forEach(day => {
+        const daySubjects = currentSubjects.filter(s => {
+            if (s.day_of_week) return s.day_of_week.toLowerCase().includes(day.toLowerCase());
+            return s.schedule && s.schedule.toLowerCase().includes(day.toLowerCase());
+        });
+        if (daySubjects.length === 0) return;
+
+        const isToday = currentDayName.toLowerCase() === day.toLowerCase();
+
+        html += `<div class="day-schedule-card ${isToday ? 'is-active-day' : ''}">
+            <div class="day-schedule-header">
+                <div class="day-schedule-name">
+                    <span>${day === 'Libre' ? '🌐' : '📅'} ${day}</span>
+                    ${isToday ? '<span class="tag tag-primary" style="font-size:0.7rem;padding:2px 6px">HOY</span>' : ''}
+                </div>
+                <div style="font-size:0.75rem;color:var(--text-muted)">${daySubjects.length} materia${daySubjects.length > 1 ? 's' : ''}</div>
+            </div>`;
+
+        daySubjects.forEach(s => {
+            const timeLabel = (s.start_time && s.end_time) ? `${s.start_time} a ${s.end_time} hs` : (s.schedule || '');
+            html += `<div style="background:var(--bg);border-radius:12px;padding:12px;border:1px solid rgba(255,255,255,0.06)">
+                <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:6px;margin-bottom:6px">
+                    <div>
+                        <div style="font-weight:700;font-size:0.95rem;color:var(--text)">${esc(s.name)}</div>
+                        <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px">
+                            ${s.commission ? `<span class="tag tag-lavender" style="font-size:0.72rem">Com. ${esc(s.commission)}</span>` : ''}
+                            ${s.shift ? `<span class="tag tag-primary" style="font-size:0.72rem">${esc(s.shift)}</span>` : ''}
+                        </div>
+                    </div>
+                    <div style="display:flex;gap:4px">
+                        <button class="btn btn-ghost btn-sm" onclick="showSubjectForm(${s.id})" title="Editar datos de materia">✎</button>
+                    </div>
+                </div>
+
+                ${timeLabel ? `<div style="font-size:0.82rem;color:var(--text-muted);display:flex;align-items:center;gap:6px;margin-bottom:4px">
+                    <span>🕒</span> <strong>${esc(timeLabel)}</strong>
+                </div>` : ''}
+
+                ${s.classroom ? `<div style="font-size:0.8rem;color:var(--text-light);display:flex;align-items:center;gap:6px;margin-bottom:6px">
+                    <span>📍</span> ${esc(s.classroom)}
+                </div>` : ''}
+
+                ${s.virtual_link ? `<div style="margin:8px 0">
+                    <a href="${esc(s.virtual_link)}" target="_blank" rel="noopener noreferrer" class="btn btn-primary btn-sm" style="display:inline-flex;align-items:center;gap:6px;text-decoration:none;font-weight:700;font-size:0.8rem;padding:5px 12px;box-shadow:0 3px 8px rgba(242,139,168,0.25)">
+                        🎥 Conectar a Zoom ${s.zoom_id ? `<span style="opacity:0.85;font-size:0.72rem">(${esc(s.zoom_id)})</span>` : ''}
+                    </a>
+                </div>` : ''}
+
+                ${s.professor ? `<div style="font-size:0.78rem;margin-top:6px;padding-top:6px;border-top:1px dashed rgba(255,255,255,0.06);display:flex;flex-wrap:wrap;gap:4px;align-items:center">
+                    <span style="color:var(--text-muted)">Docentes:</span> ${parseProfessorEmails(s.professor)}
+                </div>` : ''}
+
+                ${s.current_status_note ? `<div style="font-size:0.78rem;background:rgba(255,255,255,0.04);border-left:3px solid var(--primary);padding:6px 8px;border-radius:4px;color:var(--text-light);margin-top:8px;line-height:1.3">
+                    📌 ${esc(s.current_status_note)}
+                </div>` : ''}
+
+                <div style="display:flex;gap:6px;margin-top:10px;justify-content:flex-end">
+                    <button class="btn btn-ghost btn-sm" style="font-size:0.74rem" onclick="showExamForm(${s.id})">+ Examen</button>
+                    <button class="btn btn-ghost btn-sm" style="font-size:0.74rem" onclick="showAssignmentForm(${s.id})">+ TP</button>
+                </div>
+            </div>`;
+        });
+
+        html += `</div>`;
+    });
+
+    html += `</div></div>`;
+
+    // ⏳ COUNTDOWN TIMELINE OF EXAMS AND DELIVERABLES
+    html += `<div id="timelineSection" style="margin-bottom:30px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+            <div style="font-size:1rem;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px">
+                <span>⏳</span> Cronograma de Exámenes y Entregas (Octubre 2026 – Febrero 2027)
+            </div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">Haz clic en cualquier fecha para editar o cargar nota</div>
         </div>`;
+
+    if (timelineItems.length === 0) {
+        html += '<div class="card" style="padding:16px;color:var(--text-muted);font-size:0.88rem">Sin exámenes ni entregas registradas</div>';
+    } else {
+        html += `<div style="display:flex;flex-direction:column;gap:6px">`;
+        timelineItems.forEach(item => {
+            const cd = getExamCountdown(item.date);
+            const isDone = item.status === 'passed' || item.status === 'graded';
+            const gradeBadge = item.grade !== null && item.grade !== undefined && item.grade !== '' ?
+                `<span class="tag tag-sage" style="font-weight:700">Nota: ${item.grade}</span>` : '';
+
+            html += `<div class="exam-timeline-item" onclick="${item.kind === 'exam' ? `editExamById(${item.id}, ${item.subject_id})` : `editAssignmentById(${item.id}, ${item.subject_id})`}">
+                <div style="display:flex;align-items:center;gap:12px;min-width:0;flex:1">
+                    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;width:48px;height:48px;background:var(--bg);border-radius:10px;border:1px solid rgba(255,255,255,0.06);flex-shrink:0">
+                        <div style="font-size:0.68rem;color:var(--text-muted);text-transform:uppercase">${item.date ? ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'][parseInt(item.date.split('-')[1])-1] : ''}</div>
+                        <div style="font-size:1.1rem;font-weight:800;color:var(--text)">${item.date ? item.date.split('-')[2] : '—'}</div>
+                    </div>
+                    <div style="min-width:0;flex:1">
+                        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                            <span style="font-weight:700;font-size:0.9rem;color:var(--text)">${esc(item.subject_name)}</span>
+                            <span class="tag ${item.type.includes('Parcial') ? 'tag-primary' : item.type.includes('Recuperatorio') ? 'tag-rose' : item.type.includes('Final') ? 'tag-lavender' : 'tag-amber'}" style="font-size:0.7rem;padding:2px 6px">
+                                ${esc(item.type)}
+                            </span>
+                            ${gradeBadge}
+                        </div>
+                        <div style="font-size:0.8rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px">
+                            ${item.time ? `🕒 ${item.time} hs · ` : ''}${esc(item.topic || 'Sin temario')}
+                        </div>
+                    </div>
+                </div>
+                <div style="flex-shrink:0;text-align:right">
+                    ${isDone ? '<span class="tag tag-sage">Completado</span>' : `<span class="exam-countdown-badge ${cd.cls}">${cd.text}</span>`}
+                </div>
+            </div>`;
+        });
+        html += `</div>`;
     }
+    html += `</div>`;
+
+    // 📚 SUBJECT CARDS (Original detail view with exams and assignments)
+    html += `<div style="font-size:1rem;font-weight:700;color:var(--text);margin-bottom:12px;display:flex;align-items:center;gap:8px">
+        <span>📚</span> Detalle por Asignatura y Evaluaciones
+    </div>`;
 
     for (const s of subjects) {
         const exams = allExams.filter(e => e.subject_id === s.id);
@@ -1950,8 +2202,9 @@ async function renderUniversity(el) {
                     <div class="subject-name" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                         <span><span class="status-dot ${stCls}" style="margin-right:8px"></span>${esc(s.name)}</span>
                         ${condBadge}
+                        ${s.commission ? `<span class="tag tag-lavender" style="font-size:0.72rem">Com. ${esc(s.commission)}</span>` : ''}
                     </div>
-                    <div class="subject-meta">${esc(s.professor || '')}${s.schedule ? ' · 🕒 '+esc(s.schedule) : ''}</div>
+                    <div class="subject-meta">${esc(s.professor || '')}${s.schedule ? ' · 🕒 '+esc(s.schedule) : ''}${s.classroom ? ' · 📍 '+esc(s.classroom) : ''}</div>
                 </div>
                 <div style="display:flex;gap:4px">
                     <button class="btn btn-ghost btn-sm" onclick="showExamForm(${s.id})">+ Examen</button>
@@ -1985,7 +2238,432 @@ async function renderUniversity(el) {
         }
         html += '</div></div></div>';
     }
+
     el.innerHTML = html;
+}
+
+// ===================== MALLA CURRICULAR INTERACTIVA =====================
+
+function renderUniversityMesh(el) {
+    if (typeof UTN_INDUSTRIAL_PLAN === 'undefined') {
+        el.innerHTML = '<div class="empty-state"><h3>Cargando plan de estudios...</h3></div>';
+        return;
+    }
+
+    const statusMap = window.__curriculumStatus || {};
+    window.__meshFilter = window.__meshFilter || 'ALL';
+    window.__meshSearch = window.__meshSearch || '';
+
+    // Calculate metrics across all 42 subjects
+    let approvedCount = 0;
+    let regularCount = 0;
+    let cursandoCount = 0;
+    let disponibleCount = 0;
+    let libreCount = 0;
+    let bloqueadaCount = 0;
+
+    UTN_INDUSTRIAL_PLAN.forEach(s => {
+        const eff = getEffectiveSubjectStatus(s, statusMap);
+        if (eff === 'APROBADA') approvedCount++;
+        else if (eff === 'REGULAR') regularCount++;
+        else if (eff === 'CURSANDO') cursandoCount++;
+        else if (eff === 'DISPONIBLE') disponibleCount++;
+        else if (eff === 'LIBRE_DISPONIBLE') libreCount++;
+        else bloqueadaCount++;
+    });
+
+    const totalSubjects = UTN_INDUSTRIAL_PLAN.length;
+    const pct = ((approvedCount / totalSubjects) * 100).toFixed(1);
+
+    // Título Intermedio checklist (Subjects 1..25)
+    const tiSubjects = UTN_INDUSTRIAL_PLAN.filter(s => s.level <= 3);
+    const tiDoneCount = tiSubjects.filter(s => {
+        const st = getEffectiveSubjectStatus(s, statusMap);
+        return st === 'APROBADA' || st === 'REGULAR';
+    }).length;
+    const tiReady = tiDoneCount === tiSubjects.length;
+
+    let html = '';
+
+    // 1. Degree Progress Card
+    html += `<div class="card" style="margin-bottom:18px;padding:16px 20px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+            <div>
+                <div style="font-weight:700;font-size:1.05rem;color:var(--text)">Progreso de la Carrera · Plan 2023</div>
+                <div style="font-size:0.8rem;color:var(--text-muted)">${approvedCount} de ${totalSubjects} asignaturas aprobadas (${pct}%) · UTN FRA</div>
+            </div>
+            <div style="font-size:1.4rem;font-weight:800;color:var(--sage)">${pct}%</div>
+        </div>
+        <div style="width:100%;height:10px;background:rgba(255,255,255,0.08);border-radius:6px;overflow:hidden;margin-bottom:14px">
+            <div style="width:${pct}%;height:100%;background:linear-gradient(90deg, var(--primary), var(--sage));border-radius:6px;transition:width 0.4s ease"></div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;font-size:0.82rem">
+            <span class="tag tag-sage" style="font-weight:600">✅ Aprobadas: ${approvedCount}</span>
+            <span class="tag tag-lavender" style="font-weight:600">📘 Regulares: ${regularCount}</span>
+            <span class="tag tag-primary" style="font-weight:600">⚡ Cursando: ${cursandoCount}</span>
+            <span class="tag tag-amber" style="font-weight:600">🔓 Disponibles: ${disponibleCount}</span>
+            <span class="tag tag-cyan" style="font-weight:600">🌐 Final Libre: ${libreCount}</span>
+            <span class="tag tag-muted" style="font-weight:600">🔒 Bloqueadas: ${bloqueadaCount}</span>
+        </div>
+    </div>`;
+
+    // 2. Milestones Card (Título Intermedio & PPS)
+    html += `<div class="card" style="margin-bottom:18px;padding:14px 18px;background:rgba(255,255,255,0.02)">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px">
+            <div style="display:flex;align-items:center;gap:12px;background:var(--bg);padding:10px 14px;border-radius:10px;border-left:3px solid ${tiReady ? 'var(--sage)' : 'var(--lavender)'}">
+                <div style="font-size:1.6rem">🎓</div>
+                <div>
+                    <div style="font-weight:700;font-size:0.88rem">Título Intermedio: Técnico Universitario</div>
+                    <div style="font-size:0.78rem;color:var(--text-muted)">Adm., Producción y Gestión Industrial (${tiDoneCount}/25 materias 1° a 3° Nivel)</div>
+                </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:12px;background:var(--bg);padding:10px 14px;border-radius:10px;border-left:3px solid var(--amber)">
+                <div style="font-size:1.6rem">🏭</div>
+                <div>
+                    <div style="font-weight:700;font-size:0.88rem">Práctica Profesional Supervisada (PPS)</div>
+                    <div style="font-size:0.78rem;color:var(--text-muted)">200 hs reloj · Requiere cursadas y aprobadas de 3° y 4° Nivel</div>
+                </div>
+            </div>
+        </div>
+    </div>`;
+
+    // 3. Filter Bar & Search Input
+    html += `<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:16px">
+        <div class="sub-tabs" style="margin:0;gap:4px">
+            <button class="btn btn-sm ${window.__meshFilter === 'ALL' ? 'btn-primary' : 'btn-secondary'}" onclick="setMeshFilter('ALL')">Todas</button>
+            <button class="btn btn-sm ${window.__meshFilter === '1' ? 'btn-primary' : 'btn-secondary'}" onclick="setMeshFilter('1')">Nivel I</button>
+            <button class="btn btn-sm ${window.__meshFilter === '2' ? 'btn-primary' : 'btn-secondary'}" onclick="setMeshFilter('2')">Nivel II</button>
+            <button class="btn btn-sm ${window.__meshFilter === '3' ? 'btn-primary' : 'btn-secondary'}" onclick="setMeshFilter('3')">Nivel III</button>
+            <button class="btn btn-sm ${window.__meshFilter === '4' ? 'btn-primary' : 'btn-secondary'}" onclick="setMeshFilter('4')">Nivel IV</button>
+            <button class="btn btn-sm ${window.__meshFilter === '5' ? 'btn-primary' : 'btn-secondary'}" onclick="setMeshFilter('5')">Nivel V</button>
+            <button class="btn btn-sm ${window.__meshFilter === 'DISPONIBLES' ? 'btn-primary' : 'btn-secondary'}" onclick="setMeshFilter('DISPONIBLES')">🔓 Disponibles</button>
+            <button class="btn btn-sm ${window.__meshFilter === 'CURSANDO' ? 'btn-primary' : 'btn-secondary'}" onclick="setMeshFilter('CURSANDO')">⚡ Cursando</button>
+        </div>
+        <div style="min-width:220px;flex:1;max-width:320px">
+            <input type="text" class="form-control" style="padding:6px 12px;font-size:0.84rem" placeholder="🔍 Buscar asignatura o código..." value="${esc(window.__meshSearch)}" oninput="setMeshSearch(this.value)">
+        </div>
+    </div>`;
+
+    // 4. Malla Grid (5 Columns)
+    const levels = [
+        { num: 1, name: "Nivel I (1° Año)", hours: "31 hs/sem" },
+        { num: 2, name: "Nivel II (2° Año)", hours: "30 hs/sem" },
+        { num: 3, name: "Nivel III (3° Año)", hours: "31 hs/sem" },
+        { num: 4, name: "Nivel IV (4° Año)", hours: "34 hs/sem" },
+        { num: 5, name: "Nivel V (5° Año)", hours: "33 hs/sem" }
+    ];
+
+    html += `<div class="mesh-container" id="meshGrid">`;
+
+    levels.forEach(lvl => {
+        // If a specific level is filtered and it's not this one, skip
+        if (['1','2','3','4','5'].includes(window.__meshFilter) && window.__meshFilter !== String(lvl.num)) {
+            return;
+        }
+
+        const subjectsInLevel = UTN_INDUSTRIAL_PLAN.filter(s => s.level === lvl.num);
+        html += `<div class="mesh-column">
+            <div class="mesh-column-header">
+                <div class="mesh-column-title">${lvl.name}</div>
+                <div class="mesh-column-subtitle">${lvl.hours} anuales · ${subjectsInLevel.length} materias</div>
+            </div>`;
+
+        subjectsInLevel.forEach(s => {
+            const effStatus = getEffectiveSubjectStatus(s, statusMap);
+            const userEntry = statusMap[s.id] || {};
+            const grade = userEntry.grade;
+            const cfg = UTN_INDUSTRIAL_STATUS_CONFIG[effStatus] || UTN_INDUSTRIAL_STATUS_CONFIG.BLOQUEADA;
+
+            // Apply search & status filter
+            const matchesSearch = !window.__meshSearch ||
+                s.name.toLowerCase().includes(window.__meshSearch.toLowerCase()) ||
+                (s.code && s.code.toLowerCase().includes(window.__meshSearch.toLowerCase())) ||
+                (s.area && s.area.toLowerCase().includes(window.__meshSearch.toLowerCase()));
+
+            let matchesStatusFilter = true;
+            if (window.__meshFilter === 'DISPONIBLES') {
+                matchesStatusFilter = (effStatus === 'DISPONIBLE' || effStatus === 'LIBRE_DISPONIBLE');
+            } else if (window.__meshFilter === 'CURSANDO') {
+                matchesStatusFilter = (effStatus === 'CURSANDO');
+            }
+
+            const isVisible = matchesSearch && matchesStatusFilter;
+
+            // Correlatives Pills
+            const reqPills = [];
+            (s.cursadasParaCursar || []).forEach(reqId => {
+                const reqStatus = getEffectiveSubjectStatus(UTN_INDUSTRIAL_PLAN.find(x => x.id === reqId) || { id: reqId }, statusMap);
+                const isMet = reqStatus === 'APROBADA' || reqStatus === 'REGULAR';
+                reqPills.push(`<span class="req-pill ${isMet ? 'is-met' : 'is-missing'}" title="${isMet ? 'Cumplida (Regular o Aprobada)' : 'Falta cursar/firmar'}">#${reqId}</span>`);
+            });
+            (s.aprobadasParaCursar || []).forEach(reqId => {
+                const reqStatus = getEffectiveSubjectStatus(UTN_INDUSTRIAL_PLAN.find(x => x.id === reqId) || { id: reqId }, statusMap);
+                const isMet = reqStatus === 'APROBADA';
+                reqPills.push(`<span class="req-pill ${isMet ? 'is-met' : 'is-missing'}" style="border:1px solid #5cb38e" title="${isMet ? 'Cumplida (Aprobada)' : 'Falta aprobar final'}">★#${reqId}</span>`);
+            });
+
+            html += `<div class="mesh-card" data-mesh-id="${s.id}" style="${!isVisible ? 'display:none;' : ''}border-left:4px solid ${cfg.border}"
+                onmouseenter="highlightCorrelatives(${s.id})"
+                onmouseleave="clearCorrelativesHighlight()"
+                onclick="inspectCurriculumSubject(${s.id})">
+                <div class="mesh-card-header">
+                    <span class="mesh-card-id">#${s.id} · ${esc(s.code || '')}</span>
+                    <span class="tag ${cfg.badgeClass}" style="font-size:0.68rem;padding:2px 6px">
+                        ${cfg.icon} ${cfg.label}
+                    </span>
+                </div>
+                <div class="mesh-card-title">
+                    ${esc(s.name)}
+                    ${s.isIntegrator ? '<span style="color:#ebb255;font-size:0.75rem;margin-left:4px" title="Materia Integradora">⭐</span>' : ''}
+                </div>
+                <div class="mesh-card-meta">
+                    <span>${s.weeklyHours} hs · ${esc(s.regime)}</span>
+                    ${grade ? `<strong style="color:var(--sage)">Nota: ${grade}</strong>` : `<span style="font-size:0.68rem;color:var(--text-muted)">${esc(s.area)}</span>`}
+                </div>
+                ${reqPills.length > 0 ? `<div class="mesh-card-reqs">
+                    <span style="font-size:0.66rem;color:var(--text-muted)">Req:</span> ${reqPills.join(' ')}
+                </div>` : ''}
+            </div>`;
+        });
+
+        // Special milestone cards inside columns
+        if (lvl.num === 3) {
+            html += `<div style="background:rgba(164,140,224,0.08);border:1px dashed var(--lavender);border-radius:10px;padding:10px;font-size:0.78rem">
+                <div style="font-weight:700;color:var(--lavender);margin-bottom:4px">🏅 Título Intermedio</div>
+                <div style="color:var(--text-muted)">Completar Niveles I a III otorga el título de Técnico Universitario.</div>
+            </div>`;
+        } else if (lvl.num === 5) {
+            html += `<div style="background:rgba(235,178,85,0.08);border:1px dashed var(--amber);border-radius:10px;padding:10px;font-size:0.78rem">
+                <div style="font-weight:700;color:var(--amber);margin-bottom:4px">⭐ Proyecto Final & PPS</div>
+                <div style="color:var(--text-muted)">200 hs de PPS + Tesina Integradora para la Graduación.</div>
+            </div>`;
+        }
+
+        html += `</div>`;
+    });
+
+    html += `</div>`;
+
+    // 5. Visual Legend Bar
+    html += `<div class="mesh-legend">
+        <span style="font-weight:700;font-size:0.8rem;color:var(--text-muted);margin-right:4px">REFERENCIAS:</span>
+        <div class="legend-item"><div class="legend-dot" style="background:#5cb38e"></div> Aprobada</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#a48ce0"></div> Regular (Pendiente Final)</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#f28ba8"></div> Cursando 2026</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#ebb255"></div> Disponible para Cursar</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#4ec5db"></div> Final Libre</div>
+        <div class="legend-item"><div class="legend-dot" style="background:rgba(255,255,255,0.25)"></div> Bloqueada</div>
+        <div class="legend-item" style="margin-left:auto"><span style="border-bottom:2px solid #ebb255;padding-bottom:1px">Dorado</span> = Requisito previo &nbsp;·&nbsp; <span style="border-bottom:2px solid #5cb38e;padding-bottom:1px">Verde</span> = Materia que destraba</div>
+    </div>`;
+
+    el.innerHTML = html;
+}
+
+function setMeshFilter(filter) {
+    window.__meshFilter = filter;
+    const el = document.getElementById('uniTabContent');
+    if (el) renderUniversityMesh(el);
+}
+
+function setMeshSearch(q) {
+    window.__meshSearch = q;
+    // Live update card visibility without full re-render
+    const cards = document.querySelectorAll('.mesh-card[data-mesh-id]');
+    const qLower = q.toLowerCase();
+    cards.forEach(card => {
+        const id = parseInt(card.getAttribute('data-mesh-id'));
+        const s = UTN_INDUSTRIAL_PLAN.find(x => x.id === id);
+        if (!s) return;
+        const matchesSearch = !q ||
+            s.name.toLowerCase().includes(qLower) ||
+            (s.code && s.code.toLowerCase().includes(qLower)) ||
+            (s.area && s.area.toLowerCase().includes(qLower));
+
+        const effStatus = getEffectiveSubjectStatus(s, window.__curriculumStatus || {});
+        let matchesStatusFilter = true;
+        if (window.__meshFilter === 'DISPONIBLES') {
+            matchesStatusFilter = (effStatus === 'DISPONIBLE' || effStatus === 'LIBRE_DISPONIBLE');
+        } else if (window.__meshFilter === 'CURSANDO') {
+            matchesStatusFilter = (effStatus === 'CURSANDO');
+        }
+
+        card.style.display = (matchesSearch && matchesStatusFilter) ? '' : 'none';
+    });
+}
+
+function highlightCorrelatives(subjectId) {
+    clearCorrelativesHighlight();
+    const currentCard = document.querySelector(`.mesh-card[data-mesh-id="${subjectId}"]`);
+    if (currentCard) currentCard.classList.add('is-active-subject');
+
+    const prereqIds = getSubjectPrerequisiteIds(subjectId);
+    prereqIds.forEach(id => {
+        const card = document.querySelector(`.mesh-card[data-mesh-id="${id}"]`);
+        if (card) card.classList.add('is-prereq-highlight');
+    });
+
+    const unlockIds = getSubjectDependentIds(subjectId);
+    unlockIds.forEach(id => {
+        const card = document.querySelector(`.mesh-card[data-mesh-id="${id}"]`);
+        if (card) card.classList.add('is-unlock-highlight');
+    });
+}
+
+function clearCorrelativesHighlight() {
+    document.querySelectorAll('.mesh-card').forEach(c => {
+        c.classList.remove('is-active-subject', 'is-prereq-highlight', 'is-unlock-highlight');
+    });
+}
+
+function inspectCurriculumSubject(subjectId) {
+    const s = UTN_INDUSTRIAL_PLAN.find(x => x.id === subjectId);
+    if (!s) return;
+
+    const statusMap = window.__curriculumStatus || {};
+    const currentEntry = statusMap[subjectId] || {};
+    const effStatus = getEffectiveSubjectStatus(s, statusMap);
+    const unlockInfo = evaluateSubjectUnlock(s, statusMap);
+    const downstreamIds = getSubjectDependentIds(subjectId);
+    const downstreamSubjects = UTN_INDUSTRIAL_PLAN.filter(x => downstreamIds.includes(x.id));
+
+    const html = `<div style="display:flex;flex-direction:column;gap:16px">
+        <div style="background:var(--bg);padding:14px;border-radius:12px;border:1px solid rgba(255,255,255,0.06)">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+                <div>
+                    <div style="font-size:0.75rem;font-weight:700;color:var(--text-muted)">NIVEL ${s.level} · #${s.id} (${esc(s.code || '')})</div>
+                    <div style="font-size:1.15rem;font-weight:800;color:var(--text);margin-top:2px">
+                        ${esc(s.name)} ${s.isIntegrator ? '<span style="color:#ebb255">⭐ Integradora</span>' : ''}
+                    </div>
+                    <div style="font-size:0.82rem;color:var(--text-muted);margin-top:4px">
+                        ${s.weeklyHours} hs/sem · Régimen ${esc(s.regime)} · Área: ${esc(s.area)}
+                    </div>
+                </div>
+                <div>
+                    <span class="tag ${UTN_INDUSTRIAL_STATUS_CONFIG[effStatus].badgeClass}" style="font-size:0.82rem;padding:4px 10px">
+                        ${UTN_INDUSTRIAL_STATUS_CONFIG[effStatus].icon} ${UTN_INDUSTRIAL_STATUS_CONFIG[effStatus].label}
+                    </span>
+                </div>
+            </div>
+            ${s.notes ? `<div style="font-size:0.8rem;color:var(--text-light);background:rgba(255,255,255,0.03);padding:6px 10px;border-radius:6px;margin-top:8px">📌 ${esc(s.notes)}</div>` : ''}
+        </div>
+
+        <div>
+            <label style="font-size:0.82rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:8px;display:block">
+                Modificar Estado de la Materia
+            </label>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:6px" id="statusButtonGroup">
+                <button type="button" class="btn ${effStatus === 'APROBADA' ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="selectSubjectStatus('APROBADA')">✅ Aprobada</button>
+                <button type="button" class="btn ${effStatus === 'REGULAR' ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="selectSubjectStatus('REGULAR')">📘 Regular</button>
+                <button type="button" class="btn ${effStatus === 'CURSANDO' ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="selectSubjectStatus('CURSANDO')">⚡ Cursando</button>
+                <button type="button" class="btn ${effStatus === 'LIBRE_DISPONIBLE' ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="selectSubjectStatus('LIBRE_DISPONIBLE')">🌐 Final Libre</button>
+                <button type="button" class="btn ${effStatus === 'BLOQUEADA' || effStatus === 'DISPONIBLE' ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="selectSubjectStatus('RESET')">🔄 Reset / Automático</button>
+            </div>
+        </div>
+
+        <div id="gradeContainer" style="display:${effStatus === 'APROBADA' ? 'block' : 'none'}">
+            <div class="form-group" style="margin:0">
+                <label>Calificación Final (1 a 10)</label>
+                <input type="number" step="0.5" min="1" max="10" class="form-control" id="modalGradeInput" value="${currentEntry.grade !== null && currentEntry.grade !== undefined ? currentEntry.grade : ''}" placeholder="Ej. 8, 9...">
+            </div>
+        </div>
+
+        <!-- Correlatives Checklist -->
+        <div style="background:var(--bg);border-radius:12px;padding:14px;border:1px solid rgba(255,255,255,0.06)">
+            <div style="font-size:0.82rem;font-weight:700;color:var(--text);margin-bottom:8px">
+                📋 Verificación de Correlatividades (UTN FRA)
+            </div>
+
+            <div style="font-size:0.8rem;margin-bottom:6px">
+                <strong style="color:var(--text-muted)">Para Cursar (Cursadas firmadas):</strong>
+                ${(s.cursadasParaCursar || []).length === 0 ? '<span style="color:var(--sage)"> Sin requisitos previos</span>' : ''}
+            </div>
+            ${(s.cursadasParaCursar || []).map(cid => {
+                const reqSubj = UTN_INDUSTRIAL_PLAN.find(x => x.id === cid) || { name: 'Materia #' + cid };
+                const reqStatus = getEffectiveSubjectStatus(reqSubj, statusMap);
+                const isMet = reqStatus === 'APROBADA' || reqStatus === 'REGULAR';
+                return `<div style="font-size:0.78rem;display:flex;align-items:center;gap:6px;margin:2px 0 2px 12px">
+                    <span>${isMet ? '✅' : '❌'}</span>
+                    <span style="color:${isMet ? 'var(--text)' : '#e06c75'}">#${cid} ${esc(reqSubj.name)} (${reqStatus})</span>
+                </div>`;
+            }).join('')}
+
+            ${(s.aprobadasParaCursar || []).length > 0 ? `<div style="font-size:0.8rem;margin:8px 0 4px">
+                <strong style="color:var(--text-muted)">Para Cursar (Finales aprobados):</strong>
+            </div>
+            ${s.aprobadasParaCursar.map(cid => {
+                const reqSubj = UTN_INDUSTRIAL_PLAN.find(x => x.id === cid) || { name: 'Materia #' + cid };
+                const reqStatus = getEffectiveSubjectStatus(reqSubj, statusMap);
+                const isMet = reqStatus === 'APROBADA';
+                return `<div style="font-size:0.78rem;display:flex;align-items:center;gap:6px;margin:2px 0 2px 12px">
+                    <span>${isMet ? '✅' : '❌'}</span>
+                    <span style="color:${isMet ? 'var(--text)' : '#e06c75'}">#${cid} ${esc(reqSubj.name)} (${reqStatus})</span>
+                </div>`;
+            }).join('')}` : ''}
+
+            <div style="margin-top:10px;padding-top:8px;border-top:1px dashed rgba(255,255,255,0.06);font-size:0.8rem">
+                <strong>Condición de Inscripción:</strong>
+                <span class="tag ${unlockInfo.canEnroll ? 'tag-sage' : 'tag-rose'}" style="margin-left:6px">
+                    ${unlockInfo.canEnroll ? '🔓 Habilitada para Cursar' : `🔒 Bloqueada (Faltan ${unlockInfo.missingCursadas.length + unlockInfo.missingAprobadasCursar.length} materias)`}
+                </span>
+            </div>
+        </div>
+
+        ${downstreamSubjects.length > 0 ? `<div style="background:var(--bg);border-radius:12px;padding:14px;border:1px solid rgba(255,255,255,0.06)">
+            <div style="font-size:0.82rem;font-weight:700;color:var(--text);margin-bottom:6px">
+                🚀 Materias que Destraba a Futuro (${downstreamSubjects.length})
+            </div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px">
+                ${downstreamSubjects.map(ds => `<span class="tag tag-lavender" style="font-size:0.75rem" title="Nivel ${ds.level}">
+                    N${ds.level}: #${ds.id} ${esc(ds.name)}
+                </span>`).join('')}
+            </div>
+        </div>` : ''}
+    </div>`;
+
+    openModal(`Ficha de Asignatura · #${s.id} ${s.name}`, html);
+
+    // Track chosen status in modal
+    let selectedStatus = effStatus;
+    window.selectSubjectStatus = function(st) {
+        selectedStatus = st;
+        const grp = document.getElementById('statusButtonGroup');
+        if (grp) {
+            grp.querySelectorAll('button').forEach(btn => {
+                btn.className = 'btn btn-secondary btn-sm';
+            });
+            event.target.className = 'btn btn-primary btn-sm';
+        }
+        const gradeBox = document.getElementById('gradeContainer');
+        if (gradeBox) {
+            gradeBox.style.display = st === 'APROBADA' ? 'block' : 'none';
+        }
+    };
+
+    document.getElementById('modalSave').onclick = async () => {
+        const gradeInput = document.getElementById('modalGradeInput');
+        const gradeVal = gradeInput && gradeInput.value ? parseFloat(gradeInput.value) : null;
+
+        const finalStatus = selectedStatus === 'RESET' ?
+            (evaluateSubjectUnlock(s, statusMap).canEnroll ? 'DISPONIBLE' : 'BLOQUEADA') : selectedStatus;
+
+        // Persist to backend
+        const res = await api(eel.update_curriculum_status, subjectId, finalStatus, gradeVal, null);
+        if (res && res.ok) {
+            window.__curriculumStatus = window.__curriculumStatus || {};
+            window.__curriculumStatus[subjectId] = {
+                subject_id: subjectId,
+                status: finalStatus,
+                grade: gradeVal,
+                note: null
+            };
+            showToast(`Estado actualizado: ${finalStatus}`);
+            closeModal();
+            const container = document.getElementById('uniTabContent');
+            if (container) renderUniversityMesh(container);
+        } else {
+            showToast('Error al guardar estado');
+        }
+    };
 }
 
 function editExamById(examId, subjectId) {
@@ -2009,25 +2687,72 @@ function showSubjectForm(id) {
 
 function showSubjectModal(subj) {
     const html = `<form id="modalForm">
-        <div class="form-group"><label>Nombre *</label><input class="form-control" name="name" value="${esc(subj ? subj.name : '')}"></div>
-        <div class="form-row"><div class="form-group"><label>Profesor</label><input class="form-control" name="professor" value="${esc(subj ? subj.professor : '')}"></div>
-        <div class="form-group"><label>Horario (ej. Mar 18:30 - 22:30)</label><input class="form-control" name="schedule" value="${esc(subj ? subj.schedule : '')}"></div></div>
-        <div class="form-row"><div class="form-group"><label>Año</label><input type="number" class="form-control" name="year" value="${subj ? subj.year : new Date().getFullYear()}"></div>
-        <div class="form-group"><label>Estado</label><select class="form-control" name="status">
-            <option value="current" ${!subj || subj.status === 'current' ? 'selected' : ''}>En curso</option>
-            <option value="passed" ${subj && subj.status === 'passed' ? 'selected' : ''}>Aprobada</option>
-            <option value="failed" ${subj && subj.status === 'failed' ? 'selected' : ''}>Desaprobada</option>
-        </select></div></div>
+        <div class="form-group"><label>Nombre de la Materia *</label><input class="form-control" name="name" value="${esc(subj ? subj.name : '')}" required></div>
+        <div class="form-row">
+            <div class="form-group"><label>Comisión</label><input class="form-control" name="commission" value="${esc(subj ? (subj.commission || '') : '')}" placeholder="ej. 2-51-N"></div>
+            <div class="form-group"><label>Día de Cursada</label><select class="form-control" name="day_of_week">
+                <option value="">Sin día fijo</option>
+                <option value="Lunes" ${subj && subj.day_of_week === 'Lunes' ? 'selected' : ''}>Lunes</option>
+                <option value="Martes" ${subj && subj.day_of_week === 'Martes' ? 'selected' : ''}>Martes</option>
+                <option value="Miércoles" ${subj && subj.day_of_week === 'Miércoles' ? 'selected' : ''}>Miércoles</option>
+                <option value="Jueves" ${subj && subj.day_of_week === 'Jueves' ? 'selected' : ''}>Jueves</option>
+                <option value="Viernes" ${subj && subj.day_of_week === 'Viernes' ? 'selected' : ''}>Viernes</option>
+                <option value="Sábado" ${subj && subj.day_of_week === 'Sábado' ? 'selected' : ''}>Sábado</option>
+                <option value="Libre" ${subj && subj.day_of_week === 'Libre' ? 'selected' : ''}>Libre / Suficiencia</option>
+            </select></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Hora Inicio</label><input type="time" class="form-control" name="start_time" value="${esc(subj ? (subj.start_time || '') : '')}"></div>
+            <div class="form-group"><label>Hora Fin</label><input type="time" class="form-control" name="end_time" value="${esc(subj ? (subj.end_time || '') : '')}"></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Turno</label><select class="form-control" name="shift">
+                <option value="NOCHE" ${subj && subj.shift === 'NOCHE' ? 'selected' : ''}>Noche (18:15 a 23:00)</option>
+                <option value="MANANA" ${subj && subj.shift === 'MANANA' ? 'selected' : ''}>Mañana (08:00 a 12:45)</option>
+                <option value="TARDE" ${subj && subj.shift === 'TARDE' ? 'selected' : ''}>Tarde (13:00 a 17:45)</option>
+                <option value="LIBRE" ${subj && subj.shift === 'LIBRE' ? 'selected' : ''}>Libre</option>
+            </select></div>
+            <div class="form-group"><label>Aula / Sede</label><input class="form-control" name="classroom" value="${esc(subj ? (subj.classroom || '') : '')}" placeholder="ej. Aula F102, Lab PC"></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Enlace Zoom / Virtual</label><input class="form-control" name="virtual_link" value="${esc(subj ? (subj.virtual_link || '') : '')}" placeholder="https://utn.zoom.us/j/..."></div>
+            <div class="form-group"><label>Zoom ID / Clave</label><input class="form-control" name="zoom_id" value="${esc(subj ? (subj.zoom_id || '') : '')}" placeholder="ej. 624 142 4085"></div>
+        </div>
+        <div class="form-group"><label>Docentes y Correos (separados por /)</label><input class="form-control" name="professor" value="${esc(subj ? subj.professor : '')}" placeholder="Prof. Nombre (correo@fra.utn.edu.ar)"></div>
+        <div class="form-group"><label>Horario Resumen</label><input class="form-control" name="schedule" value="${esc(subj ? subj.schedule : '')}" placeholder="ej. Lunes 18:15 a 20:30 hs"></div>
+        <div class="form-group"><label>Nota de Estado / Parciales</label><input class="form-control" name="current_status_note" value="${esc(subj ? (subj.current_status_note || '') : '')}" placeholder="ej. Debe 1° Parcial. Lab Grupo 6..."></div>
+        <div class="form-row">
+            <div class="form-group"><label>Año</label><input type="number" class="form-control" name="year" value="${subj ? subj.year : new Date().getFullYear()}"></div>
+            <div class="form-group"><label>Estado</label><select class="form-control" name="status">
+                <option value="current" ${!subj || subj.status === 'current' ? 'selected' : ''}>En curso</option>
+                <option value="passed" ${subj && subj.status === 'passed' ? 'selected' : ''}>Aprobada</option>
+                <option value="failed" ${subj && subj.status === 'failed' ? 'selected' : ''}>Desaprobada</option>
+            </select></div>
+        </div>
     </form>`;
     openModal(subj ? 'Editar materia' : 'Nueva materia', html);
     document.getElementById('modalSave').onclick = async () => {
         const f = new FormData(document.getElementById('modalForm'));
-        const data = { name: f.get('name'), professor: f.get('professor'),
-            schedule: f.get('schedule'), year: parseInt(f.get('year')) || new Date().getFullYear(), status: f.get('status') };
+        const data = {
+            name: f.get('name'),
+            commission: f.get('commission'),
+            day_of_week: f.get('day_of_week'),
+            start_time: f.get('start_time'),
+            end_time: f.get('end_time'),
+            shift: f.get('shift'),
+            classroom: f.get('classroom'),
+            virtual_link: f.get('virtual_link'),
+            zoom_id: f.get('zoom_id'),
+            professor: f.get('professor'),
+            schedule: f.get('schedule'),
+            current_status_note: f.get('current_status_note'),
+            year: parseInt(f.get('year')) || new Date().getFullYear(),
+            status: f.get('status')
+        };
         if (!data.name) { showToast('El nombre es obligatorio'); return; }
         const res = subj ? await api(eel.update_subject, subj.id, data) : await api(eel.create_subject, data);
         if (res && res.ok) { showToast(subj ? 'Actualizada' : 'Creada'); closeModal(); navigate('university'); }
-        else showToast('Error');
+        else showToast('Error al guardar');
     };
 }
 

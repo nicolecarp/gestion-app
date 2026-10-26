@@ -1732,3 +1732,152 @@ tr:hover td { background: var(--bg); }
 
 
 
+
+/* ===================== CALCULADORA FACTURAS & IGV ===================== */
+.calc-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px;
+    margin: 16px 0;
+}
+.calc-kpi-card {
+    background: var(--card);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    position: relative;
+    box-shadow: var(--shadow);
+}
+.calc-kpi-card.highlight {
+    border-color: #ef4444;
+    background: rgba(239, 68, 68, 0.05);
+}
+.calc-kpi-card.green {
+    border-color: #10b981;
+    background: rgba(16, 185, 129, 0.05);
+}
+.calc-kpi-card.amber {
+    border-color: #f59e0b;
+    background: rgba(245, 158, 11, 0.05);
+}
+.calc-kpi-label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+}
+.calc-kpi-value {
+    font-size: 1.35rem;
+    font-weight: 800;
+    font-family: 'Outfit', sans-serif;
+    margin-top: 6px;
+    color: var(--text);
+}
+.calc-kpi-card.highlight .calc-kpi-value { color: #ef4444; }
+.calc-kpi-card.green .calc-kpi-value { color: #10b981; }
+.calc-kpi-card.amber .calc-kpi-value { color: #f59e0b; }
+
+.calc-dates-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 8px;
+    margin-top: 8px;
+}
+.calc-date-chip {
+    background: var(--card-bg, rgba(255,255,255,0.04));
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    padding: 8px 10px;
+    text-align: center;
+}
+.calc-date-days {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    font-weight: 600;
+}
+.calc-date-val {
+    font-size: 0.85rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-top: 2px;
+}
+.son-letras-box {
+    font-size: 0.9rem;
+    color: var(--accent, #6366f1);
+    font-weight: 600;
+    font-style: italic;
+    margin-top: 6px;
+    padding: 10px 14px;
+    background: rgba(99, 102, 241, 0.08);
+    border-radius: 8px;
+    border-left: 3px solid var(--accent, #6366f1);
+}
+
+/* ===================== SUNAT QUICK STATION ===================== */
+.sunat-station {
+    background: var(--card);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: var(--shadow);
+}
+.sunat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 12px;
+    margin-top: 14px;
+}
+.sunat-field-card {
+    background: var(--card-bg, rgba(255, 255, 255, 0.03));
+    border: 1px solid var(--border-light);
+    border-radius: 10px;
+    padding: 12px 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 10px;
+    transition: var(--transition);
+}
+.sunat-field-card:hover {
+    border-color: var(--accent, #6366f1);
+    background: var(--card-hover, rgba(255, 255, 255, 0.05));
+}
+.sunat-field-info {
+    flex: 1;
+    min-width: 0;
+}
+.sunat-field-label {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    font-weight: 700;
+    color: var(--text-muted);
+    letter-spacing: 0.5px;
+    margin-bottom: 3px;
+}
+.sunat-field-val {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-family: 'Outfit', sans-serif;
+}
+.btn-sunat-copy {
+    background: rgba(99, 102, 241, 0.12);
+    color: var(--accent, #6366f1);
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    padding: 7px 12px;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.2s;
+}
+.btn-sunat-copy:hover {
+    background: var(--accent, #6366f1);
+    color: #fff;
+}

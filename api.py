@@ -164,11 +164,11 @@ def get_invoices():
     conn = get_connection()
     try:
         rows = conn.execute("""
-            SELECT i.*, c.business_name, c.ruc, cs.nombre_cliente as site_name, cs.sede_cliente
+            SELECT i.*, c.business_name, c.ruc, cs.nombre_cliente as site_name, cs.sede_cliente, cs.location_code as site_location
             FROM invoices i
             JOIN clients c ON i.client_id=c.id
             LEFT JOIN client_sites cs ON i.client_site_id = cs.id
-            ORDER BY i.created_at DESC LIMIT 50
+            ORDER BY COALESCE(i.year_billed, 0) DESC, COALESCE(i.month_billed, 0) DESC, i.id DESC
         """).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -188,14 +188,24 @@ def create_invoice(data):
         if not yb and issue:
             try: yb = int(issue.split('-')[0])
             except: pass
+
+        amount = float(data.get('amount') or 0)
+        igv = float(data.get('igv') if data.get('igv') is not None else round(amount * 0.18, 2))
+        total = float(data.get('total') if data.get('total') is not None else round(amount + igv, 2))
+        detraccion = float(data.get('detraccion') if data.get('detraccion') is not None else (round(total * 0.12, 2) if total >= 700 else 0))
+        credito = float(data.get('credito') if data.get('credito') is not None else round(total - detraccion, 2))
+
         cur = conn.execute("""
             INSERT INTO invoices (client_id, client_site_id, series, number, service, payment_type,
-                amount, igv, total, issue_date, due_date, month_billed, year_billed)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                amount, igv, total, issue_date, due_date, month_billed, year_billed,
+                purchase_order, detraccion, credito, location_code, items_json, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (data['client_id'], data.get('client_site_id'), data.get('series'), data.get('number'),
-              data.get('service'), data.get('payment_type'), data.get('amount'),
-              data.get('igv', 0), data.get('total'), data.get('issue_date'),
-              data.get('due_date'), mb, yb))
+              data.get('service'), data.get('payment_type', 'credito'), amount,
+              igv, total, data.get('issue_date'),
+              data.get('due_date'), mb, yb,
+              data.get('purchase_order'), detraccion, credito,
+              data.get('location_code'), data.get('items_json'), data.get('status', 'issued')))
         conn.commit()
         return {'ok': True, 'id': cur.lastrowid}
     except Exception as e:
@@ -216,15 +226,25 @@ def update_invoice(id, data):
         if not yb and issue:
             try: yb = int(issue.split('-')[0])
             except: pass
+
+        amount = float(data.get('amount') or 0)
+        igv = float(data.get('igv') if data.get('igv') is not None else round(amount * 0.18, 2))
+        total = float(data.get('total') if data.get('total') is not None else round(amount + igv, 2))
+        detraccion = float(data.get('detraccion') if data.get('detraccion') is not None else 0)
+        credito = float(data.get('credito') if data.get('credito') is not None else round(total - detraccion, 2))
+
         conn.execute("""
             UPDATE invoices SET client_id=?, client_site_id=?, series=?, number=?, service=?,
                 payment_type=?, amount=?, igv=?, total=?, issue_date=?, due_date=?, status=?,
-                month_billed=?, year_billed=?
+                month_billed=?, year_billed=?, purchase_order=?, detraccion=?, credito=?,
+                location_code=?, items_json=?
             WHERE id=?
         """, (data['client_id'], data.get('client_site_id'), data.get('series'), data.get('number'),
-              data.get('service'), data.get('payment_type'), data.get('amount'),
-              data.get('igv'), data.get('total'), data.get('issue_date'),
-              data.get('due_date'), data.get('status'), mb, yb, id))
+              data.get('service'), data.get('payment_type', 'credito'), amount,
+              igv, total, data.get('issue_date'),
+              data.get('due_date'), data.get('status', 'issued'), mb, yb,
+              data.get('purchase_order'), detraccion, credito,
+              data.get('location_code'), data.get('items_json'), id))
         conn.commit()
         return {'ok': True}
     except Exception as e:
@@ -1778,12 +1798,12 @@ def create_client_site(data):
     try:
         cur = conn.execute("""
             INSERT INTO client_sites (client_id, codigo_cliente, codigo_sede, codigo_cliente_sede,
-                nombre_cliente, sede_cliente, distrito, is_regular, monthly_fee, servicios, contract_start, contract_end)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                nombre_cliente, sede_cliente, distrito, is_regular, monthly_fee, servicios, contract_start, contract_end, location_code)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (data.get('client_id'), data.get('codigo_cliente'), data.get('codigo_sede'), data.get('codigo_cliente_sede'),
               data.get('nombre_cliente'), data.get('sede_cliente'), data.get('distrito'),
               1 if data.get('is_regular') else 0, data.get('monthly_fee'), data.get('servicios'),
-              data.get('contract_start'), data.get('contract_end')))
+              data.get('contract_start'), data.get('contract_end'), data.get('location_code')))
         conn.commit()
         return {'ok': True, 'id': cur.lastrowid}
     except Exception as e:
@@ -1798,11 +1818,12 @@ def update_client_site(id, data):
         conn.execute("""
             UPDATE client_sites SET client_id=?, codigo_cliente=?, codigo_sede=?, codigo_cliente_sede=?,
                 nombre_cliente=?, sede_cliente=?, distrito=?, is_regular=?, monthly_fee=?,
-                servicios=?, contract_start=?, contract_end=?
+                servicios=?, contract_start=?, contract_end=?, location_code=?
             WHERE id=?
         """, (data.get('client_id'), data.get('codigo_cliente'), data.get('codigo_sede'), data.get('codigo_cliente_sede'),
               data.get('nombre_cliente'), data.get('sede_cliente'), data.get('distrito'), data.get('is_regular'),
-              data.get('monthly_fee'), data.get('servicios'), data.get('contract_start'), data.get('contract_end'), id))
+              data.get('monthly_fee'), data.get('servicios'), data.get('contract_start'), data.get('contract_end'),
+              data.get('location_code'), id))
         conn.commit()
         return {'ok': True}
     except Exception as e:
@@ -1824,13 +1845,13 @@ def delete_client_site(id):
 
 @eel.expose
 def get_monthly_billing():
-    """Retorna matriz de facturación mensual por cliente regular."""
+    """Retorna matriz de facturación mensual por cliente regular con datos completos."""
     conn = get_connection()
     try:
         # Get all regular client sites
         sites = conn.execute("""
-            SELECT cs.id, cs.nombre_cliente, cs.sede_cliente, cs.monthly_fee, cs.servicios,
-                   c.business_name as empresa, c.ruc
+            SELECT cs.id, cs.client_id, cs.nombre_cliente, cs.sede_cliente, cs.monthly_fee, cs.servicios,
+                   cs.location_code, cs.codigo_cliente_sede, c.business_name as empresa, c.ruc
             FROM client_sites cs
             LEFT JOIN clients c ON cs.client_id = c.id
             WHERE cs.is_regular=1 AND (cs.is_active=1 OR cs.is_active IS NULL)
@@ -1839,9 +1860,10 @@ def get_monthly_billing():
 
         # Get last 12 months of invoices for these sites
         invoices = conn.execute("""
-            SELECT i.*, cs.nombre_cliente as site_name
+            SELECT i.*, cs.nombre_cliente as site_name, cs.location_code as site_location, c.business_name as empresa, c.ruc
             FROM invoices i
             JOIN client_sites cs ON i.client_site_id = cs.id
+            JOIN clients c ON i.client_id = c.id
             WHERE cs.is_regular=1
             ORDER BY i.year_billed DESC, i.month_billed DESC
         """).fetchall()

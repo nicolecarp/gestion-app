@@ -387,6 +387,12 @@ def init_db():
         "ALTER TABLE invoices ADD COLUMN client_site_id INTEGER REFERENCES client_sites(id)",
         "ALTER TABLE invoices ADD COLUMN month_billed INTEGER",
         "ALTER TABLE invoices ADD COLUMN year_billed INTEGER",
+        "ALTER TABLE invoices ADD COLUMN purchase_order TEXT",
+        "ALTER TABLE invoices ADD COLUMN detraccion REAL DEFAULT 0",
+        "ALTER TABLE invoices ADD COLUMN credito REAL DEFAULT 0",
+        "ALTER TABLE invoices ADD COLUMN location_code TEXT",
+        "ALTER TABLE invoices ADD COLUMN items_json TEXT",
+        "ALTER TABLE client_sites ADD COLUMN location_code TEXT",
         "CREATE TABLE IF NOT EXISTS service_descriptions (id INTEGER PRIMARY KEY AUTOINCREMENT, service_type_id INTEGER, name TEXT NOT NULL, description_text TEXT NOT NULL, productos TEXT, equipos TEXT, created_at TEXT DEFAULT (datetime('now','localtime')), FOREIGN KEY (service_type_id) REFERENCES service_types(id))",
         "CREATE TABLE IF NOT EXISTS quotes (id INTEGER PRIMARY KEY AUTOINCREMENT, number TEXT NOT NULL, client_id INTEGER NOT NULL, client_site_id INTEGER, issue_date TEXT, valid_until TEXT, payment_terms TEXT, subtotal REAL DEFAULT 0, igv REAL DEFAULT 0, total REAL DEFAULT 0, status TEXT DEFAULT 'borrador', created_at TEXT DEFAULT (datetime('now','localtime')), FOREIGN KEY (client_id) REFERENCES clients(id), FOREIGN KEY (client_site_id) REFERENCES client_sites(id))",
         "CREATE TABLE IF NOT EXISTS quote_items (id INTEGER PRIMARY KEY AUTOINCREMENT, quote_id INTEGER NOT NULL, service_type_id INTEGER, description_id INTEGER, description_text TEXT, productos_text TEXT, equipos_text TEXT, quantity REAL DEFAULT 1, unit_price REAL DEFAULT 0, total REAL DEFAULT 0, sort_order INTEGER DEFAULT 0, FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE, FOREIGN KEY (service_type_id) REFERENCES service_types(id), FOREIGN KEY (description_id) REFERENCES service_descriptions(id))",
@@ -885,6 +891,88 @@ def apply_cleanups_and_seeds(conn):
             """, (sid, st, gr, nt))
 
         conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('seed_utn_industrial_2026_v2', '1')")
+
+    conn.commit()
+
+
+
+    # 7. Seed initial billing clients, sites, and invoices (v1)
+    seed_billing = conn.execute("SELECT value FROM config WHERE key='seed_billing_v1'").fetchone()
+    if not seed_billing:
+        try:
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('cta_detraccion_1', '00046317769')")
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('cta_detraccion_2', '00771005578')")
+
+            clients_seed = [
+                (9, '20516702649', 'SUR COLOR STAR S.A.', 1, 800.00, 'Control Aviar', 'Servicio mensual S/ 800.00 sin IGV. OC Septiembre: 8600033006'),
+                (10, '20100047056', 'TOPY TOP S.A.', 1, 750.00, 'Control Aviar', 'Servicio mensual S/ 750.00 sin IGV. OC Septiembre: 8600033002'),
+                (11, '20101024645', 'ARCA CONTINENTAL LINDLEY S.A.', 1, 40500.00, 'SERV CONTROL DE PLAGAS', 'Grupo Lindley - Plantas Industriales Embotelladoras'),
+                (12, '20610033033', 'AC CORPORATIVO DEL PERU S.A.C.', 1, 1200.00, 'SERV CONTROL DE PLAGAS', 'Grupo Lindley - Oficinas Administrativas y Sedes'),
+                (13, '20605957375', 'AC LOGISTICA DEL PERU S.A.C.', 1, 12550.00, 'SERV CONTROL DE PLAGAS', 'Grupo Lindley - Centros de Distribución (CEDI)'),
+                (14, '20114050025', 'EMBOTELLADORA LA SELVA S.A.C.', 1, 5475.00, 'SERV CONTROL DE PLAGAS', 'Grupo Lindley - Planta y CEDI Iquitos (Inca Kola)'),
+            ]
+            for cid, ruc, name, reg, fee, srv, notes in clients_seed:
+                conn.execute("""
+                    INSERT OR REPLACE INTO clients (id, ruc, business_name, is_regular, monthly_fee, servicios, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (cid, ruc, name, reg, fee, srv, notes))
+
+            sites_seed = [
+                (1, 9, 'SCS', 'PRIN', 'SCS-PRIN', 'SUR COLOR STAR - SEDE PRINCIPAL', 'SEDE PRINCIPAL', '', '', 1, 800.00, 'Control Aviar'),
+                (2, 10, 'TOP', 'PRIN', 'TOP-PRIN', 'TOPY TOP - SEDE PRINCIPAL', 'SEDE PRINCIPAL', '', '', 1, 750.00, 'Control Aviar'),
+                (3, 11, 'ACL', 'PUC', 'ACL-PUC', 'ARCA CONTINENTAL LINDLEY - PLANTA PUCUSANA', 'PLANTA PUCUSANA', '84', 'Pucusana', 1, 14700.00, 'SERV CONTROL DE PLAGAS'),
+                (4, 11, 'ACL', 'ZAR', 'ACL-ZAR', 'ARCA CONTINENTAL LINDLEY - PLANTA ZARATE', 'PLANTA ZARATE', '1', 'San Juan de Lurigancho', 1, 7140.00, 'SERV CONTROL DE PLAGAS'),
+                (5, 11, 'ACL', 'TRU', 'ACL-TRU', 'ARCA CONTINENTAL LINDLEY - PLANTA TRUJILLO', 'PLANTA TRUJILLO', '74', 'Trujillo', 1, 8510.00, 'SERV CONTROL DE PLAGAS'),
+                (6, 11, 'ACL', 'AQP', 'ACL-AQP', 'ARCA CONTINENTAL LINDLEY - PLANTA AREQUIPA', 'PLANTA AREQUIPA', '31', 'Arequipa', 1, 5150.00, 'SERV CONTROL DE PLAGAS'),
+                (7, 11, 'ACL', 'CUZ', 'ACL-CUZ', 'ARCA CONTINENTAL LINDLEY - PLANTA CUSCO', 'PLANTA CUSCO', '32', 'Cusco', 1, 5000.00, 'SERV CONTROL DE PLAGAS'),
+                (8, 12, 'ACC', 'RIM', 'ACC-RIM', 'AC CORPORATIVO - RIMAC', 'RIMAC', '2', 'Rimac', 1, 600.00, 'SERV CONTROL DE PLAGAS'),
+                (9, 12, 'ACC', 'MOL', 'ACC-MOL', 'AC CORPORATIVO - LA MOLINA', 'LA MOLINA', '', 'La Molina', 1, 600.00, 'SERV CONTROL DE PLAGAS'),
+                (10, 13, 'ALD', 'HUA', 'ALD-HUA', 'AC LOGISTICA - CEDI HUACHIPA', 'CEDI HUACHIPA', '1', 'Huachipa', 1, 3680.00, 'SERV CONTROL DE PLAGAS'),
+                (11, 13, 'ALD', 'DUE', 'ALD-DUE', 'AC LOGISTICA - CEDI DUEÑAS', 'CEDI DUEÑAS', '3', 'Dueñas / Lima', 1, 2940.00, 'SERV CONTROL DE PLAGAS'),
+                (12, 13, 'ALD', 'VES', 'ALD-VES', 'AC LOGISTICA - CEDI VES', 'CEDI VES', '2', 'Villa El Salvador', 1, 3680.00, 'SERV CONTROL DE PLAGAS'),
+                (13, 13, 'ALD', 'TRU', 'ALD-CTRU', 'AC LOGISTICA - CEDI TRUJILLO', 'CEDI TRUJILLO', '1', 'Trujillo', 1, 960.00, 'SERV CONTROL DE PLAGAS'),
+                (14, 13, 'ALD', 'PUC', 'ALD-CPUC', 'AC LOGISTICA - CEDI PUCUSANA', 'CEDI PUCUSANA', '', 'Pucusana', 1, 1290.00, 'SERV CONTROL DE PLAGAS'),
+                (15, 14, 'ELS', 'IQT', 'ELS-IQT', 'EMBOTELLADORA LA SELVA - IQUITOS', 'IQUITOS', '1', 'Iquitos', 1, 4225.00, 'SERV CONTROL DE PLAGAS'),
+                (16, 14, 'ELS', 'CIQ', 'ELS-CIQ', 'EMBOTELLADORA LA SELVA - CEDI IQUITOS', 'CEDI IQUITOS', '9', 'Iquitos', 1, 1250.00, 'SERV CONTROL DE PLAGAS'),
+                (17, 14, 'ELS', 'ADI', 'ELS-ADI', 'EMBOTELLADORA LA SELVA - ADICIONALES', 'ADICIONALES', '1', 'Iquitos', 0, 0.00, 'SERV CONTROL DE PLAGAS (ADICIONAL)'),
+            ]
+            for sid, cid, cc, cs, ccs, nom, sed, loc, dis, reg, fee, srv in sites_seed:
+                conn.execute("""
+                    INSERT OR REPLACE INTO client_sites (id, client_id, codigo_cliente, codigo_sede, codigo_cliente_sede,
+                        nombre_cliente, sede_cliente, location_code, distrito, is_regular, monthly_fee, servicios)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (sid, cid, cc, cs, ccs, nom, sed, loc, dis, reg, fee, srv))
+
+            invoices_seed = [
+                (1, 9, 1, 'E001', '', 'Control Aviar', 'credito', 800.00, 144.00, 944.00, 113.28, 830.72, '8600033006', '', '2026-09-30', '2026-10-30', 9, 2026, 'issued'),
+                (2, 10, 2, 'E001', '', 'Control Aviar', 'credito', 750.00, 135.00, 885.00, 106.20, 778.80, '8600033002', '', '2026-09-30', '2026-10-30', 9, 2026, 'issued'),
+                (3, 11, 3, 'E001', '1845', 'SERV CONTROL DE PLAGAS', 'credito', 14700.00, 2646.00, 17346.00, 2081.52, 15264.48, '4501201335', '84', '2026-09-30', '2026-10-30', 9, 2026, 'issued'),
+                (4, 11, 4, 'E001', '9570', 'SERV CONTROL DE PLAGAS', 'credito', 7140.00, 1285.20, 8425.20, 1011.02, 7414.18, '4501203340', '1', '2026-09-30', '2026-10-30', 9, 2026, 'issued'),
+                (5, 11, 5, 'E001', '1850', 'SERV CONTROL DE PLAGAS', 'credito', 8510.00, 1531.80, 10041.80, 1205.02, 8836.78, '4501201100', '74', '2026-09-30', '2026-10-30', 9, 2026, 'issued'),
+                (6, 11, 6, 'E001', '1851', 'SERV CONTROL DE PLAGAS', 'credito', 5150.00, 927.00, 6077.00, 729.24, 5347.76, '4501201057', '31', '2026-09-30', '2026-10-30', 9, 2026, 'issued'),
+                (7, 11, 7, 'E001', '1852', 'SERV CONTROL DE PLAGAS', 'credito', 5000.00, 900.00, 5900.00, 708.00, 5192.00, '4501200921', '32', '2026-09-30', '2026-10-30', 9, 2026, 'issued'),
+                (8, 12, 8, 'E001', '', 'SERV CONTROL DE PLAGAS', 'credito', 600.00, 108.00, 708.00, 84.96, 623.04, '', '2', '2026-09-30', '2026-10-30', 9, 2026, 'issued'),
+                (9, 12, 9, 'E001', '', 'SERV CONTROL DE PLAGAS', 'credito', 600.00, 108.00, 708.00, 84.96, 623.04, '', '', '2026-09-30', '2026-10-30', 9, 2026, 'issued'),
+                (10, 13, 10, 'E001', '9573', 'SERV CONTROL DE PLAGAS', 'credito', 3680.00, 662.40, 4342.40, 521.09, 3821.31, '4501201113', '1', '2026-09-30', '2026-10-30', 9, 2026, 'issued'),
+                (11, 13, 11, 'E001', '9571', 'SERV CONTROL DE PLAGAS', 'credito', 2940.00, 529.20, 3469.20, 416.30, 3052.90, '4501203465', '3', '2026-09-30', '2026-10-30', 9, 2026, 'issued'),
+                (12, 13, 12, 'E001', '9572', 'SERV CONTROL DE PLAGAS', 'credito', 3680.00, 662.40, 4342.40, 521.09, 3821.31, '4501203463', '2', '2026-09-30', '2026-10-30', 9, 2026, 'issued'),
+                (13, 13, 13, 'E001', '1853', 'SERV CONTROL DE PLAGAS', 'credito', 960.00, 172.80, 1132.80, 135.94, 996.86, '4501203073', '1', '2026-09-30', '2026-10-30', 9, 2026, 'issued'),
+                (14, 13, 14, 'E001', '', 'SERV CONTROL DE PLAGAS', 'credito', 1290.00, 232.20, 1522.20, 182.66, 1339.54, '', '', '2026-09-30', '2026-10-30', 9, 2026, 'issued'),
+                (15, 14, 15, 'E001', '1847', 'SERV CONTROL DE PLAGAS', 'credito', 4225.00, 760.50, 4985.50, 598.26, 4387.24, '6300011728', '1', '2026-09-30', '2026-10-30', 9, 2026, 'issued'),
+                (16, 14, 16, 'E001', '1848', 'SERV CONTROL DE PLAGAS', 'credito', 1250.00, 225.00, 1475.00, 177.00, 1298.00, '6300011729', '9', '2026-09-30', '2026-10-30', 9, 2026, 'issued'),
+                (17, 14, 17, 'E001', '1849', 'SERV CONTROL DE PLAGAS (ADICIONAL)', 'credito', 1420.00, 255.60, 1675.60, 201.07, 1474.53, '6300011730', '1', '2026-09-30', '2026-10-30', 9, 2026, 'issued'),
+            ]
+            for iid, cid, sid, ser, num, srv, pt, am, igv, tot, detr, cred, oc, loc, idt, ddt, mb, yb, st in invoices_seed:
+                conn.execute("""
+                    INSERT OR REPLACE INTO invoices (id, client_id, client_site_id, series, number, service, payment_type,
+                        amount, igv, total, detraccion, credito, purchase_order, location_code,
+                        issue_date, due_date, month_billed, year_billed, status)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (iid, cid, sid, ser, num, srv, pt, am, igv, tot, detr, cred, oc, loc, idt, ddt, mb, yb, st))
+
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('seed_billing_v1', '1')")
+        except Exception as e:
+            pass
 
     conn.commit()
 

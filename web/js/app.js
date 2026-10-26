@@ -739,15 +739,26 @@ async function renderWorkInvoices(el) {
     const data = await api(eel.get_monthly_billing) || { sites: [], invoices: [] };
     const allInvoices = await api(eel.get_invoices) || [];
     const sites = await api(eel.get_client_sites_grouped) || [];
-    // Build invoice lookup: key = siteId-month-year
+    const clients = await api(eel.get_clients) || [];
+
+    // Global totals
+    let totSinIgv = 0, totFinal = 0, totDetr = 0, totCredito = 0;
+    allInvoices.forEach(i => {
+        totSinIgv += (i.amount || 0);
+        totFinal += (i.total || 0);
+        totDetr += (i.detraccion || 0);
+        totCredito += (i.credito || 0);
+    });
+
+    // Lookup: siteId-month-year
     const invMap = {};
-    for (const inv of data.invoices) {
+    for (const inv of (data.invoices || [])) {
         const key = inv.client_site_id + '-' + (inv.month_billed||0) + '-' + (inv.year_billed||0);
         if (!invMap[key]) invMap[key] = [];
         invMap[key].push(inv);
     }
 
-    // Last 12 months
+    // Last 12 months for matrix
     const months = [];
     const now = new Date();
     for (let i = 11; i >= 0; i--) {
@@ -755,15 +766,114 @@ async function renderWorkInvoices(el) {
         months.push({ m: d.getMonth()+1, y: d.getFullYear(), label: d.toLocaleString('es', { month:'short', year:'2-digit' }) });
     }
 
-    let html = '<div style="display:flex;justify-content:space-between;margin-bottom:14px">' +
-        '<h3 style="margin:0">Facturación mensual</h3>' +
-        '<div><button class="btn btn-primary" onclick="showInvoiceForm()">+ Factura</button></div></div>';
+    let html = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+        <div>
+            <h2 style="margin:0;font-size:1.35rem">Facturación Comercial</h2>
+            <div style="font-size:0.8rem;color:var(--text-muted)">Registro de comprobantes, órdenes de compra, detracciones SPOT (12%) y cuentas de crédito</div>
+        </div>
+        <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary" onclick="switchWorkTab('calculadora')">🧮 Calculadora IGV Multi-Unidad</button>
+            <button class="btn btn-primary" onclick="showInvoiceForm()">+ Nueva Factura</button>
+        </div>
+    </div>
+
+    <!-- Summary KPI Cards -->
+    <div class="calc-kpi-grid" style="margin-bottom:20px">
+        <div class="calc-kpi-card">
+            <div class="calc-kpi-label">Total Sin IGV</div>
+            <div class="calc-kpi-value">S/ ${fmtMoney(totSinIgv)}</div>
+        </div>
+        <div class="calc-kpi-card highlight">
+            <div class="calc-kpi-label">Total Facturado (Con IGV)</div>
+            <div class="calc-kpi-value">S/ ${fmtMoney(totFinal)}</div>
+        </div>
+        <div class="calc-kpi-card amber">
+            <div class="calc-kpi-label">Detracciones SPOT (12%)</div>
+            <div class="calc-kpi-value">S/ ${fmtMoney(totDetr)}</div>
+        </div>
+        <div class="calc-kpi-card green">
+            <div class="calc-kpi-label">Crédito Neto por Cobrar</div>
+            <div class="calc-kpi-value">S/ ${fmtMoney(totCredito)}</div>
+        </div>
+    </div>
+
+    <!-- Invoices List -->
+    <div class="card" style="margin-bottom:24px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+            <div style="font-weight:700;font-size:1rem">Todas las Facturas Emitidas (${allInvoices.length})</div>
+            <div style="display:flex;gap:8px;align-items:center">
+                <input type="text" id="invoiceSearchInput" class="form-control" style="width:230px;padding:6px 12px;font-size:0.85rem" placeholder="🔍 Buscar cliente, OC o factura..." oninput="filterInvoicesTable(this.value)">
+                <button class="btn btn-ghost btn-sm" onclick="showInvoiceForm(null)">+ Agregar</button>
+            </div>
+        </div>`;
+
+    if (allInvoices.length === 0) {
+        html += '<div class="empty-state"><div class="empty-icon">🧾</div><h3>Sin facturas registradas</h3><p>Registra facturas o utiliza la Calculadora de IGV para crearlas</p></div>';
+    } else {
+        const stMap = { issued: {label:'Emitida',cls:'tag-primary'}, paid: {label:'Pagada',cls:'tag-sage'}, overdue: {label:'Vencida',cls:'tag-rose'} };
+        html += `<div class="table-wrap"><table id="invoicesTable">
+            <thead>
+                <tr>
+                    <th>Comprobante</th>
+                    <th>OC</th>
+                    <th style="text-align:center">Loc</th>
+                    <th>Empresa / Sede</th>
+                    <th>Servicio</th>
+                    <th style="text-align:right">Sin IGV</th>
+                    <th style="text-align:right">Total</th>
+                    <th style="text-align:right">Detrac. (12%)</th>
+                    <th style="text-align:right">Crédito Neto</th>
+                    <th style="text-align:center">Periodo</th>
+                    <th style="text-align:center">Estado</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>`;
+        for (const i of allInvoices) {
+            const s = stMap[i.status] || {label:i.status,cls:'tag-primary'};
+            const mesStr = i.year_billed && i.month_billed ? (i.month_billed < 10 ? '0'+i.month_billed : i.month_billed)+'/'+i.year_billed : '-';
+            const compStr = i.series ? (i.number ? esc(i.series)+'-'+esc(i.number) : esc(i.series)) : '-';
+            const locStr = i.location_code || i.site_location || '-';
+            const ocStr = i.purchase_order ? `<span class="tag tag-gold" style="font-size:0.75rem">${esc(i.purchase_order)}</span>` : '<span style="color:var(--text-muted)">-</span>';
+            const feeSinIgv = parseFloat(i.amount) || 0;
+            const feeTotal = parseFloat(i.total) || 0;
+            const feeDetr = parseFloat(i.detraccion) || 0;
+            const feeCred = parseFloat(i.credito) || (feeTotal - feeDetr);
+
+            html += `<tr>
+                <td><strong>${compStr}</strong></td>
+                <td>${ocStr}</td>
+                <td style="text-align:center;font-size:0.8rem;color:var(--text-muted)">${esc(locStr)}</td>
+                <td><strong>${esc(i.business_name || '')}</strong><br><span style="font-size:0.75rem;color:var(--text-muted)">${esc(i.site_name || '')}</span></td>
+                <td style="font-size:0.8rem">${esc(i.service || '-')}</td>
+                <td style="text-align:right;font-family:monospace">S/ ${fmtMoney(feeSinIgv)}</td>
+                <td style="text-align:right;font-family:monospace;font-weight:700">S/ ${fmtMoney(feeTotal)}</td>
+                <td style="text-align:right;font-family:monospace;color:#f59e0b">S/ ${fmtMoney(feeDetr)}</td>
+                <td style="text-align:right;font-family:monospace;color:#10b981;font-weight:700">S/ ${fmtMoney(feeCred)}</td>
+                <td style="text-align:center;font-size:0.8rem">${mesStr}</td>
+                <td style="text-align:center"><span class="tag ${s.cls}">${s.label}</span></td>
+                <td style="text-align:right;white-space:nowrap">
+                    <button class="btn btn-ghost btn-sm" onclick="showInvoiceForm(${i.id})" title="Editar">✎</button>
+                    <button class="btn btn-ghost btn-sm" onclick="deleteInvoice(${i.id})" title="Eliminar">✕</button>
+                </td>
+            </tr>`;
+        }
+        html += `</tbody></table></div>`;
+    }
+    html += `</div>`;
+
+    // Regular Clients Matrix
+    html += `<div class="card">
+        <div style="margin-bottom:12px">
+            <div style="font-weight:700;font-size:1rem">Matriz de Facturación Mensual (Clientes Regulares)</div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">Comparativa histórica de cobros mensuales vs cuota mensual pactada</div>
+        </div>`;
 
     if (data.sites.length === 0) {
-        html += '<div class="empty-state"><div class="empty-icon">🧾</div><h3>Sin clientes regulares</h3><p>Marca una sede como "regular" en la pestaña Clientes</p></div>';
+        html += '<p style="color:var(--text-muted);font-size:0.85rem">No hay sedes con condición de cliente regular</p>';
     } else {
-        // Matrix table
-        html += '<div class="table-wrap" style="overflow-x:auto"><table class="matrix-table"><thead><tr><th style="min-width:160px">Sede</th>';
+        html += '<div class="table-wrap" style="overflow-x:auto"><table class="matrix-table"><thead><tr><th style="min-width:180px">Empresa / Sede</th>';
         for (const m of months) {
             html += '<th style="text-align:center;font-size:0.75rem;padding:4px 6px">'+m.label+'</th>';
         }
@@ -773,7 +883,7 @@ async function renderWorkInvoices(el) {
             let totalInvoiced = 0;
             let monthsBilledCount = 0;
             const fee = parseFloat(s.monthly_fee) || 0;
-            html += '<tr><td><strong>'+esc(empresa)+'</strong><br><span style="font-size:0.75rem;color:#999">'+esc(s.nombre_cliente)+'</span></td>';
+            html += '<tr><td><strong>'+esc(empresa)+'</strong><br><span style="font-size:0.75rem;color:var(--text-muted)">'+esc(s.nombre_cliente)+'</span></td>';
             for (const m of months) {
                 const key = s.id + '-' + m.m + '-' + m.y;
                 const invs = invMap[key] || [];
@@ -781,45 +891,37 @@ async function renderWorkInvoices(el) {
                 totalInvoiced += total;
                 if (total > 0) {
                     monthsBilledCount++;
-                    html += '<td style="text-align:center;background:var(--secondary-light);font-size:0.8rem">S/ '+total.toFixed(0)+'</td>';
+                    html += '<td style="text-align:center;background:rgba(99,102,241,0.12);font-size:0.8rem;font-family:monospace">S/ '+fmtMoney(total)+'</td>';
                 } else {
-                    html += '<td style="text-align:center;color:var(--text-light)">—</td>';
+                    html += '<td style="text-align:center;color:var(--text-muted)">—</td>';
                 }
             }
             const expectedTotal = fee * (monthsBilledCount || 1);
             const diff = totalInvoiced - expectedTotal;
             const diffCls = diff >= 0 ? 'tag-sage' : 'tag-rose';
-            html += '<td style="text-align:center;font-weight:600">S/ '+totalInvoiced.toFixed(0)+'</td>' +
-                '<td style="text-align:center">S/ '+fee.toFixed(0)+'</td>' +
-                '<td style="text-align:center"><span class="tag '+diffCls+'" title="Comparado contra '+monthsBilledCount+' mes(es) facturados">'+(diff >= 0 ? '+': '')+diff.toFixed(0)+'</span></td></tr>';
+            html += '<td style="text-align:center;font-weight:600;font-family:monospace">S/ '+fmtMoney(totalInvoiced)+'</td>' +
+                '<td style="text-align:center;font-family:monospace">S/ '+fmtMoney(fee)+'</td>' +
+                '<td style="text-align:center"><span class="tag '+diffCls+'" title="Comparado contra '+monthsBilledCount+' mes(es) facturados">'+(diff >= 0 ? '+': '')+fmtMoney(diff)+'</span></td></tr>';
         }
         html += '</tbody></table></div>';
     }
-
-    // Detail invoices list below
-    html += '<div style="margin-top:20px"><h4 style="margin-bottom:8px">Todas las facturas</h4>' +
-        '<div style="display:flex;justify-content:flex-end;margin-bottom:8px">' +
-        '<button class="btn btn-ghost btn-sm" onclick="showInvoiceForm(null)">+ Nueva factura</button></div>';
-    if (allInvoices.length === 0) {
-        html += '<div class="empty-state"><div class="empty-icon">🧾</div><h3>Sin facturas</h3></div>';
-    } else {
-        const stMap = { issued: {label:'Emitida',cls:'tag-primary'}, paid: {label:'Pagada',cls:'tag-sage'}, overdue: {label:'Vencida',cls:'tag-rose'} };
-        html += '<div class="table-wrap"><table><thead><tr><th>#</th><th>Cliente</th><th>Sede</th><th>Servicio</th><th>Total</th><th>Mes</th><th>Estado</th><th></th></tr></thead><tbody>';
-        for (const i of allInvoices) {
-            const s = stMap[i.status] || {label:i.status,cls:'tag-primary'};
-            const mesStr = i.year_billed && i.month_billed ? i.month_billed+'/'+i.year_billed : '';
-            html += '<tr><td>'+esc(i.series || '')+(i.number ? '-'+esc(i.number) : '')+'</td>' +
-                '<td>'+esc(i.business_name || '')+'</td><td style="font-size:0.8rem">'+esc(i.site_name || '')+'</td>' +
-                '<td>'+esc(i.service || '-')+'</td><td>S/ '+(i.total || 0).toFixed(2)+'</td>' +
-                '<td style="font-size:0.8rem">'+mesStr+'</td>' +
-                '<td><span class="tag '+s.cls+'">'+s.label+'</span></td>' +
-                '<td style="text-align:right"><button class="btn btn-ghost btn-sm" onclick="showInvoiceForm('+i.id+')">✎</button>' +
-                '<button class="btn btn-ghost btn-sm" onclick="deleteInvoice('+i.id+')">✕</button></td></tr>';
-        }
-        html += '</tbody></table></div>';
-    }
+    html += '</div>';
 
     el.innerHTML = html;
+}
+
+function filterInvoicesTable(term) {
+    const q = (term || '').toLowerCase().trim();
+    const rows = document.querySelectorAll('#invoicesTable tbody tr');
+    rows.forEach(r => {
+        const text = r.innerText.toLowerCase();
+        r.style.display = text.includes(q) ? '' : 'none';
+    });
+}
+
+function fmtMoney(n) {
+    if (isNaN(n) || n === null || n === undefined) return '0.00';
+    return Number(n).toLocaleString('es-PE', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function showInvoiceForm(id) {
@@ -834,62 +936,873 @@ function showInvoiceForm(id) {
 function showInvoiceModal(inv) {
     api(eel.get_client_sites_grouped).then(sites => {
         sites = sites || [];
-        const siteOpts = '<option value="">— Sin sede —</option>' + sites.map(s =>
-            '<option value="'+s.id+'"'+(inv && inv.client_site_id === s.id ? ' selected' : '')+'>'+
-            esc((s.empresa||'')+' - '+s.nombre_cliente)+'</option>'
-        ).join('');
-        // Also get parent clients for backward compat
         api(eel.get_clients).then(clients => {
             clients = clients || [];
-            const clientOpts = clients.map(c =>
-                '<option value="'+c.id+'"'+(inv && inv.client_id === c.id ? ' selected' : '')+'>'+esc(c.business_name)+'</option>'
+            const siteOpts = '<option value="">— Sin sede específica —</option>' + sites.map(s =>
+                '<option value="'+s.id+'" data-fee="'+(s.monthly_fee||0)+'" data-service="'+esc(s.servicios||'')+'" data-loc="'+esc(s.location_code||'')+'" data-client-id="'+s.client_id+'"'+(inv && inv.client_site_id === s.id ? ' selected' : '')+'>'+
+                esc((s.empresa||'')+' - '+s.nombre_cliente)+'</option>'
             ).join('');
+
+            const clientOpts = clients.map(c =>
+                '<option value="'+c.id+'"'+(inv && inv.client_id === c.id ? ' selected' : '')+'>'+esc(c.business_name)+' ('+esc(c.ruc||'')+')</option>'
+            ).join('');
+
             const today = todayStr();
-            const html = '<form id="modalForm">' +
-                '<div class="form-group"><label>Empresa *</label><select class="form-control" name="client_id">'+clientOpts+'</select></div>' +
-                '<div class="form-group"><label>Sede</label><select class="form-control" name="client_site_id">'+siteOpts+'</select></div>' +
-                '<div class="form-row"><div class="form-group"><label>Serie</label><input class="form-control" name="series" value="'+(inv ? esc(inv.series) : 'F001')+'"></div>' +
-                '<div class="form-group"><label>Número</label><input class="form-control" name="number" value="'+(inv ? esc(inv.number) : '')+'"></div></div>' +
-                '<div class="form-group"><label>Servicio</label><input class="form-control" name="service" value="'+(inv ? esc(inv.service) : '')+'"></div>' +
-                '<div class="form-row"><div class="form-group"><label>Monto</label><input type="number" step="0.01" class="form-control" name="amount" value="'+(inv ? inv.amount : '')+'"></div>' +
-                '<div class="form-group"><label>IGV</label><input type="number" step="0.01" class="form-control" name="igv" value="'+(inv ? inv.igv : '')+'"></div></div>' +
-                '<div class="form-row"><div class="form-group"><label>Total</label><input type="number" step="0.01" class="form-control" name="total" value="'+(inv ? inv.total : '')+'"></div>' +
-                '<div class="form-group"><label>Tipo</label><select class="form-control" name="payment_type">' +
-                '<option value="contado"'+(inv && inv.payment_type === 'contado' ? ' selected' : '')+'>Contado</option>' +
-                '<option value="credito"'+(inv && inv.payment_type === 'credito' ? ' selected' : '')+'>Crédito</option>' +
-                '</select></div></div>' +
-                '<div class="form-row"><div class="form-group"><label>Emisión</label><input type="date" class="form-control" name="issue_date" value="'+(inv ? inv.issue_date : today)+'"></div>' +
-                '<div class="form-group"><label>Vencimiento</label><input type="date" class="form-control" name="due_date" value="'+(inv ? inv.due_date : '')+'"></div></div>' +
-                '<div class="form-group"><label>Estado</label><select class="form-control" name="status">' +
-                '<option value="issued"'+(inv && inv.status === 'issued' ? ' selected' : '')+'>Emitida</option>' +
-                '<option value="paid"'+(inv && inv.status === 'paid' ? ' selected' : '')+'>Pagada</option>' +
-                '<option value="overdue"'+(inv && inv.status === 'overdue' ? ' selected' : '')+'>Vencida</option>' +
-                '</select></div></form>';
-            openModal(inv ? 'Editar factura' : 'Nueva factura', html);
+            const defSeries = inv ? (inv.series || 'E001') : 'E001';
+            const defNumber = inv ? (inv.number || '') : '';
+            const defOc = inv ? (inv.purchase_order || '') : '';
+            const defLoc = inv ? (inv.location_code || '') : '';
+            const defService = inv ? (inv.service || 'SERV CONTROL DE PLAGAS') : 'SERV CONTROL DE PLAGAS';
+            const defAmount = inv ? (inv.amount || 0) : '';
+            const defIgv = inv ? (inv.igv || 0) : '';
+            const defTotal = inv ? (inv.total || 0) : '';
+            const defDetr = inv ? (inv.detraccion || 0) : '';
+            const defCred = inv ? (inv.credito || 0) : '';
+
+            const html = `
+            <form id="modalForm">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Empresa *</label>
+                        <select class="form-control" name="client_id" id="modalInvClientId">${clientOpts}</select>
+                    </div>
+                    <div class="form-group">
+                        <label>Sede vinculada</label>
+                        <select class="form-control" name="client_site_id" id="modalInvSiteId" onchange="onModalSiteChange(this)">${siteOpts}</select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Serie</label>
+                        <input class="form-control" name="series" value="${esc(defSeries)}" placeholder="Ej. E001 o F001">
+                    </div>
+                    <div class="form-group">
+                        <label>Número</label>
+                        <input class="form-control" name="number" value="${esc(defNumber)}" placeholder="Ej. 1845">
+                    </div>
+                    <div class="form-group">
+                        <label>Orden de Compra (OC)</label>
+                        <input class="form-control" name="purchase_order" id="modalInvOc" value="${esc(defOc)}" placeholder="Ej. 4501201335">
+                    </div>
+                    <div class="form-group" style="max-width:110px">
+                        <label>Ubicación</label>
+                        <input class="form-control" name="location_code" id="modalInvLoc" value="${esc(defLoc)}" placeholder="Ej. 84">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Detalle del Servicio *</label>
+                    <input class="form-control" name="service" id="modalInvService" value="${esc(defService)}" placeholder="Ej. SERV CONTROL DE PLAGAS">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Monto Sin IGV (S/) *</label>
+                        <input type="number" step="0.01" class="form-control" name="amount" id="modalInvAmount" value="${defAmount}" oninput="recalcModalInvoice()" placeholder="0.00">
+                    </div>
+                    <div class="form-group">
+                        <label>IGV (18%) (S/)</label>
+                        <input type="number" step="0.01" class="form-control" name="igv" id="modalInvIgv" value="${defIgv}">
+                    </div>
+                    <div class="form-group">
+                        <label>Monto Total (S/)</label>
+                        <input type="number" step="0.01" class="form-control" name="total" id="modalInvTotal" value="${defTotal}" oninput="recalcModalFromTotal()">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Detracción SPOT (12%) (S/)</label>
+                        <input type="number" step="0.01" class="form-control" name="detraccion" id="modalInvDetr" value="${defDetr}">
+                    </div>
+                    <div class="form-group">
+                        <label>Crédito Neto (S/)</label>
+                        <input type="number" step="0.01" class="form-control" name="credito" id="modalInvCred" value="${defCred}">
+                    </div>
+                    <div class="form-group">
+                        <label>Tipo de Pago</label>
+                        <select class="form-control" name="payment_type">
+                            <option value="credito"${(!inv || inv.payment_type === 'credito') ? ' selected' : ''}>Crédito</option>
+                            <option value="contado"${(inv && inv.payment_type === 'contado') ? ' selected' : ''}>Contado</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="modalSonLetras" class="son-letras-box" style="margin-bottom:14px;display:none"></div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Emisión</label>
+                        <input type="date" class="form-control" name="issue_date" id="modalInvIssueDate" value="${inv ? inv.issue_date : today}">
+                    </div>
+                    <div class="form-group">
+                        <label>Vencimiento</label>
+                        <input type="date" class="form-control" name="due_date" value="${inv ? (inv.due_date||'') : ''}">
+                    </div>
+                    <div class="form-group">
+                        <label>Estado</label>
+                        <select class="form-control" name="status">
+                            <option value="issued"${(!inv || inv.status === 'issued') ? ' selected' : ''}>Emitida</option>
+                            <option value="paid"${(inv && inv.status === 'paid') ? ' selected' : ''}>Pagada</option>
+                            <option value="overdue"${(inv && inv.status === 'overdue') ? ' selected' : ''}>Vencida</option>
+                        </select>
+                    </div>
+                </div>
+            </form>`;
+
+            openModal(inv ? 'Editar Factura' : 'Nueva Factura', html);
+            if (defTotal > 0) recalcModalInvoice();
+
             document.getElementById('modalSave').onclick = async () => {
                 const f = new FormData(document.getElementById('modalForm'));
                 const data = {
                     client_id: parseInt(f.get('client_id')),
                     client_site_id: f.get('client_site_id') ? parseInt(f.get('client_site_id')) : null,
-                    series: f.get('series'), number: f.get('number'),
-                    service: f.get('service'), amount: parseFloat(f.get('amount')) || 0,
-                    igv: parseFloat(f.get('igv')) || 0, total: parseFloat(f.get('total')) || 0,
-                    payment_type: f.get('payment_type'), issue_date: f.get('issue_date'),
-                    due_date: f.get('due_date'), status: f.get('status')
+                    series: f.get('series') || 'E001',
+                    number: f.get('number'),
+                    purchase_order: f.get('purchase_order'),
+                    location_code: f.get('location_code'),
+                    service: f.get('service') || 'SERV CONTROL DE PLAGAS',
+                    amount: parseFloat(f.get('amount')) || 0,
+                    igv: parseFloat(f.get('igv')) || 0,
+                    total: parseFloat(f.get('total')) || 0,
+                    detraccion: parseFloat(f.get('detraccion')) || 0,
+                    credito: parseFloat(f.get('credito')) || 0,
+                    payment_type: f.get('payment_type') || 'credito',
+                    issue_date: f.get('issue_date'),
+                    due_date: f.get('due_date'),
+                    status: f.get('status') || 'issued'
                 };
                 if (!data.client_id) { showToast('Selecciona una empresa'); return; }
                 const res = inv ? await api(eel.update_invoice, inv.id, data) : await api(eel.create_invoice, data);
-                if (res && res.ok) { showToast(inv ? 'Actualizada' : 'Creada'); closeModal(); navigate('work'); }
-                else showToast('Error');
+                if (res && res.ok) { showToast(inv ? 'Factura actualizada' : 'Factura registrada'); closeModal(); navigate('work'); }
+                else showToast(res && res.error ? res.error : 'Error');
             };
         });
     });
 }
 
+function onModalSiteChange(selectEl) {
+    const opt = selectEl.options[selectEl.selectedIndex];
+    if (!opt) return;
+    const fee = parseFloat(opt.getAttribute('data-fee')) || 0;
+    const srv = opt.getAttribute('data-service');
+    const loc = opt.getAttribute('data-loc');
+    const parentClientId = opt.getAttribute('data-client-id');
+
+    if (parentClientId && document.getElementById('modalInvClientId')) {
+        document.getElementById('modalInvClientId').value = parentClientId;
+    }
+    if (loc && document.getElementById('modalInvLoc')) {
+        document.getElementById('modalInvLoc').value = loc;
+    }
+    if (srv && document.getElementById('modalInvService') && !document.getElementById('modalInvService').value.trim()) {
+        document.getElementById('modalInvService').value = srv;
+    }
+    if (fee > 0 && document.getElementById('modalInvAmount')) {
+        document.getElementById('modalInvAmount').value = fee.toFixed(2);
+        recalcModalInvoice();
+    }
+}
+
+function recalcModalInvoice() {
+    const amount = parseFloat(document.getElementById('modalInvAmount').value) || 0;
+    const igv = Math.round(amount * 0.18 * 100) / 100;
+    const total = Math.round((amount + igv) * 100) / 100;
+    const detr = total >= 700 ? Math.round(total * 0.12 * 100) / 100 : 0;
+    const cred = Math.round((total - detr) * 100) / 100;
+
+    document.getElementById('modalInvIgv').value = igv.toFixed(2);
+    document.getElementById('modalInvTotal').value = total.toFixed(2);
+    document.getElementById('modalInvDetr').value = detr.toFixed(2);
+    document.getElementById('modalInvCred').value = cred.toFixed(2);
+
+    const sonBox = document.getElementById('modalSonLetras');
+    if (sonBox && total > 0) {
+        sonBox.innerText = 'Son: ' + numeroALetras(total);
+        sonBox.style.display = 'block';
+    }
+}
+
+function recalcModalFromTotal() {
+    const total = parseFloat(document.getElementById('modalInvTotal').value) || 0;
+    const amount = Math.round((total / 1.18) * 100) / 100;
+    const igv = Math.round((total - amount) * 100) / 100;
+    const detr = total >= 700 ? Math.round(total * 0.12 * 100) / 100 : 0;
+    const cred = Math.round((total - detr) * 100) / 100;
+
+    document.getElementById('modalInvAmount').value = amount.toFixed(2);
+    document.getElementById('modalInvIgv').value = igv.toFixed(2);
+    document.getElementById('modalInvDetr').value = detr.toFixed(2);
+    document.getElementById('modalInvCred').value = cred.toFixed(2);
+
+    const sonBox = document.getElementById('modalSonLetras');
+    if (sonBox && total > 0) {
+        sonBox.innerText = 'Son: ' + numeroALetras(total);
+        sonBox.style.display = 'block';
+    }
+}
+
 async function deleteInvoice(id) {
-    if (!confirm('¿Eliminar esta factura?')) return;
+    if (!confirm('¿Eliminar esta factura? Se quitará de los registros de cobro.')) return;
     const res = await api(eel.delete_invoice, id);
-    if (res && res.ok) { showToast('Eliminada'); navigate('work'); }
+    if (res && res.ok) { showToast('Factura eliminada'); navigate('work'); }
+}
+
+// ===================== WORK CALCULATOR & SUNAT COPY STATION =====================
+window.calcState = window.calcState || {
+    clientId: null,
+    clientName: 'SUR COLOR STAR S.A.',
+    clientRuc: '20516702649',
+    siteId: 1,
+    siteName: 'SUR COLOR STAR - SEDE PRINCIPAL',
+    issueDate: todayStr(),
+    igvRate: 0.18,
+    detrRate: 0.12,
+    bnAccount: '00046317769',
+    series: 'E001',
+    number: '',
+    purchaseOrder: '8600033006',
+    locationCode: '',
+    items: [
+        { desc: 'Control Aviar', cant: 1, pu: 800.00 }
+    ]
+};
+
+function copySunatField(text, label) {
+    if (text === null || text === undefined || text === '') return;
+    const val = String(text).trim();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(val).then(() => {
+            showToast('📋 Copiado: ' + (label || val));
+        }).catch(() => {
+            fallbackCopy(val);
+            showToast('📋 Copiado: ' + (label || val));
+        });
+    } else {
+        fallbackCopy(val);
+        showToast('📋 Copiado: ' + (label || val));
+    }
+}
+
+function fallbackCopy(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch(e) {}
+    document.body.removeChild(ta);
+}
+
+async function renderWorkCalculator(el) {
+    const sites = await api(eel.get_client_sites_grouped) || [];
+    const clients = await api(eel.get_clients) || [];
+
+    const siteOptions = '<option value="">— Cargar desde Sede / Cliente —</option>' + sites.map(s =>
+        `<option value="${s.id}" data-client-id="${s.client_id}" data-client-name="${esc(s.empresa||s.nombre_cliente)}" data-client-ruc="${esc(s.ruc||'')}" data-fee="${s.monthly_fee||0}" data-service="${esc(s.servicios||'')}" data-loc="${esc(s.location_code||'')}">${esc(s.empresa||'')} - ${esc(s.nombre_cliente)} (S/ ${fmtMoney(s.monthly_fee||0)})</option>`
+    ).join('');
+
+    let html = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+        <div>
+            <div style="display:flex;align-items:center;gap:10px">
+                <h2 style="margin:0;font-size:1.35rem">🧮 Asistente de Facturación SUNAT & Calculadora IGV</h2>
+                <span class="tag tag-primary">Emisión Rápida</span>
+            </div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">Copia campo a campo los montos, detracciones y fechas exactas al portal SOL de SUNAT con 1 solo clic</div>
+        </div>
+        <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary" onclick="resetWorkCalculator()">🔄 Nuevo cálculo</button>
+            <button class="btn btn-primary" onclick="saveCalculatorAsInvoice()">💾 Guardar como Factura</button>
+        </div>
+    </div>
+
+    <!-- Quick client loader -->
+    <div class="card" style="margin-bottom:16px">
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+            <div style="font-weight:700;font-size:0.9rem">🏢 Cliente regular:</div>
+            <div style="flex:1;min-width:260px">
+                <select class="form-control" id="calcSiteSelector" onchange="onCalcSiteSelected(this)">${siteOptions}</select>
+            </div>
+            <div id="calcClientLoadedBadge" style="display:${window.calcState.clientName ? 'block' : 'none'}">
+                <span class="tag tag-sage" id="calcClientLoadedName">${esc(window.calcState.clientName || '')}</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Config Parameters -->
+    <div class="card" style="margin-bottom:16px">
+        <div class="form-row">
+            <div class="form-group">
+                <label>Fecha de Emisión</label>
+                <input type="date" class="form-control" id="calcIssueDate" value="${window.calcState.issueDate}" onchange="updateCalcParam('issueDate', this.value)">
+            </div>
+            <div class="form-group">
+                <label>Tasa de IGV</label>
+                <select class="form-control" id="calcIgvRate" onchange="updateCalcParam('igvRate', parseFloat(this.value))">
+                    <option value="0.18"${window.calcState.igvRate === 0.18 ? ' selected' : ''}>18% (General SUNAT)</option>
+                    <option value="0"${window.calcState.igvRate === 0 ? ' selected' : ''}>0% (Exonerado / Inafecto)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Detracción (SPOT)</label>
+                <select class="form-control" id="calcDetrRate" onchange="updateCalcParam('detrRate', parseFloat(this.value))">
+                    <option value="0.12"${window.calcState.detrRate === 0.12 ? ' selected' : ''}>12% (Saneamiento, Fumigación, Plagas)</option>
+                    <option value="0.10"${window.calcState.detrRate === 0.10 ? ' selected' : ''}>10% (Otros servicios)</option>
+                    <option value="0.04"${window.calcState.detrRate === 0.04 ? ' selected' : ''}>4% (Transporte)</option>
+                    <option value="0"${window.calcState.detrRate === 0 ? ' selected' : ''}>0% (Sin detracción / menor a S/ 700)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Cuenta Detracción BN</label>
+                <select class="form-control" id="calcBnAccount" onchange="updateCalcParam('bnAccount', this.value)">
+                    <option value="00046317769"${window.calcState.bnAccount === '00046317769' ? ' selected' : ''}>00046317769 (Cuenta 1)</option>
+                    <option value="00771005578"${window.calcState.bnAccount === '00771005578' ? ' selected' : ''}>00771005578 (Cuenta 2)</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Orden de Compra (OC)</label>
+                <input type="text" class="form-control" id="calcOc" value="${esc(window.calcState.purchaseOrder)}" placeholder="Ej. 8600033006" oninput="updateCalcParam('purchaseOrder', this.value)">
+            </div>
+            <div class="form-group" style="max-width:130px">
+                <label>Comprobante</label>
+                <div style="display:flex;gap:4px">
+                    <input type="text" class="form-control" style="width:65px" id="calcSerie" value="${esc(window.calcState.series)}" oninput="updateCalcParam('series', this.value)">
+                    <input type="text" class="form-control" id="calcNum" value="${esc(window.calcState.number)}" placeholder="N°" oninput="updateCalcParam('number', this.value)">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Units / Items Table -->
+    <div class="card" style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <div style="font-weight:700;font-size:1rem">Desglose de Unidades e Ítems a Facturar</div>
+            <button class="btn btn-secondary btn-sm" onclick="addCalcItem()">+ Agregar Unidad / Ítem</button>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="min-width:280px">Descripción del Servicio / Producto</th>
+                        <th style="width:110px;text-align:center">Cantidad</th>
+                        <th style="width:160px;text-align:right">P. Unitario Sin IGV (S/)</th>
+                        <th style="width:160px;text-align:right">Subtotal (S/)</th>
+                        <th style="width:50px"></th>
+                    </tr>
+                </thead>
+                <tbody id="calcItemsBody">
+                    <!-- Dynamic Rows -->
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- ===================== SUNAT COPY STATION (ESTILO NICOLE) ===================== -->
+    <div class="sunat-station">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;border-bottom:1px solid var(--border-light);padding-bottom:12px">
+            <div>
+                <h3 style="margin:0;font-size:1.15rem;display:flex;align-items:center;gap:8px">
+                    ⚡ Panel de Copiado Rápido para SUNAT (Portal SOL)
+                </h3>
+                <div style="font-size:0.8rem;color:var(--text-muted);margin-top:2px">
+                    Haz clic en "Copiar" al lado de cada casilla para pegarla de inmediato en la web de SUNAT sin errores
+                </div>
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick="copyCalcSummary()">📋 Copiar Todo el Resumen</button>
+        </div>
+
+        <!-- SUNAT Field Grid -->
+        <div class="sunat-grid">
+            <!-- 1. RUC -->
+            <div class="sunat-field-card">
+                <div class="sunat-field-info">
+                    <div class="sunat-field-label">1. RUC del Cliente</div>
+                    <div class="sunat-field-val" id="sunatValRuc">${esc(window.calcState.clientRuc || '-')}</div>
+                </div>
+                <button class="btn-sunat-copy" onclick="copySunatField(window.calcState.clientRuc, 'RUC')">📋 Copiar</button>
+            </div>
+
+            <!-- 2. Razón Social -->
+            <div class="sunat-field-card">
+                <div class="sunat-field-info">
+                    <div class="sunat-field-label">2. Razón Social / Empresa</div>
+                    <div class="sunat-field-val" id="sunatValClientName">${esc(window.calcState.clientName || '-')}</div>
+                </div>
+                <button class="btn-sunat-copy" onclick="copySunatField(window.calcState.clientName, 'Razón Social')">📋 Copiar</button>
+            </div>
+
+            <!-- 3. Cuenta Banco de la Nación -->
+            <div class="sunat-field-card">
+                <div class="sunat-field-info">
+                    <div class="sunat-field-label">3. Cuenta Detracción (Banco de la Nación)</div>
+                    <div class="sunat-field-val" id="sunatValBnAccount" style="color:#f59e0b">${esc(window.calcState.bnAccount)}</div>
+                </div>
+                <button class="btn-sunat-copy" onclick="copySunatField(window.calcState.bnAccount, 'Cuenta Banco de la Nación')">📋 Copiar</button>
+            </div>
+
+            <!-- 4. Subtotal / Base Imponible -->
+            <div class="sunat-field-card">
+                <div class="sunat-field-info">
+                    <div class="sunat-field-label">4. Subtotal / Base Imponible (Sin IGV)</div>
+                    <div class="sunat-field-val" id="sunatValSubtotal">S/ 0.00</div>
+                </div>
+                <button class="btn-sunat-copy" onclick="copySunatRaw('subtotal', 'Subtotal Sin IGV')">📋 Copiar</button>
+            </div>
+
+            <!-- 5. IGV 18% -->
+            <div class="sunat-field-card">
+                <div class="sunat-field-info">
+                    <div class="sunat-field-label">5. IGV (18%)</div>
+                    <div class="sunat-field-val" id="sunatValIgv">S/ 0.00</div>
+                </div>
+                <button class="btn-sunat-copy" onclick="copySunatRaw('igv', 'IGV')">📋 Copiar</button>
+            </div>
+
+            <!-- 6. Importe Total -->
+            <div class="sunat-field-card" style="border-color:#ef4444;background:rgba(239,68,68,0.06)">
+                <div class="sunat-field-info">
+                    <div class="sunat-field-label">6. Monto Total (Precio Final)</div>
+                    <div class="sunat-field-val" id="sunatValTotal" style="color:#ef4444">S/ 0.00</div>
+                </div>
+                <button class="btn-sunat-copy" style="background:#ef4444;color:#fff;border:none" onclick="copySunatRaw('total', 'Monto Total')">📋 Copiar</button>
+            </div>
+
+            <!-- 7. Monto Detracción -->
+            <div class="sunat-field-card" style="border-color:#f59e0b;background:rgba(245,158,11,0.06)">
+                <div class="sunat-field-info">
+                    <div class="sunat-field-label">7. Detracción SPOT (12% en Soles)</div>
+                    <div class="sunat-field-val" id="sunatValDetr" style="color:#f59e0b">S/ 0.00</div>
+                </div>
+                <button class="btn-sunat-copy" onclick="copySunatRaw('detr', 'Monto Detracción')">📋 Copiar</button>
+            </div>
+
+            <!-- 8. Monto Neto de Crédito -->
+            <div class="sunat-field-card" style="border-color:#10b981;background:rgba(16,185,129,0.06)">
+                <div class="sunat-field-info">
+                    <div class="sunat-field-label">8. Monto Neto de Crédito (Total - Detrac.)</div>
+                    <div class="sunat-field-val" id="sunatValCred" style="color:#10b981">S/ 0.00</div>
+                </div>
+                <button class="btn-sunat-copy" style="background:#10b981;color:#fff;border:none" onclick="copySunatRaw('cred', 'Monto Neto Crédito')">📋 Copiar</button>
+            </div>
+
+            <!-- 9. Orden de Compra -->
+            <div class="sunat-field-card">
+                <div class="sunat-field-info">
+                    <div class="sunat-field-label">9. Orden de Compra (OC)</div>
+                    <div class="sunat-field-val" id="sunatValOc">${esc(window.calcState.purchaseOrder || '-')}</div>
+                </div>
+                <button class="btn-sunat-copy" onclick="copySunatField(window.calcState.purchaseOrder, 'Orden de Compra')">📋 Copiar</button>
+            </div>
+        </div>
+
+        <!-- Cuota Vencimientos (Formato DD/MM/AAAA para SUNAT) -->
+        <div style="margin-top:18px;border-top:1px solid var(--border-light);padding-top:14px">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <div style="font-size:0.75rem;text-transform:uppercase;font-weight:700;color:var(--text-muted)">
+                    📅 Fechas de Vencimiento de Cuota (Formato DD/MM/AAAA para SUNAT)
+                </div>
+                <div style="font-size:0.75rem;color:var(--text-muted)">Haz clic para copiar la fecha de vencimiento elegida</div>
+            </div>
+            <div class="calc-dates-grid" id="calcSunatDatesGrid"></div>
+        </div>
+
+        <!-- Son Letras Box -->
+        <div style="margin-top:14px">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+                <label style="font-size:0.75rem;text-transform:uppercase;font-weight:700;color:var(--text-muted)">Importe en Letras (SUNAT)</label>
+                <button class="btn btn-ghost btn-sm" onclick="copySunatField(document.getElementById('calcSonLetras').innerText.replace('Son: ',''), 'Importe en Letras')">📋 Copiar Texto</button>
+            </div>
+            <div class="son-letras-box" id="calcSonLetras">CERO CON 00/100 SOLES</div>
+        </div>
+
+        <!-- Bottom Action Bar -->
+        <div style="display:flex;gap:12px;margin-top:20px;flex-wrap:wrap">
+            <button class="btn btn-primary" onclick="saveCalculatorAsInvoice()">💾 Guardar como Factura en el Sistema</button>
+            <button class="btn btn-secondary" onclick="copyCalcSummary()">📋 Copiar Resumen Completo</button>
+        </div>
+    </div>
+    `;
+
+    el.innerHTML = html;
+    renderCalcItems();
+    recalcAllCalc();
+}
+
+function renderCalcItems() {
+    const tbody = document.getElementById('calcItemsBody');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+
+    window.calcState.items.forEach((item, index) => {
+        const sub = (item.cant * item.pu) || 0;
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+            <td>
+                <input type="text" class="form-control" style="padding:6px 10px;font-size:0.85rem" value="${esc(item.desc)}" placeholder="Descripción" oninput="updateCalcItem(${index}, 'desc', this.value)">
+            </td>
+            <td>
+                <input type="number" step="any" min="0" class="form-control" style="padding:6px 10px;font-size:0.85rem;text-align:center" value="${item.cant}" oninput="updateCalcItem(${index}, 'cant', this.value)">
+            </td>
+            <td>
+                <input type="number" step="0.01" min="0" class="form-control" style="padding:6px 10px;font-size:0.85rem;text-align:right;font-family:monospace" value="${item.pu.toFixed(2)}" oninput="updateCalcItem(${index}, 'pu', this.value)">
+            </td>
+            <td style="text-align:right;font-family:monospace;font-weight:700;font-size:0.9rem">
+                S/ ${fmtMoney(sub)}
+            </td>
+            <td style="text-align:center">
+                ${window.calcState.items.length > 1 ? `<button class="btn btn-ghost btn-sm" onclick="delCalcItem(${index})" style="color:#ef4444" title="Quitar">✕</button>` : ''}
+            </td>
+        `;
+        tbody.appendChild(tr);
+    });
+}
+
+function addCalcItem() {
+    window.calcState.items.push({ desc: 'SERV CONTROL DE PLAGAS', cant: 1, pu: 0 });
+    renderCalcItems();
+    recalcAllCalc();
+}
+
+function delCalcItem(index) {
+    if (window.calcState.items.length > 1) {
+        window.calcState.items.splice(index, 1);
+        renderCalcItems();
+        recalcAllCalc();
+    }
+}
+
+function updateCalcItem(index, field, val) {
+    if (field === 'cant') {
+        window.calcState.items[index].cant = parseFloat(val) || 0;
+    } else if (field === 'pu') {
+        window.calcState.items[index].pu = parseFloat(val) || 0;
+    } else {
+        window.calcState.items[index].desc = val;
+    }
+    recalcAllCalc();
+    const rows = document.querySelectorAll('#calcItemsBody tr');
+    if (rows[index]) {
+        const sub = (window.calcState.items[index].cant * window.calcState.items[index].pu) || 0;
+        rows[index].cells[3].innerText = 'S/ ' + fmtMoney(sub);
+    }
+}
+
+function updateCalcParam(key, val) {
+    window.calcState[key] = val;
+    if (key === 'purchaseOrder') {
+        const ocEl = document.getElementById('sunatValOc');
+        if (ocEl) ocEl.innerText = val || '-';
+    }
+    if (key === 'bnAccount') {
+        const bnEl = document.getElementById('sunatValBnAccount');
+        if (bnEl) bnEl.innerText = val;
+    }
+    recalcAllCalc();
+}
+
+function onCalcSiteSelected(sel) {
+    const opt = sel.options[sel.selectedIndex];
+    if (!opt || !opt.value) return;
+
+    const siteId = parseInt(opt.value);
+    const clientId = parseInt(opt.getAttribute('data-client-id'));
+    const clientName = opt.getAttribute('data-client-name') || '';
+    const clientRuc = opt.getAttribute('data-client-ruc') || '';
+    const fee = parseFloat(opt.getAttribute('data-fee')) || 0;
+    const srv = opt.getAttribute('data-service') || 'SERV CONTROL DE PLAGAS';
+    const loc = opt.getAttribute('data-loc') || '';
+
+    window.calcState.siteId = siteId;
+    window.calcState.clientId = clientId;
+    window.calcState.clientName = clientName;
+    window.calcState.clientRuc = clientRuc;
+    window.calcState.locationCode = loc;
+
+    if (window.calcState.items.length === 0) {
+        window.calcState.items = [{ desc: srv, cant: 1, pu: fee }];
+    } else {
+        window.calcState.items[0].desc = srv;
+        window.calcState.items[0].pu = fee;
+    }
+
+    const badge = document.getElementById('calcClientLoadedBadge');
+    const nameEl = document.getElementById('calcClientLoadedName');
+    if (badge && nameEl) {
+        nameEl.innerText = clientName;
+        badge.style.display = 'block';
+    }
+
+    const rucEl = document.getElementById('sunatValRuc');
+    if (rucEl) rucEl.innerText = clientRuc || '-';
+    const cnameEl = document.getElementById('sunatValClientName');
+    if (cnameEl) cnameEl.innerText = clientName || '-';
+
+    renderCalcItems();
+    recalcAllCalc();
+    showToast('Datos de ' + clientName + ' cargados');
+}
+
+// Stores calculated raw numeric values for SUNAT pasting
+window.calcRawNumbers = { subtotal: 0, igv: 0, total: 0, detr: 0, cred: 0 };
+
+function copySunatRaw(key, label) {
+    const num = window.calcRawNumbers[key] || 0;
+    // Copies exact two-decimal string, e.g. 14700.00
+    copySunatField(num.toFixed(2), label + ' (' + num.toFixed(2) + ')');
+}
+
+function recalcAllCalc() {
+    let subtotal = 0;
+    window.calcState.items.forEach(it => {
+        subtotal += (it.cant * it.pu);
+    });
+
+    const igvRate = window.calcState.igvRate;
+    const detrRate = window.calcState.detrRate;
+
+    const igv = Math.round(subtotal * igvRate * 100) / 100;
+    const total = Math.round((subtotal + igv) * 100) / 100;
+    const detr = (total >= 700 && detrRate > 0) ? Math.round(total * detrRate * 100) / 100 : 0;
+    const cred = Math.round((total - detr) * 100) / 100;
+
+    window.calcRawNumbers = { subtotal, igv, total, detr, cred };
+
+    // Update SUNAT station values
+    const sSub = document.getElementById('sunatValSubtotal');
+    const sIgv = document.getElementById('sunatValIgv');
+    const sTot = document.getElementById('sunatValTotal');
+    const sDet = document.getElementById('sunatValDetr');
+    const sCre = document.getElementById('sunatValCred');
+
+    if (sSub) sSub.innerText = 'S/ ' + fmtMoney(subtotal);
+    if (sIgv) sIgv.innerText = 'S/ ' + fmtMoney(igv);
+    if (sTot) sTot.innerText = 'S/ ' + fmtMoney(total);
+    if (sDet) sDet.innerText = 'S/ ' + fmtMoney(detr);
+    if (sCre) sCre.innerText = 'S/ ' + fmtMoney(cred);
+
+    const sonEl = document.getElementById('calcSonLetras');
+    if (sonEl) {
+        sonEl.innerText = numeroALetras(total);
+    }
+
+    // Render payment dates in SUNAT format (DD/MM/AAAA)
+    renderCalcSunatDates();
+}
+
+function renderCalcSunatDates() {
+    const grid = document.getElementById('calcSunatDatesGrid');
+    if (!grid) return;
+    grid.innerHTML = '';
+
+    const baseDateStr = window.calcState.issueDate || todayStr();
+    const baseDate = new Date(baseDateStr + 'T12:00:00');
+
+    const dias = [10, 15, 30, 45, 60, 90];
+    dias.forEach(d => {
+        const fut = new Date(baseDate);
+        fut.setDate(fut.getDate() + d);
+        const day = String(fut.getDate()).padStart(2, '0');
+        const month = String(fut.getMonth() + 1).padStart(2, '0');
+        const year = fut.getFullYear();
+        const fStrSunat = `${day}/${month}/${year}`;
+
+        const isStandard = d === 30;
+        const chip = document.createElement('div');
+        chip.className = 'calc-date-chip';
+        if (isStandard) {
+            chip.style.borderColor = '#10b981';
+            chip.style.background = 'rgba(16,185,129,0.08)';
+        }
+        chip.innerHTML = `
+            <div class="calc-date-days">${d} días${isStandard ? ' ⭐' : ''}</div>
+            <div class="calc-date-val" style="cursor:pointer" title="Clic para copiar fecha">${fStrSunat}</div>
+            <button class="btn-sunat-copy" style="margin-top:6px;padding:3px 8px;font-size:0.75rem;width:100%" onclick="copySunatField('${fStrSunat}', 'Vencimiento ${d} días (${fStrSunat})')">📋 Copiar</button>
+        `;
+        grid.appendChild(chip);
+    });
+}
+
+function resetWorkCalculator() {
+    window.calcState = {
+        clientId: null,
+        clientName: '',
+        clientRuc: '',
+        siteId: null,
+        siteName: '',
+        issueDate: todayStr(),
+        igvRate: 0.18,
+        detrRate: 0.12,
+        bnAccount: '00046317769',
+        series: 'E001',
+        number: '',
+        purchaseOrder: '',
+        locationCode: '',
+        items: [
+            { desc: 'SERV CONTROL DE PLAGAS', cant: 1, pu: 800.00 }
+        ]
+    };
+    navigate('work');
+    showToast('Calculadora reiniciada');
+}
+
+function copyCalcSummary() {
+    let sub = 0;
+    window.calcState.items.forEach(it => { sub += (it.cant * it.pu); });
+    const igv = Math.round(sub * window.calcState.igvRate * 100) / 100;
+    const tot = Math.round((sub + igv) * 100) / 100;
+    const detr = (tot >= 700 && window.calcState.detrRate > 0) ? Math.round(tot * window.calcState.detrRate * 100) / 100 : 0;
+    const cred = Math.round((tot - detr) * 100) / 100;
+
+    let txt = `DATOS PARA EMISIÓN SUNAT
+`;
+    if (window.calcState.clientName) txt += `Cliente: ${window.calcState.clientName}
+`;
+    if (window.calcState.clientRuc) txt += `RUC: ${window.calcState.clientRuc}
+`;
+    txt += `Emisión: ${window.calcState.issueDate || todayStr()}
+`;
+    if (window.calcState.purchaseOrder) txt += `Orden de Compra: ${window.calcState.purchaseOrder}
+`;
+    txt += `Cuenta Detracción Banco de la Nación: ${window.calcState.bnAccount}
+`;
+    txt += `----------------------------------------
+`;
+    window.calcState.items.forEach((it, i) => {
+        const lTot = (it.cant * it.pu).toFixed(2);
+        txt += `${i+1}. ${it.desc} | Cant: ${it.cant} x S/ ${it.pu.toFixed(2)} = S/ ${lTot}
+`;
+    });
+    txt += `----------------------------------------
+`;
+    txt += `Subtotal (Base Imponible): S/ ${fmtMoney(sub)}
+`;
+    txt += `IGV (18%): S/ ${fmtMoney(igv)}
+`;
+    txt += `Importe Total: S/ ${fmtMoney(tot)}
+`;
+    txt += `Detracción (12% SPOT): S/ ${fmtMoney(detr)}
+`;
+    txt += `Monto Neto Pendiente de Pago (Crédito): S/ ${fmtMoney(cred)}
+`;
+    txt += `Son: ${numeroALetras(tot)}
+`;
+
+    navigator.clipboard.writeText(txt).then(() => {
+        showToast('¡Resumen copiado para SUNAT!');
+    }).catch(() => {
+        showToast('Error al copiar');
+    });
+}
+
+async function saveCalculatorAsInvoice() {
+    let sub = 0;
+    window.calcState.items.forEach(it => { sub += (it.cant * it.pu); });
+    if (sub <= 0) {
+        showToast('El monto debe ser mayor a cero');
+        return;
+    }
+
+    const igv = Math.round(sub * window.calcState.igvRate * 100) / 100;
+    const tot = Math.round((sub + igv) * 100) / 100;
+    const detr = (tot >= 700 && window.calcState.detrRate > 0) ? Math.round(tot * window.calcState.detrRate * 100) / 100 : 0;
+    const cred = Math.round((tot - detr) * 100) / 100;
+
+    // If client is not set, open modal to select client
+    if (!window.calcState.clientId) {
+        const invDraft = {
+            client_id: null,
+            client_site_id: window.calcState.siteId,
+            series: window.calcState.series || 'E001',
+            number: window.calcState.number,
+            purchase_order: window.calcState.purchaseOrder,
+            location_code: window.calcState.locationCode,
+            service: window.calcState.items.map(it => it.desc).join(', '),
+            amount: sub,
+            igv: igv,
+            total: tot,
+            detraccion: detr,
+            credito: cred,
+            issue_date: window.calcState.issueDate || todayStr(),
+            payment_type: 'credito',
+            status: 'issued'
+        };
+        showInvoiceModal(invDraft);
+        return;
+    }
+
+    const serviceName = window.calcState.items.map(it => it.desc).join(', ');
+    const invoiceData = {
+        client_id: window.calcState.clientId,
+        client_site_id: window.calcState.siteId,
+        series: window.calcState.series || 'E001',
+        number: window.calcState.number,
+        purchase_order: window.calcState.purchaseOrder,
+        location_code: window.calcState.locationCode,
+        service: serviceName,
+        amount: sub,
+        igv: igv,
+        total: tot,
+        detraccion: detr,
+        credito: cred,
+        payment_type: 'credito',
+        issue_date: window.calcState.issueDate || todayStr(),
+        status: 'issued',
+        items_json: JSON.stringify(window.calcState.items)
+    };
+
+    const res = await api(eel.create_invoice, invoiceData);
+    if (res && res.ok) {
+        showToast('¡Factura guardada exitosamente!');
+        switchWorkTab('invoices');
+    } else {
+        showToast(res && res.error ? res.error : 'Error al guardar');
+    }
+}
+
+// Algoritmo oficial de conversión de números a letras en español peruano (SUNAT)
+function numeroALetras(num) {
+    if (isNaN(num) || num === null || num === undefined) return "CERO CON 00/100 SOLES";
+    num = Math.round(num * 100) / 100;
+    let entero = Math.floor(num);
+    let decimales = Math.round((num - entero) * 100);
+    let textoDecimal = " CON " + decimales.toString().padStart(2, '0') + "/100 SOLES";
+
+    if (entero === 0) return "CERO" + textoDecimal;
+
+    function unidades(n) {
+        const unids = ["", "UN", "DOS", "TRES", "CUATRO", "CINCO", "SEIS", "SIETE", "OCHO", "NUEVE"];
+        return unids[n] || "";
+    }
+
+    function decenas(n) {
+        const decs = ["", "DIEZ", "VEINTE", "TREINTA", "CUARENTA", "CINCUENTA", "SESENTA", "SETENTA", "OCHENTA", "NOVENTA"];
+        const diecis = ["DIEZ", "ONCE", "DOCE", "TRECE", "CATORCE", "QUINCE", "DIECISEIS", "DIECISIETE", "DIECIOCHO", "DIECINUEVE"];
+        if (n < 10) return unidades(n);
+        if (n >= 10 && n < 20) return diecis[n - 10];
+        if (n >= 20 && n < 30) return n === 20 ? "VEINTE" : "VEINTI" + unidades(n - 20);
+        return decs[Math.floor(n / 10)] + (n % 10 !== 0 ? " Y " + unidades(n % 10) : "");
+    }
+
+    function centenas(n) {
+        const cents = ["", "CIENTO", "DOSCIENTOS", "TRESCIENTOS", "CUATROCIENTOS", "QUINIENTOS", "SEISCIENTOS", "SETECIENTOS", "OCHOCIENTOS", "NOVECIENTOS"];
+        if (n === 100) return "CIEN";
+        return cents[Math.floor(n / 100)] + (n % 100 !== 0 ? " " + decenas(n % 100) : "");
+    }
+
+    function miles(n) {
+        let c = Math.floor(n / 1000);
+        let resto = n % 1000;
+        let textoC = c === 1 ? "MIL" : centenas(c) + " MIL";
+        return c === 0 ? centenas(resto) : textoC + (resto !== 0 ? " " + centenas(resto) : "");
+    }
+
+    function millones(n) {
+        let m = Math.floor(n / 1000000);
+        let resto = n % 1000000;
+        let textoM = m === 1 ? "UN MILLON" : miles(m) + " MILLONES";
+        return m === 0 ? miles(resto) : textoM + (resto !== 0 ? " " + miles(resto) : "");
+    }
+
+    return (millones(entero) + textoDecimal).trim().replace(/\s+/g, ' ');
 }
 
 // --- WORK COTIZACIONES ---

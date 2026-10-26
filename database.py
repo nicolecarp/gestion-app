@@ -66,6 +66,22 @@ def init_db():
             FOREIGN KEY (client_id) REFERENCES clients(id)
         );
 
+        CREATE TABLE IF NOT EXISTS purchase_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER NOT NULL,
+            client_site_id INTEGER,
+            year INTEGER NOT NULL,
+            month INTEGER NOT NULL,
+            oc_number TEXT NOT NULL,
+            amount REAL,
+            status TEXT DEFAULT 'pending',
+            notes TEXT,
+            created_at TEXT DEFAULT (datetime('now','localtime')),
+            FOREIGN KEY (client_id) REFERENCES clients(id),
+            FOREIGN KEY (client_site_id) REFERENCES client_sites(id)
+        );
+
+
         CREATE TABLE IF NOT EXISTS employees (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             full_name TEXT NOT NULL,
@@ -974,7 +990,53 @@ def apply_cleanups_and_seeds(conn):
         except Exception as e:
             pass
 
-    conn.commit()
+    
+    # 8. Seed initial purchase orders (v1)
+    seed_po = conn.execute("SELECT value FROM config WHERE key='seed_po_v1'").fetchone()
+    if not seed_po:
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS purchase_orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    client_id INTEGER NOT NULL,
+                    client_site_id INTEGER,
+                    year INTEGER NOT NULL,
+                    month INTEGER NOT NULL,
+                    oc_number TEXT NOT NULL,
+                    amount REAL,
+                    status TEXT DEFAULT 'pending',
+                    notes TEXT,
+                    created_at TEXT DEFAULT (datetime('now','localtime')),
+                    FOREIGN KEY (client_id) REFERENCES clients(id),
+                    FOREIGN KEY (client_site_id) REFERENCES client_sites(id)
+                )
+            """)
+            # Populate OCs from September for each regular site
+            po_seed_list = [
+                (9, 1, 2026, 9, '8600033006', 800.00, 'invoiced', 'OC Septiembre Sur Color Star'),
+                (10, 2, 2026, 9, '8600033002', 750.00, 'invoiced', 'OC Septiembre Topy Top'),
+                (11, 3, 2026, 9, '4501201335', 14700.00, 'invoiced', 'Planta Pucusana (OC 4501201335)'),
+                (11, 4, 2026, 9, '4501203340', 7140.00, 'invoiced', 'Planta Zárate (OC 4501203340)'),
+                (11, 5, 2026, 9, '4501201100', 8510.00, 'invoiced', 'Planta Trujillo (OC 4501201100)'),
+                (11, 6, 2026, 9, '4501201057', 5150.00, 'invoiced', 'Planta Arequipa (OC 4501201057)'),
+                (11, 7, 2026, 9, '4501200921', 5000.00, 'invoiced', 'Planta Cusco (OC 4501200921)'),
+                (13, 10, 2026, 9, '4501201113', 3680.00, 'invoiced', 'CEDI Huachipa (OC 4501201113)'),
+                (13, 11, 2026, 9, '4501203465', 2940.00, 'invoiced', 'CEDI Dueñas (OC 4501203465)'),
+                (13, 12, 2026, 9, '4501203463', 3680.00, 'invoiced', 'CEDI VES (OC 4501203463)'),
+                (13, 13, 2026, 9, '4501203073', 960.00, 'invoiced', 'CEDI Trujillo (OC 4501203073)'),
+                (14, 15, 2026, 9, '6300011728', 4225.00, 'invoiced', 'Iquitos (OC 6300011728)'),
+                (14, 16, 2026, 9, '6300011729', 1250.00, 'invoiced', 'CEDI Iquitos (OC 6300011729)'),
+                (14, 17, 2026, 9, '6300011730', 1420.00, 'invoiced', 'Adicionales Iquitos (OC 6300011730)'),
+            ]
+            for cid, sid, y, m, oc, am, st, nt in po_seed_list:
+                conn.execute("""
+                    INSERT INTO purchase_orders (client_id, client_site_id, year, month, oc_number, amount, status, notes)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (cid, sid, y, m, oc, am, st, nt))
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('seed_po_v1', '1')")
+            conn.commit()
+        except Exception as e:
+            pass
 
 
 def seed_default_workouts(conn):

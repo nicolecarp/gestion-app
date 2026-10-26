@@ -1881,3 +1881,72 @@ tr:hover td { background: var(--bg); }
     background: var(--accent, #6366f1);
     color: #fff;
 }
+
+
+/* ===================== MATRIX 12-MONTH TABLE & OC BADGES ===================== */
+.matrix-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 0.82rem;
+}
+.matrix-table th, .matrix-table td {
+    padding: 6px 6px;
+    border-bottom: 1px solid var(--border-light, #eee);
+    vertical-align: middle;
+}
+.matrix-sticky-col {
+    position: sticky;
+    left: 0;
+    background: var(--bg-card, #ffffff);
+    z-index: 3;
+    box-shadow: 2px 0 6px rgba(0, 0, 0, 0.05);
+    min-width: 170px;
+    max-width: 220px;
+}
+[data-theme="dark"] .matrix-sticky-col {
+    background: var(--bg-card, #1e1e2d);
+}
+.matrix-month-cur {
+    background: rgba(99, 102, 241, 0.12) !important;
+    border-bottom: 2px solid var(--accent, #6366f1) !important;
+}
+.matrix-cell-invoiced {
+    background: rgba(99, 102, 241, 0.08);
+    border-radius: 6px;
+    padding: 4px 6px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.matrix-cell-invoiced:hover {
+    background: rgba(99, 102, 241, 0.18);
+    transform: translateY(-1px);
+}
+.matrix-cell-oc {
+    background: rgba(245, 158, 11, 0.12);
+    border: 1px dashed #f59e0b;
+    border-radius: 6px;
+    padding: 4px 6px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+.matrix-cell-oc:hover {
+    background: rgba(245, 158, 11, 0.22);
+    transform: translateY(-1px);
+}
+.matrix-cell-empty {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    padding: 6px 2px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.15s;
+}
+.matrix-cell-empty:hover {
+    background: var(--primary-light, rgba(99, 102, 241, 0.1));
+    color: var(--accent, #6366f1);
+    font-weight: 700;
+}

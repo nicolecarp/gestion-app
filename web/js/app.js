@@ -467,8 +467,8 @@ async function showDayEvents(year, month, day) {
 
 // ===================== WORK =====================
 async function renderWork(el) {
-    const tabs = ['tasks','clients','invoices','cotizaciones','services','dailycontrol','employees','documents','reimbursements','overtime','lindley'];
-    const labels = ['Tareas','Clientes','Facturas','Cotizaciones','Servicios','Control','Empleados','Documentos','Reembolsos','Días extra','Lindley'];
+    const tabs = ['tasks','clients','matrix','invoices','calculadora','cotizaciones','services','dailycontrol','employees','documents','reimbursements','overtime','lindley'];
+    const labels = ['Tareas','Clientes','Matriz Mensual','Facturas','Calculadora IGV','Cotizaciones','Servicios','Control','Empleados','Documentos','Reembolsos','Días extra','Lindley'];
 
     let html = `<div class="page-header">
         <div><h1>Trabajo</h1><div class="subtitle">Control de gestión</div></div>
@@ -484,7 +484,9 @@ async function renderWork(el) {
     switch (state.workTab) {
         case 'tasks': await renderWorkTasks(content); break;
         case 'clients': await renderWorkClients(content); break;
+        case 'matrix': await renderWorkMatrix(content); break;
         case 'invoices': await renderWorkInvoices(content); break;
+        case 'calculadora': await renderWorkCalculator(content); break;
         case 'services': await renderWorkServices(content); break;
         case 'dailycontrol': await renderWorkDailyControl(content); break;
         case 'employees': await renderWorkEmployees(content); break;
@@ -734,6 +736,581 @@ async function buscarRucSunat() {
     }
 }
 
+
+// ===================== WORK MATRIX (MATRIZ MENSUAL 12 MESES & OC) =====================
+
+async function renderWorkMatrix(el) {
+    state.matrixYear = state.matrixYear || (new Date().getFullYear() || 2026);
+    state.matrixOcFilter = state.matrixOcFilter || 'all';
+
+    const [data, sitesGrouped, clients] = await Promise.all([
+        api(eel.get_monthly_billing, state.matrixYear),
+        api(eel.get_client_sites_grouped),
+        api(eel.get_clients)
+    ]);
+
+    const resData = data || { year: state.matrixYear, sites: [], invoices: [], orders: [] };
+    state.matrixData = resData;
+    state.allSites = sitesGrouped || [];
+    state.allClients = clients || [];
+
+    const sites = resData.sites || [];
+    const invoices = resData.invoices || [];
+    const orders = resData.orders || [];
+
+    // Calculate KPI totals for the selected year
+    let totSinIgv = 0, totFacturado = 0, totDetr = 0, totCredito = 0;
+    invoices.forEach(i => {
+        totSinIgv += (i.amount || 0);
+        totFacturado += (i.total || 0);
+        totDetr += (i.detraccion || 0);
+        totCredito += (i.credito || 0);
+    });
+
+    const pendingOrdersCount = orders.filter(o => o.status === 'pending').length;
+
+    // Lookups
+    const invMap = {};
+    for (const inv of invoices) {
+        const k = inv.client_site_id + '-' + (inv.month_billed || 0);
+        if (!invMap[k]) invMap[k] = [];
+        invMap[k].push(inv);
+    }
+
+    const ocMap = {};
+    for (const po of orders) {
+        if (po.client_site_id) {
+            ocMap[po.client_site_id + '-' + po.month] = po;
+        } else if (po.client_id) {
+            ocMap['c' + po.client_id + '-' + po.month] = po;
+        }
+    }
+
+    const monthShorts = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Set', 'Oct', 'Nov', 'Dic'];
+    const curYear = new Date().getFullYear();
+    const curMonth = new Date().getMonth() + 1;
+    const isCurYear = state.matrixYear === curYear;
+
+    let html = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+        <div>
+            <div style="display:flex;align-items:center;gap:10px">
+                <h2 style="margin:0;font-size:1.35rem">📊 Matriz de Facturación Mensual</h2>
+                <span class="tag tag-primary">12 Meses Completos</span>
+            </div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">Clientes regulares: Comparativa anual de cuotas pactadas vs facturación emitida y órdenes de compra</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <div style="display:flex;align-items:center;gap:4px;background:var(--bg-card);padding:4px 8px;border-radius:8px;border:1px solid var(--border-light)">
+                <span style="font-size:0.8rem;font-weight:700;color:var(--text-muted)">Año:</span>
+                <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="changeMatrixYear(${state.matrixYear - 1})">◀</button>
+                <select class="form-control" style="width:90px;font-weight:700;padding:4px 8px;font-size:0.85rem" onchange="changeMatrixYear(this.value)">
+                    <option value="2024"${state.matrixYear === 2024 ? ' selected' : ''}>2024</option>
+                    <option value="2025"${state.matrixYear === 2025 ? ' selected' : ''}>2025</option>
+                    <option value="2026"${state.matrixYear === 2026 ? ' selected' : ''}>2026</option>
+                    <option value="2027"${state.matrixYear === 2027 ? ' selected' : ''}>2027</option>
+                </select>
+                <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="changeMatrixYear(${state.matrixYear + 1})">▶</button>
+            </div>
+            <button class="btn btn-secondary btn-sm" onclick="showPurchaseOrderModal()">+ Registrar OC</button>
+            <button class="btn btn-secondary btn-sm" onclick="showInvoiceForm()">+ Nueva Factura</button>
+            <button class="btn btn-primary btn-sm" onclick="switchWorkTab('calculadora')">🧮 Calculadora SUNAT</button>
+        </div>
+    </div>
+
+    <!-- Year KPI Summary Cards -->
+    <div class="calc-kpi-grid" style="margin-bottom:20px">
+        <div class="calc-kpi-card highlight">
+            <div class="calc-kpi-label">Facturado en ${state.matrixYear} (Con IGV)</div>
+            <div class="calc-kpi-value">S/ ${fmtMoney(totFacturado)}</div>
+        </div>
+        <div class="calc-kpi-card">
+            <div class="calc-kpi-label">Base Imponible (Sin IGV)</div>
+            <div class="calc-kpi-value">S/ ${fmtMoney(totSinIgv)}</div>
+        </div>
+        <div class="calc-kpi-card amber">
+            <div class="calc-kpi-label">Detracciones SPOT (12%)</div>
+            <div class="calc-kpi-value">S/ ${fmtMoney(totDetr)}</div>
+        </div>
+        <div class="calc-kpi-card green">
+            <div class="calc-kpi-label">Órdenes de Compra (OC)</div>
+            <div class="calc-kpi-value">${orders.length} <span style="font-size:0.85rem;font-weight:normal;color:${pendingOrdersCount > 0 ? '#f59e0b' : 'var(--text-muted)'}">(${pendingOrdersCount} por facturar)</span></div>
+        </div>
+    </div>
+
+    <!-- 12-Month Matrix Card -->
+    <div class="card" style="margin-bottom:24px;padding:0;overflow:hidden">
+        <div style="padding:14px 18px;border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+            <div>
+                <div style="font-weight:700;font-size:1rem">Control de Cuotas Mensuales · Año ${state.matrixYear}</div>
+                <div style="font-size:0.78rem;color:var(--text-muted)">Haz clic en cualquier celda para ver el comprobante o registrar la OC correspondiente</div>
+            </div>
+            <div style="display:flex;gap:12px;font-size:0.75rem;align-items:center;flex-wrap:wrap">
+                <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:rgba(99,102,241,0.2);border-radius:2px;display:inline-block"></span> Facturada</span>
+                <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:rgba(245,158,11,0.25);border:1px dashed #f59e0b;border-radius:2px;display:inline-block"></span> OC Registrada (Por facturar)</span>
+                <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:var(--border-light);border-radius:2px;display:inline-block"></span> Pendiente (+ OC)</span>
+            </div>
+        </div>`;
+
+    if (sites.length === 0) {
+        html += '<div style="padding:30px;text-align:center;color:var(--text-muted)">No hay sedes con condición de cliente regular configuradas</div>';
+    } else {
+        html += `<div class="table-wrap" style="overflow-x:auto;max-height:680px">
+            <table class="matrix-table">
+                <thead style="position:sticky;top:0;background:var(--bg-card);z-index:4">
+                    <tr>
+                        <th class="matrix-sticky-col">Empresa / Sede</th>
+                        <th style="text-align:right;font-size:0.75rem;padding:6px 8px;min-width:90px">Cuota Pactada</th>`;
+
+        for (let m = 1; m <= 12; m++) {
+            const isThisMonth = isCurYear && m === curMonth;
+            const extraCls = isThisMonth ? ' matrix-month-cur' : '';
+            html += `<th class="${extraCls}" style="text-align:center;font-size:0.75rem;min-width:74px;padding:6px 4px">${monthShorts[m-1]}${isThisMonth ? ' <span style="font-size:0.65rem;color:var(--accent);display:block;margin-top:-2px">(Hoy)</span>' : ''}</th>`;
+        }
+
+        html += `
+                        <th style="text-align:right;font-size:0.75rem;min-width:95px;padding:6px 8px">Total ${state.matrixYear}</th>
+                        <th style="text-align:center;font-size:0.75rem;min-width:75px;padding:6px 6px">Diferencia</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+
+        const monthTotals = new Array(13).fill(0);
+        let grandTotalAnnual = 0;
+
+        for (const s of sites) {
+            const empresa = s.empresa || s.nombre_cliente;
+            const fee = parseFloat(s.monthly_fee) || 0;
+            let siteInvoicedSum = 0;
+            let siteBilledMonths = 0;
+
+            html += `<tr>
+                <td class="matrix-sticky-col">
+                    <div style="font-weight:700;font-size:0.83rem">${esc(empresa)}</div>
+                    <div style="font-size:0.73rem;color:var(--text-muted);display:flex;align-items:center;gap:6px">
+                        <span>${esc(s.nombre_cliente)}</span>
+                        ${s.location_code ? `<span class="tag tag-ghost" style="padding:1px 4px;font-size:0.68rem">Loc: ${esc(s.location_code)}</span>` : ''}
+                    </div>
+                </td>
+                <td style="text-align:right;font-family:monospace;font-size:0.8rem;font-weight:600;padding:6px 8px">
+                    S/ ${fmtMoney(fee)}
+                </td>`;
+
+            for (let m = 1; m <= 12; m++) {
+                const kSite = s.id + '-' + m;
+                const kClient = 'c' + s.client_id + '-' + m;
+                const invs = invMap[kSite] || [];
+                const po = ocMap[kSite] || (s.client_id ? ocMap[kClient] : null);
+
+                if (invs.length > 0) {
+                    const monthTotal = invs.reduce((acc, x) => acc + (x.total || 0), 0);
+                    siteInvoicedSum += monthTotal;
+                    monthTotals[m] += monthTotal;
+                    siteBilledMonths++;
+                    const ocDisplay = po?.oc_number || invs[0].purchase_order;
+
+                    html += `<td style="padding:4px 3px">
+                        <div class="matrix-cell-invoiced" onclick="showInvoiceForm(${invs[0].id})" title="Factura emitida S/ ${fmtMoney(monthTotal)} - Clic para ver">
+                            <div style="font-family:monospace;font-weight:700;font-size:0.78rem;color:var(--accent)">S/ ${fmtMoney(monthTotal)}</div>
+                            ${ocDisplay ? `<div style="font-size:0.65rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">OC: ${esc(ocDisplay)}</div>` : ''}
+                        </div>
+                    </td>`;
+                } else if (po) {
+                    html += `<td style="padding:4px 3px">
+                        <div class="matrix-cell-oc" onclick="handleMatrixCellOc(${s.id}, ${s.client_id}, ${m}, ${state.matrixYear}, ${po.id})" title="OC: ${esc(po.oc_number)} - Por facturar. Clic para emitir o editar">
+                            <div style="font-size:0.73rem;font-weight:700;color:#d97706;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">OC ${esc(po.oc_number)}</div>
+                            <div style="font-size:0.65rem;color:#b45309">⏳ Por facturar</div>
+                        </div>
+                    </td>`;
+                } else {
+                    html += `<td style="padding:4px 3px">
+                        <div class="matrix-cell-empty" onclick="showPurchaseOrderModal(null, ${s.id}, ${s.client_id}, ${m}, ${state.matrixYear})" title="Registrar OC de ${monthShorts[m-1]}">+ OC</div>
+                    </td>`;
+                }
+            }
+
+            grandTotalAnnual += siteInvoicedSum;
+            const expectedSum = fee * (siteBilledMonths || 1);
+            const diff = siteInvoicedSum - expectedSum;
+            const diffCls = diff >= 0 ? 'tag-sage' : 'tag-rose';
+
+            html += `
+                <td style="text-align:right;font-family:monospace;font-weight:700;font-size:0.82rem;padding:6px 8px">
+                    S/ ${fmtMoney(siteInvoicedSum)}
+                </td>
+                <td style="text-align:center;padding:6px 4px">
+                    <span class="tag ${diffCls}" style="font-size:0.7rem;padding:2px 6px" title="vs cuota de meses facturados">
+                        ${diff >= 0 ? '+' : ''}${fmtMoney(diff)}
+                    </span>
+                </td>
+            </tr>`;
+        }
+
+        html += `</tbody>
+                <tfoot style="position:sticky;bottom:0;background:var(--bg-card);font-weight:700;z-index:3;border-top:2px solid var(--border-light)">
+                    <tr>
+                        <td class="matrix-sticky-col" style="font-weight:700;font-size:0.82rem">Totales Mensuales</td>
+                        <td style="text-align:right;font-family:monospace;font-size:0.8rem">-</td>`;
+
+        for (let m = 1; m <= 12; m++) {
+            html += `<td style="text-align:center;font-family:monospace;font-size:0.78rem;padding:8px 4px;background:rgba(99,102,241,0.06)">
+                ${monthTotals[m] > 0 ? `S/ ${fmtMoney(monthTotals[m])}` : '—'}
+            </td>`;
+        }
+
+        html += `
+                        <td style="text-align:right;font-family:monospace;font-size:0.85rem;color:var(--accent);padding:8px">
+                            S/ ${fmtMoney(grandTotalAnnual)}
+                        </td>
+                        <td style="text-align:center">-</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>`;
+    }
+    html += `</div>`;
+
+    // Section 2: Purchase Orders Table for the Selected Year
+    const filteredOrders = orders.filter(o => {
+        if (state.matrixOcFilter === 'pending') return o.status === 'pending';
+        if (state.matrixOcFilter === 'invoiced') return o.status === 'invoiced';
+        return true;
+    });
+
+    html += `
+    <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+            <div>
+                <div style="font-weight:700;font-size:1rem;display:flex;align-items:center;gap:8px">
+                    📋 Órdenes de Compra (OC) Registradas — Año ${state.matrixYear}
+                    <span class="tag tag-ghost">${orders.length} total</span>
+                </div>
+                <div style="font-size:0.78rem;color:var(--text-muted)">Registra las órdenes antes de ejecutar el servicio y emite la factura con 1 solo clic</div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <div class="filter-pills" style="margin:0">
+                    <button class="filter-pill${state.matrixOcFilter === 'all' ? ' active' : ''}" onclick="filterMatrixOc('all')">Todas (${orders.length})</button>
+                    <button class="filter-pill${state.matrixOcFilter === 'pending' ? ' active' : ''}" onclick="filterMatrixOc('pending')">⏳ Por facturar (${pendingOrdersCount})</button>
+                    <button class="filter-pill${state.matrixOcFilter === 'invoiced' ? ' active' : ''}" onclick="filterMatrixOc('invoiced')">✅ Facturadas (${orders.length - pendingOrdersCount})</button>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="showPurchaseOrderModal()">+ Nueva OC</button>
+            </div>
+        </div>`;
+
+    if (filteredOrders.length === 0) {
+        html += `<div class="empty-state" style="padding:25px"><p>No hay órdenes de compra registradas con el filtro seleccionado</p></div>`;
+    } else {
+        html += `<div class="table-wrap"><table>
+            <thead>
+                <tr>
+                    <th style="width:70px">Mes</th>
+                    <th>Empresa / Sede</th>
+                    <th>N° de Orden (OC)</th>
+                    <th style="text-align:right">Monto Pactado Sin IGV</th>
+                    <th style="text-align:center">Estado</th>
+                    <th>Notas</th>
+                    <th style="text-align:right;width:160px">Acciones</th>
+                </tr>
+            </thead>
+            <tbody>`;
+
+        for (const po of filteredOrders) {
+            const isPending = po.status === 'pending';
+            const mName = monthShorts[(po.month || 1) - 1];
+            html += `<tr>
+                <td style="font-weight:700;font-size:0.85rem">${mName}</td>
+                <td>
+                    <strong>${esc(po.empresa || '')}</strong>
+                    <div style="font-size:0.75rem;color:var(--text-muted)">${esc(po.site_name || 'Todas las sedes')} ${po.location_code ? `· Loc: ${esc(po.location_code)}` : ''}</div>
+                </td>
+                <td>
+                    <span class="tag tag-primary" style="font-family:monospace;font-size:0.85rem">OC ${esc(po.oc_number)}</span>
+                </td>
+                <td style="text-align:right;font-family:monospace;font-weight:700">
+                    ${po.amount ? `S/ ${fmtMoney(po.amount)}` : '—'}
+                </td>
+                <td style="text-align:center">
+                    ${isPending ? '<span class="tag tag-amber">⏳ Por facturar</span>' : '<span class="tag tag-sage">✅ Facturada</span>'}
+                </td>
+                <td style="font-size:0.8rem;color:var(--text-muted);max-width:200px">${esc(po.notes || '—')}</td>
+                <td style="text-align:right;white-space:nowrap">
+                    ${isPending ? `<button class="btn btn-primary btn-sm" onclick="emitInvoiceFromOc(${po.id})" style="padding:4px 8px;font-size:0.75rem" title="Cargar a Calculadora SUNAT">🧮 Emitir</button>` : ''}
+                    <button class="btn btn-ghost btn-sm" onclick="showPurchaseOrderModal(${po.id})" title="Editar">✏️</button>
+                    <button class="btn btn-ghost btn-sm" onclick="deletePurchaseOrder(${po.id})" title="Eliminar" style="color:#ef4444">🗑️</button>
+                </td>
+            </tr>`;
+        }
+        html += `</tbody></table></div>`;
+    }
+    html += `</div>`;
+
+    el.innerHTML = html;
+}
+
+function changeMatrixYear(year) {
+    state.matrixYear = parseInt(year) || 2026;
+    navigate('work');
+}
+
+function filterMatrixOc(flt) {
+    state.matrixOcFilter = flt;
+    const content = document.getElementById('workContent');
+    if (content) renderWorkMatrix(content);
+}
+
+function handleMatrixCellOc(siteId, clientId, month, year, poId) {
+    const orders = state.matrixData?.orders || [];
+    const po = orders.find(o => o.id === poId);
+    if (!po) return;
+
+    const modalHtml = `
+        <div style="padding:10px 0">
+            <div style="font-size:1.1rem;font-weight:700;margin-bottom:6px">Orden de Compra: OC ${esc(po.oc_number)}</div>
+            <div style="font-size:0.85rem;color:var(--text-muted);margin-bottom:14px">
+                ${esc(po.empresa)} · ${esc(po.site_name || '')} · Mes ${po.month}/${po.year}
+            </div>
+            <div style="display:flex;gap:10px;margin-bottom:14px">
+                <div class="card" style="flex:1;padding:10px;text-align:center">
+                    <div style="font-size:0.75rem;color:var(--text-muted)">Monto Pactado Sin IGV</div>
+                    <div style="font-size:1.1rem;font-weight:700;font-family:monospace">S/ ${fmtMoney(po.amount || 0)}</div>
+                </div>
+                <div class="card" style="flex:1;padding:10px;text-align:center">
+                    <div style="font-size:0.75rem;color:var(--text-muted)">Estado</div>
+                    <div style="margin-top:4px">${po.status === 'pending' ? '<span class="tag tag-amber">⏳ Por facturar</span>' : '<span class="tag tag-sage">✅ Facturada</span>'}</div>
+                </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px">
+                <button class="btn btn-primary" onclick="closeModal(); emitInvoiceFromOc(${po.id})">🧮 Emitir en Calculadora SUNAT</button>
+                <button class="btn btn-secondary" onclick="closeModal(); showPurchaseOrderModal(${po.id})">✏️ Modificar Orden de Compra</button>
+                <button class="btn btn-ghost" onclick="closeModal(); deletePurchaseOrder(${po.id})" style="color:#ef4444">🗑️ Eliminar Orden de Compra</button>
+            </div>
+        </div>
+    `;
+    openModal('Detalles de Orden de Compra', modalHtml);
+}
+
+function emitInvoiceFromOc(poId) {
+    const orders = state.matrixData?.orders || [];
+    const po = orders.find(o => o.id === poId);
+    if (!po) return;
+
+    const sites = state.allSites || [];
+    const site = sites.find(s => s.id === po.client_site_id);
+
+    window.calcState = {
+        clientId: po.client_id,
+        clientName: po.empresa,
+        clientRuc: po.ruc,
+        siteId: po.client_site_id,
+        siteName: po.site_name,
+        locationCode: po.location_code || '',
+        series: 'E001',
+        number: '',
+        purchaseOrder: po.oc_number,
+        issueDate: todayStr(),
+        monthBilled: po.month,
+        yearBilled: po.year,
+        igvRate: 0.18,
+        detrRate: 0.12,
+        bnAccount: (po.client_id === 9 || po.client_id === 10) ? '00046317769' : '00771005578',
+        items: [
+            {
+                desc: site?.servicios || po.notes || 'SERV CONTROL DE PLAGAS',
+                cant: 1,
+                pu: po.amount || site?.monthly_fee || 0
+            }
+        ]
+    };
+
+    switchWorkTab('calculadora');
+    showToast(`Datos de OC ${po.oc_number} cargados en Calculadora SUNAT`);
+}
+
+async function showPurchaseOrderModal(poId, defaultSiteId, defaultClientId, defaultMonth, defaultYear) {
+    const clients = state.allClients || await api(eel.get_clients) || [];
+    const sites = state.allSites || await api(eel.get_client_sites_grouped) || [];
+    state.allClients = clients;
+    state.allSites = sites;
+
+    let po = null;
+    if (poId) {
+        const orders = state.matrixData?.orders || [];
+        po = orders.find(o => o.id === poId);
+    }
+
+    const curYear = state.matrixYear || 2026;
+    const selClient = po ? po.client_id : (defaultClientId || (clients[0]?.id || ''));
+    const selSite = po ? po.client_site_id : (defaultSiteId || '');
+    const selMonth = po ? po.month : (defaultMonth || (new Date().getMonth() + 1));
+    const selYear = po ? po.year : (defaultYear || curYear);
+    const ocNum = po ? po.oc_number : '';
+    const defFee = po ? po.amount : '';
+    const notes = po ? po.notes : '';
+    const status = po ? po.status : 'pending';
+
+    const clientOpts = clients.map(c => `<option value="${c.id}" ${c.id === selClient ? 'selected' : ''}>${esc(c.business_name)} (${esc(c.ruc)})</option>`).join('');
+
+    const modalHtml = `
+    <form id="purchaseOrderForm" onsubmit="savePurchaseOrderForm(event, ${poId || 'null'})">
+        <div class="form-row">
+            <div class="form-group" style="flex:2">
+                <label>Empresa / Cliente *</label>
+                <select class="form-control" id="poClientId" onchange="onPoClientChanged(this)" required>
+                    <option value="">- Seleccionar Cliente -</option>
+                    ${clientOpts}
+                </select>
+            </div>
+            <div class="form-group" style="flex:2">
+                <label>Sede Comercial (Opcional si aplica a todas)</label>
+                <select class="form-control" id="poSiteId">
+                    <!-- Populated dynamically -->
+                </select>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group">
+                <label>Año *</label>
+                <select class="form-control" id="poYear" required>
+                    <option value="2024" ${selYear === 2024 ? 'selected' : ''}>2024</option>
+                    <option value="2025" ${selYear === 2025 ? 'selected' : ''}>2025</option>
+                    <option value="2026" ${selYear === 2026 ? 'selected' : ''}>2026</option>
+                    <option value="2027" ${selYear === 2027 ? 'selected' : ''}>2027</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Mes de Servicio *</label>
+                <select class="form-control" id="poMonth" required>
+                    <option value="1" ${selMonth === 1 ? 'selected' : ''}>Enero</option>
+                    <option value="2" ${selMonth === 2 ? 'selected' : ''}>Febrero</option>
+                    <option value="3" ${selMonth === 3 ? 'selected' : ''}>Marzo</option>
+                    <option value="4" ${selMonth === 4 ? 'selected' : ''}>Abril</option>
+                    <option value="5" ${selMonth === 5 ? 'selected' : ''}>Mayo</option>
+                    <option value="6" ${selMonth === 6 ? 'selected' : ''}>Junio</option>
+                    <option value="7" ${selMonth === 7 ? 'selected' : ''}>Julio</option>
+                    <option value="8" ${selMonth === 8 ? 'selected' : ''}>Agosto</option>
+                    <option value="9" ${selMonth === 9 ? 'selected' : ''}>Septiembre</option>
+                    <option value="10" ${selMonth === 10 ? 'selected' : ''}>Octubre</option>
+                    <option value="11" ${selMonth === 11 ? 'selected' : ''}>Noviembre</option>
+                    <option value="12" ${selMonth === 12 ? 'selected' : ''}>Diciembre</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Estado</label>
+                <select class="form-control" id="poStatus">
+                    <option value="pending" ${status === 'pending' ? 'selected' : ''}>⏳ Por facturar</option>
+                    <option value="invoiced" ${status === 'invoiced' ? 'selected' : ''}>✅ Facturada</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="form-row">
+            <div class="form-group" style="flex:2">
+                <label>Número de Orden de Compra (OC) *</label>
+                <input type="text" class="form-control" id="poOcNumber" value="${esc(ocNum)}" placeholder="Ej. 8600033006" required style="font-family:monospace;font-weight:700">
+            </div>
+            <div class="form-group" style="flex:1">
+                <label>Monto Sin IGV (S/)</label>
+                <input type="number" step="0.01" min="0" class="form-control" id="poAmount" value="${defFee}" placeholder="0.00" style="font-family:monospace">
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>Notas / Descripción del Servicio</label>
+            <input type="text" class="form-control" id="poNotes" value="${esc(notes)}" placeholder="Ej. Control Aviar mensual, Orden aprobada para ejecución">
+        </div>
+    </form>
+    `;
+
+    openModal(poId ? 'Editar Orden de Compra (OC)' : 'Registrar Orden de Compra (OC)', modalHtml);
+
+    const clientSelEl = document.getElementById('poClientId');
+    if (clientSelEl) {
+        onPoClientChanged(clientSelEl, selSite);
+    }
+
+    const saveBtn = document.getElementById('modalSave');
+    saveBtn.textContent = 'Guardar OC';
+    saveBtn.onclick = () => {
+        const form = document.getElementById('purchaseOrderForm');
+        if (form.reportValidity()) {
+            form.requestSubmit();
+        }
+    };
+}
+
+function onPoClientChanged(clientSel, selSiteId) {
+    const clientId = parseInt(clientSel.value);
+    const siteSel = document.getElementById('poSiteId');
+    if (!siteSel) return;
+
+    const sites = (state.allSites || []).filter(s => s.client_id === clientId);
+    let opts = '<option value="">- Aplica a toda la Empresa -</option>';
+    sites.forEach(s => {
+        opts += `<option value="${s.id}" data-fee="${s.monthly_fee || 0}" ${s.id === selSiteId ? 'selected' : ''}>${esc(s.nombre_cliente)} (S/ ${fmtMoney(s.monthly_fee || 0)})</option>`;
+    });
+    siteSel.innerHTML = opts;
+
+    siteSel.onchange = () => {
+        const opt = siteSel.options[siteSel.selectedIndex];
+        const fee = opt?.getAttribute('data-fee');
+        const amountEl = document.getElementById('poAmount');
+        if (amountEl && (!amountEl.value || amountEl.value === '0') && fee) {
+            amountEl.value = parseFloat(fee).toFixed(2);
+        }
+    };
+}
+
+async function savePurchaseOrderForm(e, poId) {
+    e.preventDefault();
+    const clientId = parseInt(document.getElementById('poClientId').value);
+    const siteIdVal = document.getElementById('poSiteId').value;
+    const clientSiteId = siteIdVal ? parseInt(siteIdVal) : null;
+    const year = parseInt(document.getElementById('poYear').value);
+    const month = parseInt(document.getElementById('poMonth').value);
+    const ocNumber = document.getElementById('poOcNumber').value.trim();
+    const amountVal = document.getElementById('poAmount').value;
+    const amount = amountVal ? parseFloat(amountVal) : 0;
+    const status = document.getElementById('poStatus').value;
+    const notes = document.getElementById('poNotes').value.trim();
+
+    if (!clientId) { showToast('Selecciona un cliente'); return; }
+    if (!ocNumber) { showToast('Ingresa el número de OC'); return; }
+
+    const data = {
+        id: poId,
+        client_id: clientId,
+        client_site_id: clientSiteId,
+        year,
+        month,
+        oc_number: ocNumber,
+        amount,
+        status,
+        notes
+    };
+
+    const res = await api(eel.save_purchase_order, data);
+    if (res && res.ok) {
+        showToast(poId ? 'OC actualizada' : 'OC registrada exitosamente');
+        closeModal();
+        navigate('work');
+    } else {
+        showToast(res?.error || 'Error al guardar la OC');
+    }
+}
+
+async function deletePurchaseOrder(id) {
+    if (!confirm('¿Eliminar esta orden de compra?')) return;
+    const res = await api(eel.delete_purchase_order, id);
+    if (res && res.ok) {
+        showToast('Orden de compra eliminada');
+        navigate('work');
+    } else {
+        showToast(res?.error || 'Error al eliminar');
+    }
+}
+
+
 // --- WORK INVOICES (facturación mensual) ---
 async function renderWorkInvoices(el) {
     const data = await api(eel.get_monthly_billing) || { sites: [], invoices: [] };
@@ -769,11 +1346,12 @@ async function renderWorkInvoices(el) {
     let html = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
         <div>
-            <h2 style="margin:0;font-size:1.35rem">Facturación Comercial</h2>
+            <h2 style="margin:0;font-size:1.35rem">Facturación Comercial Emitida</h2>
             <div style="font-size:0.8rem;color:var(--text-muted)">Registro de comprobantes, órdenes de compra, detracciones SPOT (12%) y cuentas de crédito</div>
         </div>
-        <div style="display:flex;gap:8px">
-            <button class="btn btn-secondary" onclick="switchWorkTab('calculadora')">🧮 Calculadora IGV Multi-Unidad</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-secondary" onclick="switchWorkTab('matrix')">📊 Ver Matriz Mensual (12 Meses)</button>
+            <button class="btn btn-secondary" onclick="switchWorkTab('calculadora')">🧮 Calculadora SUNAT</button>
             <button class="btn btn-primary" onclick="showInvoiceForm()">+ Nueva Factura</button>
         </div>
     </div>
@@ -863,50 +1441,15 @@ async function renderWorkInvoices(el) {
     }
     html += `</div>`;
 
-    // Regular Clients Matrix
-    html += `<div class="card">
-        <div style="margin-bottom:12px">
-            <div style="font-weight:700;font-size:1rem">Matriz de Facturación Mensual (Clientes Regulares)</div>
-            <div style="font-size:0.8rem;color:var(--text-muted)">Comparativa histórica de cobros mensuales vs cuota mensual pactada</div>
-        </div>`;
-
-    if (data.sites.length === 0) {
-        html += '<p style="color:var(--text-muted);font-size:0.85rem">No hay sedes con condición de cliente regular</p>';
-    } else {
-        html += '<div class="table-wrap" style="overflow-x:auto"><table class="matrix-table"><thead><tr><th style="min-width:180px">Empresa / Sede</th>';
-        for (const m of months) {
-            html += '<th style="text-align:center;font-size:0.75rem;padding:4px 6px">'+m.label+'</th>';
-        }
-        html += '<th style="text-align:center">Total 12m</th><th style="text-align:center">Cuota/mes</th><th style="text-align:center">Dif. Anual</th></tr></thead><tbody>';
-        for (const s of data.sites) {
-            const empresa = s.empresa || s.nombre_cliente;
-            let totalInvoiced = 0;
-            let monthsBilledCount = 0;
-            const fee = parseFloat(s.monthly_fee) || 0;
-            html += '<tr><td><strong>'+esc(empresa)+'</strong><br><span style="font-size:0.75rem;color:var(--text-muted)">'+esc(s.nombre_cliente)+'</span></td>';
-            for (const m of months) {
-                const key = s.id + '-' + m.m + '-' + m.y;
-                const invs = invMap[key] || [];
-                const total = invs.reduce((sum, inv) => sum + (inv.total || 0), 0);
-                totalInvoiced += total;
-                if (total > 0) {
-                    monthsBilledCount++;
-                    html += '<td style="text-align:center;background:rgba(99,102,241,0.12);font-size:0.8rem;font-family:monospace">S/ '+fmtMoney(total)+'</td>';
-                } else {
-                    html += '<td style="text-align:center;color:var(--text-muted)">—</td>';
-                }
-            }
-            const expectedTotal = fee * (monthsBilledCount || 1);
-            const diff = totalInvoiced - expectedTotal;
-            const diffCls = diff >= 0 ? 'tag-sage' : 'tag-rose';
-            html += '<td style="text-align:center;font-weight:600;font-family:monospace">S/ '+fmtMoney(totalInvoiced)+'</td>' +
-                '<td style="text-align:center;font-family:monospace">S/ '+fmtMoney(fee)+'</td>' +
-                '<td style="text-align:center"><span class="tag '+diffCls+'" title="Comparado contra '+monthsBilledCount+' mes(es) facturados">'+(diff >= 0 ? '+': '')+fmtMoney(diff)+'</span></td></tr>';
-        }
-        html += '</tbody></table></div>';
-    }
-    html += '</div>';
-
+    // Quick shortcut to Matriz Mensual
+    html += `<div class="card" style="margin-top:16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;background:var(--primary-light)">
+        <div>
+            <div style="font-weight:700;font-size:0.95rem;color:var(--accent)">📊 Matriz de Facturación Mensual (Clientes Regulares)</div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">Visualiza los 12 meses completos del año, cuotas pactadas y órdenes de compra registradas</div>
+        </div>
+        <button class="btn btn-primary btn-sm" onclick="switchWorkTab('matrix')">Abrir Matriz Completa 12 Meses ➔</button>
+    </div>`;
+    
     el.innerHTML = html;
 }
 
@@ -7197,6 +7740,16 @@ window.changeWorkoutProgressEx = changeWorkoutProgressEx;
 window.changeWorkoutProgressMetric = changeWorkoutProgressMetric;
 window.deleteWorkoutSession = deleteWorkoutSession;
 window.showQuickExerciseLogModal = showQuickExerciseLogModal;
+
+window.renderWorkMatrix = renderWorkMatrix;
+window.changeMatrixYear = changeMatrixYear;
+window.filterMatrixOc = filterMatrixOc;
+window.handleMatrixCellOc = handleMatrixCellOc;
+window.emitInvoiceFromOc = emitInvoiceFromOc;
+window.showPurchaseOrderModal = showPurchaseOrderModal;
+window.onPoClientChanged = onPoClientChanged;
+window.savePurchaseOrderForm = savePurchaseOrderForm;
+window.deletePurchaseOrder = deletePurchaseOrder;
 
 
 

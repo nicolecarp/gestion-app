@@ -1113,7 +1113,7 @@ def apply_cleanups_and_seeds(conn):
             print("[seed_po_v2] Error:", e)
 
     # 10. Seed SUNAT SIRE RVIE Invoices 2026 (seed_sunat_invoices_2026_v1)
-    seed_sunat = conn.execute("SELECT value FROM config WHERE key='seed_sunat_invoices_2026_v1'").fetchone()
+    seed_sunat = conn.execute("SELECT value FROM config WHERE key='seed_sunat_invoices_2026_v2'").fetchone()
     if not seed_sunat:
         try:
             import json
@@ -1124,7 +1124,7 @@ def apply_cleanups_and_seeds(conn):
                 from . import data_sunat_2026 as ds
 
             # 1. Clean up placeholder / empty invoices
-            conn.execute("DELETE FROM invoices WHERE number = '' OR number LIKE '957%'")
+            conn.execute("DELETE FROM invoices WHERE number = '' OR number LIKE '957%' OR id IN (44, 46, 47, 48, 54, 56, 57, 58)")
 
             # 2. Insert or update clients
             for c in ds.CLIENTS:
@@ -1221,7 +1221,7 @@ def apply_cleanups_and_seeds(conn):
                           d['amount'], d['igv'], d['total'], d['issue_date'], d['due_date'], d['status'],
                           d['month_billed'], d['year_billed'], matched_po, d['detraccion'], d['credito'], json.dumps(meta)))
 
-            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('seed_sunat_invoices_2026_v1', '1')")
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('seed_sunat_invoices_2026_v2', '1')")
             conn.commit()
             print("[seed_sunat_invoices_2026_v1] Successfully populated 556 SUNAT invoices.")
         except Exception as e:

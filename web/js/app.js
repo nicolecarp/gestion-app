@@ -3151,6 +3151,43 @@ function recalcInvoiceModal(source) {
     }
 }
 
+async function deleteInvoice(id) {
+    if (!confirm('¿Eliminar esta factura? Se quitará de los registros de facturación.')) return;
+    const res = await api(eel.delete_invoice, id);
+    if (res && res.ok) {
+        showToast('Factura eliminada');
+        navigate('work');
+    } else {
+        showToast(res && res.error ? res.error : 'Error al eliminar la factura');
+    }
+}
+
+function copySunatField(text, label) {
+    if (text === null || text === undefined || text === '') return;
+    const val = String(text).trim();
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(val).then(() => {
+            showToast('📋 Copiado: ' + (label || val));
+        }).catch(() => {
+            fallbackCopy(val);
+            showToast('📋 Copiado: ' + (label || val));
+        });
+    } else {
+        fallbackCopy(val);
+        showToast('📋 Copiado: ' + (label || val));
+    }
+}
+
+function fallbackCopy(text) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); } catch(e) {}
+    document.body.removeChild(ta);
+}
 
 // Global State for SUNAT Billing Assistant
 window.calcState = window.calcState || {
@@ -9131,6 +9168,9 @@ window.showClientSiteForm = showClientSiteForm;
 window.deleteClientSite = deleteClientSite;
 window.showInvoiceForm = showInvoiceForm;
 window.deleteInvoice = deleteInvoice;
+window.showEditSiteModal = showEditSiteModal;
+window.copySunatField = copySunatField;
+window.copySunatRaw = copySunatRaw;
 window.showQuoteForm = showQuoteForm;
 window.deleteQuote = deleteQuote;
 window.downloadQuoteWord = downloadQuoteWord;

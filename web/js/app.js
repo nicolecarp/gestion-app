@@ -1958,7 +1958,7 @@ async function renderWorkMatrix(el) {
     el.innerHTML = html;
 }
 
-// Quick Facturar OC Modal: Simply enter the invoice number and submit!
+// Quick Facturar OC Modal: Simply enter the invoice number and choose payment term!
 function showQuickBillOcModal(poId) {
     const orders = state.matrixData?.orders || [];
     const po = orders.find(o => o.id === poId);
@@ -1970,6 +1970,8 @@ function showQuickBillOcModal(poId) {
     const siteName = po.centro_logistico || po.site_name || site?.nombre_cliente || 'Sede principal';
     const feeSinIgv = parseFloat(po.amount) || 0;
     const feeTotal = Math.round(feeSinIgv * 1.18 * 100) / 100;
+    const feeDetr = feeTotal > 700 ? Math.round(feeTotal * 0.12 * 100) / 100 : 0;
+    const feeCred = Math.round((feeTotal - feeDetr) * 100) / 100;
 
     const modalHtml = `
     <form id="quickBillForm" onsubmit="saveQuickBillOc(event, ${po.id})">
@@ -1978,8 +1980,9 @@ function showQuickBillOcModal(poId) {
             <div style="font-size:0.8rem;color:var(--text-muted);margin-top:2px">${esc(siteName)}</div>
             <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border-light);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;font-size:0.85rem">
                 <span>OC: <strong>${esc(po.oc_number)}</strong></span>
-                <span>Monto: <strong>S/ ${fmtMoney(feeSinIgv)}</strong> (Sin IGV)</span>
-                <span>Total: <strong>S/ ${fmtMoney(feeTotal)}</strong> (Con IGV)</span>
+                <span>Base: <strong>S/ ${fmtMoney(feeSinIgv)}</strong> (Sin IGV)</span>
+                <span>Total: <strong>S/ ${fmtMoney(feeTotal)}</strong></span>
+                ${feeTotal > 700 ? `<span style="color:#b45309">SPOT (12%): <strong>S/ ${fmtMoney(feeDetr)}</strong></span><span style="color:#10b981">Neto: <strong>S/ ${fmtMoney(feeCred)}</strong></span>` : `<span style="color:var(--text-muted)">SPOT: <strong>No aplica (≤ S/ 700)</strong></span>`}
             </div>
         </div>
 
@@ -1992,9 +1995,23 @@ function showQuickBillOcModal(poId) {
                 <label>Número de Factura *</label>
                 <input class="form-control" id="qbNumber" placeholder="Ej. 1405" autofocus required style="font-size:1.1rem;font-weight:700;font-family:monospace">
             </div>
+        </div>
+
+        <div class="form-row">
             <div class="form-group" style="flex:1">
                 <label>Fecha de Emisión</label>
                 <input type="date" class="form-control" id="qbIssueDate" value="${todayStr()}">
+            </div>
+            <div class="form-group" style="flex:1">
+                <label>Plazo / Vencimiento</label>
+                <select class="form-control" id="qbDueTerm">
+                    <option value="30">Crédito a 30 días</option>
+                    <option value="15">Crédito a 15 días</option>
+                    <option value="45">Crédito a 45 días</option>
+                    <option value="60">Crédito a 60 días</option>
+                    <option value="90">Crédito a 90 días</option>
+                    <option value="0">Al Contado (0 días)</option>
+                </select>
             </div>
         </div>
     </form>`;
@@ -2025,6 +2042,7 @@ async function saveQuickBillOc(e, poId) {
     const series = (document.getElementById('qbSeries')?.value || 'E001').trim();
     const number = (document.getElementById('qbNumber')?.value || '').trim();
     const issueDate = document.getElementById('qbIssueDate')?.value || todayStr();
+    const dueDays = parseInt(document.getElementById('qbDueTerm')?.value ?? '30') || 0;
 
     if (!number) {
         showToast('Ingresa el número de factura');
@@ -2036,13 +2054,14 @@ async function saveQuickBillOc(e, poId) {
 
     const feeSinIgv = parseFloat(po.amount) || 0;
     const feeTotal = Math.round(feeSinIgv * 1.18 * 100) / 100;
-    const feeDetr = feeTotal >= 700 ? Math.round(feeTotal * 0.12 * 100) / 100 : 0;
+    // SUNAT SPOT: Solo aplica cuando el TOTAL CON IGV SUPERA los 700 soles
+    const feeDetr = feeTotal > 700 ? Math.round(feeTotal * 0.12 * 100) / 100 : 0;
     const feeCred = Math.round((feeTotal - feeDetr) * 100) / 100;
 
     let dueDate = '';
     try {
         const d = new Date(issueDate + 'T12:00:00');
-        d.setDate(d.getDate() + 30);
+        d.setDate(d.getDate() + dueDays);
         dueDate = d.toISOString().split('T')[0];
     } catch(err) {}
 
@@ -2059,7 +2078,7 @@ async function saveQuickBillOc(e, poId) {
         total: feeTotal,
         detraccion: feeDetr,
         credito: feeCred,
-        payment_type: 'credito',
+        payment_type: dueDays === 0 ? 'contado' : 'credito',
         issue_date: issueDate,
         due_date: dueDate,
         month_billed: po.month,
@@ -2069,17 +2088,16 @@ async function saveQuickBillOc(e, poId) {
 
     const res = await api(eel.create_invoice, invoiceData);
     if (res && res.ok) {
-        await api(eel.save_purchase_order, { ...po, status: 'invoiced' });
+        await api(eel.update_purchase_order, { id: poId, status: 'invoiced' });
         showToast(`✓ Factura ${series}-${number} registrada`);
         closeModal();
-        const workView = document.getElementById('view-work');
-        if (workView) renderWorkMatrix(workView);
+        const elView = document.getElementById('view-work');
+        if (elView) renderWorkMatrix(elView);
     } else {
         showToast(res?.error || 'Error al guardar la factura');
     }
 }
 
-// Modal para editar manualmente Sede, Cuota Pactada y Frecuencia
 async function showEditSiteModal(siteId) {
     const site = await api(eel.get_client_site, siteId);
     if (!site) { showToast('No se encontró la sede'); return; }
@@ -3044,7 +3062,7 @@ function showInvoiceModal(inv) {
 
             const igv = parseFloat(f.get('igv')) || Math.round(amt * 0.18 * 100) / 100;
             const tot = parseFloat(f.get('total')) || Math.round((amt + igv) * 100) / 100;
-            const detr = parseFloat(f.get('detraccion')) || (tot >= 700 ? Math.round(tot * 0.12 * 100) / 100 : 0);
+            const detr = parseFloat(f.get('detraccion')) || (tot > 700 ? Math.round(tot * 0.12 * 100) / 100 : 0);
             const cred = parseFloat(f.get('credito')) || Math.round((tot - detr) * 100) / 100;
 
             const data = {
@@ -3116,7 +3134,7 @@ function recalcModalInvoiceAmounts() {
     const amt = parseFloat(document.getElementById('modalInvAmount')?.value) || 0;
     const igv = Math.round(amt * 0.18 * 100) / 100;
     const tot = Math.round((amt + igv) * 100) / 100;
-    const detr = tot >= 700 ? Math.round(tot * 0.12 * 100) / 100 : 0;
+    const detr = tot > 700 ? Math.round(tot * 0.12 * 100) / 100 : 0;
     const cred = Math.round((tot - detr) * 100) / 100;
 
     const elIgv = document.getElementById('modalInvIgv');
@@ -3171,23 +3189,92 @@ function fallbackCopy(text) {
 
 // Calculadora de IGV y Detracciones para servicios no registrados en matriz
 window.extCalc = window.extCalc || {
+    clientId: null,
+    clientSiteId: null,
     clientName: '',
     ruc: '',
     service: 'Servicio de Control de Plagas',
+    purchaseOrder: '',
     amount: 800.00,
-    detrRate: 0.12,
+    detrRate: 0.12, // Fijo 12% para Fumigación y Saneamiento Ambiental
     bnAccount: '00046317769',
     series: 'E001',
     number: '',
-    purchaseOrder: '',
-    issueDate: todayStr()
+    issueDate: todayStr(),
+    dueDays: 30, // 15, 30, 45, 60, etc.
+    customDueDate: '',
+    isCustomDueDate: false
 };
 
+function getExtCalcDueDateInfo() {
+    const issueStr = window.extCalc.issueDate || todayStr();
+    let d;
+    try {
+        d = new Date(issueStr + 'T12:00:00');
+    } catch(e) {
+        d = new Date();
+    }
+
+    if (window.extCalc.isCustomDueDate && window.extCalc.customDueDate) {
+        try {
+            const cd = new Date(window.extCalc.customDueDate + 'T12:00:00');
+            const day = String(cd.getDate()).padStart(2, '0');
+            const month = String(cd.getMonth() + 1).padStart(2, '0');
+            const diffDays = Math.round((cd - d) / (1000 * 60 * 60 * 24));
+            return {
+                iso: window.extCalc.customDueDate,
+                formatted: `${day}/${month}/${cd.getFullYear()}`,
+                label: diffDays > 0 ? `+${diffDays} días` : (diffDays === 0 ? 'Mismo día' : `${diffDays} días`)
+            };
+        } catch(e) {}
+    }
+
+    const days = parseInt(window.extCalc.dueDays) || 0;
+    d.setDate(d.getDate() + days);
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    const iso = `${year}-${month}-${day}`;
+    const formatted = `${day}/${month}/${year}`;
+    const label = days === 0 ? 'Al Contado' : `+${days} días`;
+    return { iso, formatted, label };
+}
+
 async function renderWorkCalculator(el) {
-    const clients = await api(eel.get_clients) || [];
-    const clientOpts = '<option value="">— Ingresar manualmente o elegir cliente —</option>' + clients.map(c =>
-        `<option value="${c.id}" data-name="${esc(c.business_name)}" data-ruc="${esc(c.ruc||'')}">${esc(c.business_name)} (${esc(c.ruc||'')})</option>`
-    ).join('');
+    const [clients, sitesGrouped] = await Promise.all([
+        api(eel.get_clients),
+        api(eel.get_client_sites_grouped)
+    ]);
+
+    window._calcClients = clients || [];
+    window._calcSites = sitesGrouped || [];
+
+    // Client select options
+    const clientOpts = '<option value="">— Seleccionar cliente existente o ingresar libremente —</option>' +
+        window._calcClients.map(c =>
+            `<option value="${c.id}" data-name="${esc(c.business_name)}" data-ruc="${esc(c.ruc || '')}" data-bn="${esc(c.detraccion_account || '')}"${window.extCalc.clientId === c.id ? ' selected' : ''}>
+                ${esc(c.business_name)} (${esc(c.ruc || 'Sin RUC')})
+            </option>`
+        ).join('');
+
+    // RUC datalist for rapid autocompletion while typing
+    const rucDatalistOpts = window._calcClients
+        .filter(c => c.ruc)
+        .map(c => `<option value="${esc(c.ruc)}">${esc(c.business_name)} (${esc(c.ruc)})</option>`)
+        .join('');
+
+    // Sede options based on current clientId
+    let sedeOpts = '<option value="">— Sin sede / Fuera de sede —</option>';
+    if (window.extCalc.clientId) {
+        const clientSites = window._calcSites.filter(s => s.client_id === window.extCalc.clientId);
+        sedeOpts += clientSites.map(s =>
+            `<option value="${s.id}" data-service="${esc(s.servicios || '')}" data-fee="${s.monthly_fee || 0}"${window.extCalc.clientSiteId === s.id ? ' selected' : ''}>
+                ${esc(s.nombre_cliente)} ${s.servicios ? '· ' + esc(s.servicios) : ''}
+            </option>`
+        ).join('');
+    }
+
+    const { iso: curDueDateIso } = getExtCalcDueDateInfo();
 
     let html = `
     <div class="page-header" style="margin-bottom:16px">
@@ -3196,7 +3283,7 @@ async function renderWorkCalculator(el) {
             <div class="subtitle">Herramienta para calcular impuestos, SPOT y copiar datos a SUNAT para servicios fuera de matriz</div>
         </div>
         <div class="page-actions" style="display:flex;gap:8px">
-            <button class="btn btn-secondary btn-sm" onclick="resetExtCalculator()">Limpiar</button>
+            <button class="btn btn-secondary btn-sm" onclick="resetExtCalculator()">🔄 Limpiar</button>
             <button class="btn btn-primary btn-sm" onclick="saveExtCalculatorInvoice()">💾 Registrar Factura</button>
         </div>
     </div>
@@ -3206,27 +3293,49 @@ async function renderWorkCalculator(el) {
         <div class="card">
             <h3 style="font-size:1rem;margin-bottom:14px;border-bottom:1px solid var(--border-light);padding-bottom:8px">Datos del Servicio</h3>
 
-            <div class="form-group">
-                <label>Cliente (Opcional)</label>
-                <select class="form-control" onchange="onExtCalcClientChange(this)">${clientOpts}</select>
-            </div>
-
+            <!-- RUC & Razón Social with Autocomplete -->
             <div class="form-row">
+                <div class="form-group" style="flex:1">
+                    <label>RUC (Autocompleta cliente)</label>
+                    <input class="form-control" id="extCalcRuc" list="extCalcRucList" value="${esc(window.extCalc.ruc)}" placeholder="20XXXXXXXXX" maxlength="11" oninput="onExtCalcRucInput(this.value)">
+                    <datalist id="extCalcRucList">${rucDatalistOpts}</datalist>
+                </div>
                 <div class="form-group" style="flex:2">
                     <label>Razón Social / Empresa</label>
                     <input class="form-control" id="extCalcClient" value="${esc(window.extCalc.clientName)}" placeholder="Ej. Cliente SAC" oninput="window.extCalc.clientName=this.value; renderExtCalcResults()">
                 </div>
+            </div>
+
+            <!-- Client dropdown selector -->
+            <div class="form-group">
+                <label style="display:flex;justify-content:space-between;align-items:center">
+                    <span>O elegir de clientes registrados:</span>
+                    ${window.extCalc.clientId ? `<span style="color:var(--primary);font-size:0.75rem;font-weight:600">✓ Vinculado a cliente</span>` : ''}
+                </label>
+                <select class="form-control" id="extCalcSelectClient" onchange="onExtCalcClientChange(this)">${clientOpts}</select>
+            </div>
+
+            <!-- Optional Sede and OC -->
+            <div class="form-row">
+                <div class="form-group" style="flex:2">
+                    <label>Sede (Opcional)</label>
+                    <select class="form-control" id="extCalcSite" onchange="onExtCalcSiteChange(this)">
+                        ${sedeOpts}
+                    </select>
+                </div>
                 <div class="form-group" style="flex:1">
-                    <label>RUC</label>
-                    <input class="form-control" id="extCalcRuc" value="${esc(window.extCalc.ruc)}" placeholder="20XXXXXXXXX" oninput="window.extCalc.ruc=this.value; renderExtCalcResults()">
+                    <label>Orden de Compra (OC)</label>
+                    <input class="form-control" id="extCalcPo" value="${esc(window.extCalc.purchaseOrder || '')}" placeholder="Ej. 4501201335" oninput="window.extCalc.purchaseOrder=this.value; renderExtCalcResults()">
                 </div>
             </div>
 
+            <!-- Service Description (Optional/Editable) -->
             <div class="form-group">
-                <label>Descripción del Servicio</label>
-                <input class="form-control" id="extCalcService" value="${esc(window.extCalc.service)}" oninput="window.extCalc.service=this.value; renderExtCalcResults()">
+                <label>Descripción del Servicio (Opcional)</label>
+                <input class="form-control" id="extCalcService" value="${esc(window.extCalc.service)}" placeholder="Ej. Servicio de Control de Plagas" oninput="window.extCalc.service=this.value; renderExtCalcResults()">
             </div>
 
+            <!-- Monto Sin IGV & Detracción SPOT fija 12% -->
             <div class="form-row">
                 <div class="form-group" style="flex:1">
                     <label>Monto Sin IGV (S/) *</label>
@@ -3234,14 +3343,40 @@ async function renderWorkCalculator(el) {
                 </div>
                 <div class="form-group" style="flex:1">
                     <label>Detracción SPOT</label>
-                    <select class="form-control" id="extCalcDetrRate" onchange="window.extCalc.detrRate=parseFloat(this.value); renderExtCalcResults()">
-                        <option value="0.12"${window.extCalc.detrRate === 0.12 ? ' selected' : ''}>12% (Fumigación / Saneamiento)</option>
-                        <option value="0.10"${window.extCalc.detrRate === 0.10 ? ' selected' : ''}>10% (Otros servicios)</option>
-                        <option value="0"${window.extCalc.detrRate === 0 ? ' selected' : ''}>0% (Sin detracción)</option>
-                    </select>
+                    <div style="padding:9px 12px;background:var(--bg-main);border:1px solid var(--border-light);border-radius:8px;font-size:0.85rem;display:flex;align-items:center;justify-content:space-between">
+                        <strong style="color:var(--text)">12% SPOT</strong>
+                        <span style="font-size:0.75rem;color:var(--text-muted)">(Aplica si Total > S/ 700)</span>
+                    </div>
                 </div>
             </div>
 
+            <!-- Plazo y Vencimiento -->
+            <div class="form-row">
+                <div class="form-group" style="flex:1">
+                    <label>Plazo de Pago / Vencimiento</label>
+                    <select class="form-control" id="extCalcDueTerm" onchange="onExtCalcDueTermChange(this.value)">
+                        <option value="30"${window.extCalc.dueDays === 30 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Crédito a 30 días</option>
+                        <option value="15"${window.extCalc.dueDays === 15 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Crédito a 15 días</option>
+                        <option value="45"${window.extCalc.dueDays === 45 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Crédito a 45 días</option>
+                        <option value="60"${window.extCalc.dueDays === 60 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Crédito a 60 días</option>
+                        <option value="90"${window.extCalc.dueDays === 90 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Crédito a 90 días</option>
+                        <option value="0"${window.extCalc.dueDays === 0 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Al Contado (Mismo día)</option>
+                        <option value="custom"${window.extCalc.isCustomDueDate ? ' selected' : ''}>Personalizado (Elegir fecha)</option>
+                    </select>
+                </div>
+                <div class="form-group" style="flex:1">
+                    <label>Fecha de Emisión</label>
+                    <input type="date" class="form-control" id="extCalcIssueDate" value="${window.extCalc.issueDate || todayStr()}" onchange="onExtCalcIssueDateChange(this.value)">
+                </div>
+            </div>
+
+            <!-- Fecha de vencimiento selector exacto -->
+            <div class="form-group" id="extCalcCustomDueDateGroup" style="${window.extCalc.isCustomDueDate ? '' : 'display:none'}">
+                <label>Fecha de Vencimiento Exacta</label>
+                <input type="date" class="form-control" id="extCalcDueDate" value="${curDueDateIso}" onchange="onExtCalcCustomDueDateChange(this.value)">
+            </div>
+
+            <!-- Cuenta BN, Serie y Factura -->
             <div class="form-row">
                 <div class="form-group" style="flex:1">
                     <label>Cta. Detracción BN</label>
@@ -3272,17 +3407,146 @@ async function renderWorkCalculator(el) {
     renderExtCalcResults();
 }
 
-function onExtCalcClientChange(sel) {
-    const opt = sel.options[sel.selectedIndex];
-    if (!opt || !opt.value) return;
-    window.extCalc.clientId = parseInt(opt.value);
-    window.extCalc.clientName = opt.getAttribute('data-name') || '';
-    window.extCalc.ruc = opt.getAttribute('data-ruc') || '';
+function onExtCalcRucInput(val) {
+    const cleanRuc = (val || '').trim();
+    window.extCalc.ruc = cleanRuc;
 
-    const elC = document.getElementById('extCalcClient');
-    const elR = document.getElementById('extCalcRuc');
-    if (elC) elC.value = window.extCalc.clientName;
-    if (elR) elR.value = window.extCalc.ruc;
+    const clients = window._calcClients || [];
+    const matched = clients.find(c => (c.ruc || '').trim() === cleanRuc);
+
+    const elClient = document.getElementById('extCalcClient');
+    const elSel = document.getElementById('extCalcSelectClient');
+    const elBn = document.getElementById('extCalcBn');
+
+    if (matched) {
+        window.extCalc.clientId = matched.id;
+        window.extCalc.clientName = matched.business_name;
+        if (matched.detraccion_account) {
+            window.extCalc.bnAccount = matched.detraccion_account;
+        }
+        if (elClient) elClient.value = matched.business_name;
+        if (elSel) elSel.value = matched.id;
+        if (elBn) elBn.value = window.extCalc.bnAccount;
+        refreshExtCalcSedes();
+    } else {
+        if (window.extCalc.clientId) {
+            window.extCalc.clientId = null;
+            if (elSel) elSel.value = '';
+            refreshExtCalcSedes();
+        }
+    }
+    renderExtCalcResults();
+}
+
+function onExtCalcClientChange(sel) {
+    const cid = sel.value ? parseInt(sel.value) : null;
+    window.extCalc.clientId = cid;
+
+    const elClient = document.getElementById('extCalcClient');
+    const elRuc = document.getElementById('extCalcRuc');
+    const elBn = document.getElementById('extCalcBn');
+
+    if (!cid) {
+        refreshExtCalcSedes();
+        renderExtCalcResults();
+        return;
+    }
+
+    const clients = window._calcClients || [];
+    const matched = clients.find(c => c.id === cid);
+    if (matched) {
+        window.extCalc.clientName = matched.business_name;
+        window.extCalc.ruc = matched.ruc || '';
+        if (matched.detraccion_account) {
+            window.extCalc.bnAccount = matched.detraccion_account;
+        }
+        if (elClient) elClient.value = matched.business_name;
+        if (elRuc) elRuc.value = matched.ruc || '';
+        if (elBn) elBn.value = window.extCalc.bnAccount;
+        refreshExtCalcSedes();
+    }
+    renderExtCalcResults();
+}
+
+function refreshExtCalcSedes() {
+    const siteSelect = document.getElementById('extCalcSite');
+    if (!siteSelect) return;
+
+    let opts = '<option value="">— Sin sede / Fuera de sede —</option>';
+    if (window.extCalc.clientId) {
+        const clientSites = (window._calcSites || []).filter(s => s.client_id === window.extCalc.clientId);
+        opts += clientSites.map(s =>
+            `<option value="${s.id}" data-service="${esc(s.servicios || '')}" data-fee="${s.monthly_fee || 0}"${window.extCalc.clientSiteId === s.id ? ' selected' : ''}>
+                ${esc(s.nombre_cliente)} ${s.servicios ? '· ' + esc(s.servicios) : ''}
+            </option>`
+        ).join('');
+
+        siteSelect.innerHTML = opts;
+
+        // If only 1 site exists, auto-select it
+        if (clientSites.length === 1 && !window.extCalc.clientSiteId) {
+            siteSelect.value = String(clientSites[0].id);
+            onExtCalcSiteChange(siteSelect);
+            return;
+        }
+    } else {
+        siteSelect.innerHTML = opts;
+        window.extCalc.clientSiteId = null;
+    }
+}
+
+function onExtCalcSiteChange(sel) {
+    const sid = sel && sel.value ? parseInt(sel.value) : null;
+    window.extCalc.clientSiteId = sid;
+
+    if (sid) {
+        const sites = window._calcSites || [];
+        const site = sites.find(s => s.id === sid);
+        if (site) {
+            if (site.servicios) {
+                window.extCalc.service = site.servicios;
+                const elSrv = document.getElementById('extCalcService');
+                if (elSrv) elSrv.value = site.servicios;
+            }
+            if ((!window.extCalc.amount || window.extCalc.amount === 800) && site.monthly_fee > 0) {
+                window.extCalc.amount = site.monthly_fee;
+                const elAmt = document.getElementById('extCalcAmount');
+                if (elAmt) elAmt.value = site.monthly_fee.toFixed(2);
+            }
+        }
+    }
+    renderExtCalcResults();
+}
+
+function onExtCalcDueTermChange(val) {
+    const customGroup = document.getElementById('extCalcCustomDueDateGroup');
+    if (val === 'custom') {
+        window.extCalc.isCustomDueDate = true;
+        if (customGroup) customGroup.style.display = '';
+    } else {
+        window.extCalc.isCustomDueDate = false;
+        window.extCalc.dueDays = parseInt(val) || 0;
+        if (customGroup) customGroup.style.display = 'none';
+    }
+
+    const { iso } = getExtCalcDueDateInfo();
+    const elDate = document.getElementById('extCalcDueDate');
+    if (elDate) elDate.value = iso;
+
+    renderExtCalcResults();
+}
+
+function onExtCalcIssueDateChange(val) {
+    window.extCalc.issueDate = val || todayStr();
+    const { iso } = getExtCalcDueDateInfo();
+    const elDate = document.getElementById('extCalcDueDate');
+    if (elDate) elDate.value = iso;
+    renderExtCalcResults();
+}
+
+function onExtCalcCustomDueDateChange(val) {
+    window.extCalc.customDueDate = val;
+    window.extCalc.isCustomDueDate = true;
     renderExtCalcResults();
 }
 
@@ -3293,19 +3557,15 @@ function renderExtCalcResults() {
     const sub = window.extCalc.amount || 0;
     const igv = Math.round(sub * 0.18 * 100) / 100;
     const tot = Math.round((sub + igv) * 100) / 100;
-    const detr = (tot >= 700 && window.extCalc.detrRate > 0) ? Math.round(tot * window.extCalc.detrRate * 100) / 100 : 0;
+
+    // SUNAT SPOT: Solo aplica cuando el TOTAL CON IGV SUPERA los S/ 700.00
+    const aplicaDetr = tot > 700;
+    const detr = aplicaDetr ? Math.round(tot * 0.12 * 100) / 100 : 0.00;
     const cred = Math.round((tot - detr) * 100) / 100;
 
-    let fDueDate = '';
-    try {
-        const d = new Date((window.extCalc.issueDate || todayStr()) + 'T12:00:00');
-        d.setDate(d.getDate() + 30);
-        const day = String(d.getDate()).padStart(2, '0');
-        const month = String(d.getMonth() + 1).padStart(2, '0');
-        fDueDate = `${day}/${month}/${d.getFullYear()}`;
-    } catch(e) {}
+    const { iso: dueDateIso, formatted: fDueDate, label: termLabel } = getExtCalcDueDateInfo();
 
-    window.extCalcComputed = { sub, igv, tot, detr, cred, fDueDate };
+    window.extCalcComputed = { sub, igv, tot, detr, cred, aplicaDetr, dueDateIso, fDueDate, termLabel };
 
     card.innerHTML = `
         <h3 style="font-size:1rem;margin-bottom:14px;border-bottom:1px solid var(--border-light);padding-bottom:8px">Valores para Portal SUNAT</h3>
@@ -3337,15 +3597,18 @@ function renderExtCalcResults() {
 
             <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border-light)">
                 <div>
-                    <div style="font-size:0.75rem;color:var(--text-muted)">Detracción SPOT (${(window.extCalc.detrRate * 100).toFixed(0)}%)</div>
-                    <div style="font-family:monospace;font-weight:700;font-size:1.05rem;color:#b45309">S/ ${fmtMoney(detr)}</div>
+                    <div style="font-size:0.75rem;color:var(--text-muted)">Detracción SPOT (12%)</div>
+                    <div style="font-family:monospace;font-weight:700;font-size:1.05rem;color:${aplicaDetr ? '#b45309' : 'var(--text-muted)'}">
+                        S/ ${fmtMoney(detr)}
+                        ${!aplicaDetr ? '<span style="font-size:0.75rem;font-weight:normal;color:var(--text-muted)"> (No aplica: Total ≤ S/ 700)</span>' : ''}
+                    </div>
                 </div>
                 <button class="btn btn-secondary btn-sm" onclick="copySunatField('${detr.toFixed(2)}', 'Detracción')">📋 Copiar</button>
             </div>
 
             <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border-light)">
                 <div>
-                    <div style="font-size:0.75rem;color:var(--text-muted)">Neto a Cobrar (Crédito)</div>
+                    <div style="font-size:0.75rem;color:var(--text-muted)">Neto a Cobrar (${termLabel})</div>
                     <div style="font-family:monospace;font-weight:700;font-size:1.15rem;color:#10b981">S/ ${fmtMoney(cred)}</div>
                 </div>
                 <button class="btn btn-secondary btn-sm" onclick="copySunatField('${cred.toFixed(2)}', 'Neto a Cobrar')">📋 Copiar</button>
@@ -3355,21 +3618,25 @@ function renderExtCalcResults() {
                 <div>
                     <div style="font-size:0.75rem;color:var(--text-muted)">Cuenta Detracción BN</div>
                     <div style="font-family:monospace;font-weight:600;font-size:0.95rem">${window.extCalc.bnAccount}</div>
+                    ${!aplicaDetr ? '<div style="font-size:0.7rem;color:var(--text-muted)">Opcional: No requerida en SUNAT para montos ≤ S/ 700</div>' : ''}
                 </div>
                 <button class="btn btn-secondary btn-sm" onclick="copySunatField('${window.extCalc.bnAccount}', 'Cuenta BN')">📋 Copiar</button>
             </div>
 
             <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--border-light)">
                 <div>
-                    <div style="font-size:0.75rem;color:var(--text-muted)">Vencimiento (+30 días)</div>
+                    <div style="font-size:0.75rem;color:var(--text-muted)">Vencimiento (${termLabel})</div>
                     <div style="font-family:monospace;font-weight:600;font-size:0.95rem">${fDueDate}</div>
                 </div>
                 <button class="btn btn-secondary btn-sm" onclick="copySunatField('${fDueDate}', 'Fecha Vencimiento')">📋 Copiar</button>
             </div>
 
-            <div style="padding-top:6px">
-                <div style="font-size:0.75rem;color:var(--text-muted)">Importe en Letras:</div>
-                <div style="font-size:0.8rem;font-weight:600;margin-top:2px">${numeroALetras(tot)}</div>
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;padding:6px 0">
+                <div style="flex:1;padding-right:8px">
+                    <div style="font-size:0.75rem;color:var(--text-muted)">Importe en Letras:</div>
+                    <div style="font-size:0.8rem;font-weight:600;margin-top:2px">${numeroALetras(tot)}</div>
+                </div>
+                <button class="btn btn-secondary btn-sm" onclick="copySunatField('${numeroALetras(tot).replace(/'/g, "\'")}', 'Importe en Letras')">📋 Copiar</button>
             </div>
         </div>
 
@@ -3382,16 +3649,21 @@ function renderExtCalcResults() {
 
 function resetExtCalculator() {
     window.extCalc = {
+        clientId: null,
+        clientSiteId: null,
         clientName: '',
         ruc: '',
         service: 'Servicio de Control de Plagas',
+        purchaseOrder: '',
         amount: 800.00,
         detrRate: 0.12,
         bnAccount: '00046317769',
         series: 'E001',
         number: '',
-        purchaseOrder: '',
-        issueDate: todayStr()
+        issueDate: todayStr(),
+        dueDays: 30,
+        customDueDate: '',
+        isCustomDueDate: false
     };
     const elView = document.getElementById('view-work');
     if (elView) renderWorkCalculator(elView);
@@ -3402,14 +3674,24 @@ function copyExtCalcSummary() {
     let txt = `DATOS FACTURACIÓN SUNAT\n`;
     if (window.extCalc.clientName) txt += `Cliente: ${window.extCalc.clientName}\n`;
     if (window.extCalc.ruc) txt += `RUC: ${window.extCalc.ruc}\n`;
-    txt += `Servicio: ${window.extCalc.service}\n`;
+    if (window.extCalc.clientSiteId) {
+        const site = (window._calcSites || []).find(s => s.id === window.extCalc.clientSiteId);
+        if (site) txt += `Sede: ${site.nombre_cliente}\n`;
+    }
+    if (window.extCalc.purchaseOrder) txt += `Orden de Compra (OC): ${window.extCalc.purchaseOrder}\n`;
+    if (window.extCalc.service) txt += `Servicio: ${window.extCalc.service}\n`;
     txt += `Base Imponible: S/ ${fmtMoney(c.sub || 0)}\n`;
     txt += `IGV (18%): S/ ${fmtMoney(c.igv || 0)}\n`;
     txt += `Total: S/ ${fmtMoney(c.tot || 0)}\n`;
-    txt += `Detracción SPOT (12%): S/ ${fmtMoney(c.detr || 0)}\n`;
-    txt += `Neto a Cobrar: S/ ${fmtMoney(c.cred || 0)}\n`;
-    txt += `Cuenta BN: ${window.extCalc.bnAccount}\n`;
-    txt += `Vencimiento: ${c.fDueDate || ''}\n`;
+    if (c.aplicaDetr) {
+        txt += `Detracción SPOT (12%): S/ ${fmtMoney(c.detr || 0)}\n`;
+        txt += `Neto a Cobrar: S/ ${fmtMoney(c.cred || 0)}\n`;
+        txt += `Cuenta BN: ${window.extCalc.bnAccount}\n`;
+    } else {
+        txt += `Detracción SPOT: No aplica (Total ≤ S/ 700.00)\n`;
+        txt += `Neto a Cobrar: S/ ${fmtMoney(c.tot || 0)}\n`;
+    }
+    txt += `Vencimiento (${c.termLabel || ''}): ${c.fDueDate || ''}\n`;
     txt += `Son: ${numeroALetras(c.tot || 0)}\n`;
 
     copySunatField(txt, 'Resumen completo');
@@ -3428,27 +3710,21 @@ async function saveExtCalculatorInvoice() {
         return;
     }
 
-    let dueDate = '';
-    try {
-        const d = new Date((window.extCalc.issueDate || todayStr()) + 'T12:00:00');
-        d.setDate(d.getDate() + 30);
-        dueDate = d.toISOString().split('T')[0];
-    } catch(err) {}
-
     const invoiceData = {
-        client_id: window.extCalc.clientId || 1,
+        client_id: window.extCalc.clientId || (window._calcClients?.[0]?.id || 1),
+        client_site_id: window.extCalc.clientSiteId || null,
         series: (window.extCalc.series || 'E001').trim(),
         number: number,
         purchase_order: (window.extCalc.purchaseOrder || '').trim(),
-        service: window.extCalc.service || 'Servicio de Saneamiento y Manejo Integrado de Plagas',
+        service: (window.extCalc.service || 'Servicio de Control de Plagas').trim(),
         amount: c.sub,
         igv: c.igv,
         total: c.tot,
         detraccion: c.detr,
         credito: c.cred,
-        payment_type: 'credito',
+        payment_type: (window.extCalc.dueDays === 0 && !window.extCalc.isCustomDueDate) ? 'contado' : 'credito',
         issue_date: window.extCalc.issueDate || todayStr(),
-        due_date: dueDate,
+        due_date: c.dueDateIso,
         status: 'issued'
     };
 
@@ -3460,7 +3736,6 @@ async function saveExtCalculatorInvoice() {
         showToast(res?.error || 'Error al guardar la factura');
     }
 }
-
 
 function numeroALetras(num) {
     if (isNaN(num) || num === null || num === undefined) return "CERO CON 00/100 SOLES";
@@ -8913,6 +9188,16 @@ window.deleteInvoice = deleteInvoice;
 window.showQuickBillOcModal = showQuickBillOcModal;
 window.showEditSiteModal = showEditSiteModal;
 window.copySunatField = copySunatField;
+window.saveQuickBillOc = saveQuickBillOc;
+window.copyExtCalcSummary = copyExtCalcSummary;
+window.saveExtCalculatorInvoice = saveExtCalculatorInvoice;
+window.resetExtCalculator = resetExtCalculator;
+window.onExtCalcCustomDueDateChange = onExtCalcCustomDueDateChange;
+window.onExtCalcIssueDateChange = onExtCalcIssueDateChange;
+window.onExtCalcDueTermChange = onExtCalcDueTermChange;
+window.onExtCalcSiteChange = onExtCalcSiteChange;
+window.onExtCalcClientChange = onExtCalcClientChange;
+window.onExtCalcRucInput = onExtCalcRucInput;
 window.copySunatRaw = copySunatField;
 window.showQuoteForm = showQuoteForm;
 window.deleteQuote = deleteQuote;

@@ -194,7 +194,7 @@ def create_invoice(data):
         amount = float(data.get('amount') or 0)
         igv = float(data.get('igv') if data.get('igv') is not None else round(amount * 0.18, 2))
         total = float(data.get('total') if data.get('total') is not None else round(amount + igv, 2))
-        detraccion = float(data.get('detraccion') if data.get('detraccion') is not None else (round(total * 0.12, 2) if total >= 700 else 0))
+        detraccion = float(data.get('detraccion') if data.get('detraccion') is not None else (round(total * 0.12, 2) if total > 700 else 0))
         credito = float(data.get('credito') if data.get('credito') is not None else round(total - detraccion, 2))
 
         cur = conn.execute("""
@@ -233,7 +233,7 @@ def update_invoice(id, data):
         amount = float(data.get('amount') or 0)
         igv = float(data.get('igv') if data.get('igv') is not None else round(amount * 0.18, 2))
         total = float(data.get('total') if data.get('total') is not None else round(amount + igv, 2))
-        detraccion = float(data.get('detraccion') if data.get('detraccion') is not None else 0)
+        detraccion = float(data.get('detraccion') if data.get('detraccion') is not None else (round(total * 0.12, 2) if total > 700 else 0))
         credito = float(data.get('credito') if data.get('credito') is not None else round(total - detraccion, 2))
 
         conn.execute("""

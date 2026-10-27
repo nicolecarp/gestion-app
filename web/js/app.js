@@ -800,12 +800,21 @@ async function showDayEvents(year, month, day) {
     }
     const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Setiembre','Octubre','Noviembre','Diciembre'];
     const typeIcon = { task:'📋', exam:'📝', doc:'📄', assignment:'📎', injection:'💉', cosplay:'🎭', workout:'🏋️‍♀️' };
-    let html = dayEvents.map(ev =>
-        `<div class="calendar-event" style="margin-bottom:6px">
+    let html = dayEvents.map(ev => {
+        let clickAttr = '';
+        let cursorStyle = '';
+        if (ev.type === 'exam' && ev.id) {
+            clickAttr = `onclick="closeModal();navigate('university').then(() => editExamById(${ev.id}, ${ev.subject_id || 'null'}))" title="Clic para ver o editar examen"`;
+            cursorStyle = 'cursor:pointer;';
+        } else if (ev.type === 'assignment' && ev.id) {
+            clickAttr = `onclick="closeModal();navigate('university').then(() => editAssignmentById(${ev.id}, ${ev.subject_id || 'null'}))" title="Clic para ver o editar TP"`;
+            cursorStyle = 'cursor:pointer;';
+        }
+        return `<div class="calendar-event" style="margin-bottom:6px;${cursorStyle}" ${clickAttr}>
             <span style="margin-right:6px">${typeIcon[ev.type] || '📌'}</span>
             <div class="event-text">${esc(ev.title)}</div>
-        </div>`
-    ).join('');
+        </div>`;
+    }).join('');
     openModal(`${day} de ${meses[month-1]}`, html);
     document.getElementById('modalSave').style.display = 'none';
     document.getElementById('modalCancel').style.display = 'none';
@@ -5046,8 +5055,12 @@ function renderUniversitySchedule(el, subjects, allExams, allAssignments) {
                         </div>
                     </div>
                 </div>
-                <div style="flex-shrink:0;text-align:right">
+                <div style="flex-shrink:0;text-align:right;display:flex;align-items:center;gap:8px">
                     ${isDone ? '<span class="tag tag-sage">Completado</span>' : `<span class="exam-countdown-badge ${cd.cls}">${cd.text}</span>`}
+                    <div onclick="event.stopPropagation()" style="display:flex;gap:4px">
+                        <button class="btn btn-ghost btn-sm" style="padding:4px 7px;font-size:0.78rem" onclick="${item.kind === 'exam' ? `editExamById(${item.id}, ${item.subject_id})` : `editAssignmentById(${item.id}, ${item.subject_id})`}" title="Editar">✎</button>
+                        <button class="btn btn-ghost btn-sm" style="padding:4px 7px;font-size:0.78rem;color:var(--rose,#ef4444)" onclick="${item.kind === 'exam' ? `deleteExam(${item.id})` : `deleteAssignment(${item.id})`}" title="Eliminar">✕</button>
+                    </div>
                 </div>
             </div>`;
         });
@@ -5115,8 +5128,15 @@ function renderUniversitySchedule(el, subjects, allExams, allAssignments) {
         } else {
             for (const e of exams) {
                 const gradeBadge = e.grade ? ` · <strong style="color:${e.grade >= 7 ? 'var(--sage)' : e.grade >= 4 ? 'var(--primary)' : 'var(--rose)'}">Nota: ${e.grade}</strong>` : '';
-                html += `<div class="calendar-event" style="cursor:pointer" onclick="editExamById(${e.id}, ${s.id})" title="Clic para editar o cargar nota"><div class="event-dot exam"></div>
-                    <div class="event-text">${esc(e.type || 'Examen')}: ${fmtDate(e.date)}${e.topic ? ' ('+esc(e.topic)+')' : ''}${gradeBadge}</div>
+                html += `<div class="calendar-event" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border-radius:8px;margin-bottom:4px;background:rgba(255,255,255,0.02)" onclick="editExamById(${e.id}, ${s.id})" title="Clic para editar o cargar nota">
+                    <div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1">
+                        <div class="event-dot exam"></div>
+                        <div class="event-text" style="flex:1">${esc(e.type || 'Examen')}: <strong>${fmtDate(e.date)}</strong>${e.time ? ' ' + esc(e.time) + 'hs' : ''}${e.topic ? ' ('+esc(e.topic)+')' : ''}${gradeBadge}</div>
+                    </div>
+                    <div style="display:flex;gap:4px;margin-left:8px;flex-shrink:0" onclick="event.stopPropagation()">
+                        <button class="btn btn-ghost btn-sm" style="padding:2px 7px;font-size:0.75rem" onclick="editExamById(${e.id}, ${s.id})" title="Editar examen">✎</button>
+                        <button class="btn btn-ghost btn-sm" style="padding:2px 7px;font-size:0.75rem;color:var(--rose,#ef4444)" onclick="deleteExam(${e.id})" title="Eliminar examen">✕</button>
+                    </div>
                 </div>`;
             }
         }
@@ -5126,8 +5146,15 @@ function renderUniversitySchedule(el, subjects, allExams, allAssignments) {
         } else {
             for (const a of assignments) {
                 const tpGrade = a.grade ? ` · <strong>Nota: ${a.grade}</strong>` : '';
-                html += `<div class="calendar-event" style="cursor:pointer" onclick="editAssignmentById(${a.id}, ${s.id})" title="Clic para editar o cargar nota"><div class="event-dot assignment"></div>
-                    <div class="event-text">${esc(a.title)}${a.due_date ? ' · Entrega: '+fmtDate(a.due_date) : ''}${a.group_name ? ' · '+esc(a.group_name) : ''}${tpGrade}</div>
+                html += `<div class="calendar-event" style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;padding:6px 8px;border-radius:8px;margin-bottom:4px;background:rgba(255,255,255,0.02)" onclick="editAssignmentById(${a.id}, ${s.id})" title="Clic para editar o cargar nota">
+                    <div style="display:flex;align-items:center;gap:8px;min-width:0;flex:1">
+                        <div class="event-dot assignment"></div>
+                        <div class="event-text" style="flex:1">${esc(a.title)}${a.due_date ? ' · Entrega: <strong>'+fmtDate(a.due_date)+'</strong>' : ''}${a.group_name ? ' · '+esc(a.group_name) : ''}${tpGrade}</div>
+                    </div>
+                    <div style="display:flex;gap:4px;margin-left:8px;flex-shrink:0" onclick="event.stopPropagation()">
+                        <button class="btn btn-ghost btn-sm" style="padding:2px 7px;font-size:0.75rem" onclick="editAssignmentById(${a.id}, ${s.id})" title="Editar TP">✎</button>
+                        <button class="btn btn-ghost btn-sm" style="padding:2px 7px;font-size:0.75rem;color:var(--rose,#ef4444)" onclick="deleteAssignment(${a.id})" title="Eliminar TP">✕</button>
+                    </div>
                 </div>`;
             }
         }
@@ -5561,14 +5588,64 @@ function inspectCurriculumSubject(subjectId) {
     };
 }
 
-function editExamById(examId, subjectId) {
-    const ex = (window.__uniExams || []).find(x => x.id === examId);
-    if (ex) showExamModal(ex, subjectId);
+async function editExamById(examId, subjectId) {
+    let ex = (window.__uniExams || []).find(x => x.id == examId);
+    if (!ex) {
+        try {
+            const all = await api(eel.get_exams);
+            if (all) {
+                window.__uniExams = all;
+                ex = all.find(x => x.id == examId);
+            }
+        } catch (_) {}
+    }
+    if (ex) {
+        showExamModal(ex, subjectId || ex.subject_id);
+    } else {
+        showToast('No se encontró el examen seleccionado');
+    }
 }
 
-function editAssignmentById(assignId, subjectId) {
-    const a = (window.__uniAssignments || []).find(x => x.id === assignId);
-    if (a) showAssignmentModal(a, subjectId);
+async function deleteExam(id) {
+    if (!confirm('¿Eliminar este examen permanentemente?')) return;
+    closeModal();
+    const res = await api(eel.delete_exam, id);
+    if (res && res.ok) {
+        showToast('Examen eliminado');
+        navigate('university');
+    } else {
+        showToast('Error al eliminar examen: ' + ((res && res.error) || ''));
+    }
+}
+
+async function editAssignmentById(assignId, subjectId) {
+    let a = (window.__uniAssignments || []).find(x => x.id == assignId);
+    if (!a) {
+        try {
+            const all = await api(eel.get_assignments);
+            if (all) {
+                window.__uniAssignments = all;
+                a = all.find(x => x.id == assignId);
+            }
+        } catch (_) {}
+    }
+    if (a) {
+        showAssignmentModal(a, subjectId || a.subject_id);
+    } else {
+        showToast('No se encontró el TP seleccionado');
+    }
+}
+
+async function deleteAssignment(id) {
+    if (!confirm('¿Eliminar este trabajo práctico permanentemente?')) return;
+    closeModal();
+    const res = await api(eel.delete_assignment, id);
+    if (res && res.ok) {
+        showToast('TP eliminado');
+        navigate('university');
+    } else {
+        showToast('Error al eliminar TP: ' + ((res && res.error) || ''));
+    }
 }
 
 function showSubjectForm(id) {
@@ -5581,7 +5658,7 @@ function showSubjectForm(id) {
 }
 
 function showSubjectModal(subj) {
-    const html = `<form id="modalForm">
+    const html = `<form id="modalForm" onsubmit="event.preventDefault(); document.getElementById('modalSave').click();">
         <div class="form-group"><label>Nombre de la Materia *</label><input class="form-control" name="name" value="${esc(subj ? subj.name : '')}" required></div>
         <div class="form-row">
             <div class="form-group"><label>Comisión</label><input class="form-control" name="commission" value="${esc(subj ? (subj.commission || '') : '')}" placeholder="ej. 2-51-N"></div>
@@ -5663,33 +5740,98 @@ function showExamForm(subjectId) {
 }
 
 function showExamModal(exam, subjectId) {
-    const html = `<form id="modalForm">
-        <div class="form-group"><label>Tipo</label><select class="form-control" name="type">
-            <option value="Parcial" ${exam && exam.type === 'Parcial' ? 'selected' : ''}>Parcial</option>
-            <option value="Recuperatorio" ${exam && exam.type === 'Recuperatorio' ? 'selected' : ''}>Recuperatorio</option>
-            <option value="Final" ${exam && exam.type === 'Final' ? 'selected' : ''}>Final</option>
-            <option value="Otro" ${exam && exam.type === 'Otro' ? 'selected' : ''}>Otro</option>
-        </select></div>
-        <div class="form-row"><div class="form-group"><label>Fecha *</label><input type="date" class="form-control" name="date" value="${exam ? exam.date : ''}"></div>
-        <div class="form-group"><label>Hora</label><input type="time" class="form-control" name="time" value="${exam ? exam.time : ''}"></div></div>
-        <div class="form-group"><label>Tema</label><input class="form-control" name="topic" value="${esc(exam ? exam.topic : '')}"></div>
-        <div class="form-row"><div class="form-group"><label>Nota</label><input type="number" step="0.5" class="form-control" name="grade" value="${exam && exam.grade !== null ? exam.grade : ''}"></div>
-        <div class="form-group"><label>Estado</label><select class="form-control" name="status">
-            <option value="pending" ${!exam || exam.status === 'pending' ? 'selected' : ''}>Pendiente</option>
-            <option value="passed" ${exam && exam.status === 'passed' ? 'selected' : ''}>Aprobado</option>
-            <option value="failed" ${exam && exam.status === 'failed' ? 'selected' : ''}>Desaprobado</option>
-        </select></div></div>
+    const subjects = window.__uniSubjects || [];
+    const activeSubjId = exam ? exam.subject_id : (subjectId || (subjects[0] ? subjects[0].id : null));
+
+    const subjOptions = subjects.map(s =>
+        `<option value="${s.id}" ${s.id == activeSubjId ? 'selected' : ''}>${esc(s.name)}</option>`
+    ).join('');
+
+    const standardTypes = [
+        '1° Parcial',
+        '2° Parcial',
+        'Parcial',
+        'Recuperatorio',
+        '1° Recup.',
+        '2° Recup.',
+        'Final',
+        'Final Libre',
+        'Laboratorio',
+        'Entrega TP',
+        'Coloquio',
+        'Repaso',
+        'Revisión',
+        'Otro'
+    ];
+    let typeOptions = standardTypes.map(t =>
+        `<option value="${esc(t)}" ${exam && exam.type === t ? 'selected' : ''}>${esc(t)}</option>`
+    ).join('');
+
+    if (exam && exam.type && !standardTypes.includes(exam.type)) {
+        typeOptions = `<option value="${esc(exam.type)}" selected>${esc(exam.type)}</option>` + typeOptions;
+    }
+
+    const dateVal = exam && exam.date ? exam.date.split('T')[0].split(' ')[0] : '';
+    const timeVal = exam && exam.time ? exam.time : '';
+    const gradeVal = exam && exam.grade !== null && exam.grade !== undefined && exam.grade !== '' ? exam.grade : '';
+
+    const html = `<form id="modalForm" onsubmit="event.preventDefault(); document.getElementById('modalSave').click();">
+        <div class="form-row">
+            <div class="form-group" style="flex:1"><label>Materia *</label><select class="form-control" name="subject_id" required>
+                ${subjOptions}
+            </select></div>
+            <div class="form-group" style="flex:1"><label>Tipo de Evaluación</label><select class="form-control" name="type">
+                ${typeOptions}
+            </select></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Fecha *</label><input type="date" class="form-control" name="date" value="${dateVal}" required></div>
+            <div class="form-group"><label>Hora</label><input type="time" class="form-control" name="time" value="${timeVal}"></div>
+        </div>
+        <div class="form-group"><label>Temario / Observaciones</label><input class="form-control" name="topic" value="${esc(exam ? (exam.topic || '') : '')}" placeholder="Temas, bloques, unidades..."></div>
+        <div class="form-row">
+            <div class="form-group"><label>Nota (0 a 10)</label><input type="number" step="0.5" min="0" max="10" class="form-control" name="grade" value="${gradeVal}" placeholder="ej. 8"></div>
+            <div class="form-group"><label>Estado</label><select class="form-control" name="status">
+                <option value="pending" ${!exam || exam.status === 'pending' ? 'selected' : ''}>Pendiente</option>
+                <option value="passed" ${exam && exam.status === 'passed' ? 'selected' : ''}>Aprobado</option>
+                <option value="failed" ${exam && exam.status === 'failed' ? 'selected' : ''}>Desaprobado</option>
+            </select></div>
+        </div>
+        ${exam ? `
+        <div style="margin-top:20px;padding-top:14px;border-top:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center">
+            <button type="button" class="btn btn-ghost" style="color:var(--rose,#ef4444);border:1px solid rgba(239,68,68,0.25)" onclick="deleteExam(${exam.id})">🗑️ Eliminar Examen</button>
+            <span style="font-size:0.75rem;color:var(--text-muted)">ID #${exam.id}</span>
+        </div>` : ''}
     </form>`;
+
     openModal(exam ? 'Editar examen' : 'Nuevo examen', html);
     document.getElementById('modalSave').onclick = async () => {
         const f = new FormData(document.getElementById('modalForm'));
-        const data = { subject_id: exam ? exam.subject_id : subjectId,
-            type: f.get('type'), date: f.get('date'), time: f.get('time'),
-            topic: f.get('topic'), grade: parseFloat(f.get('grade')) || null, status: f.get('status') };
-        if (!data.date) { showToast('La fecha es obligatoria'); return; }
+        const subjId = parseInt(f.get('subject_id')) || (exam ? exam.subject_id : activeSubjId);
+        const dateInput = f.get('date');
+        if (!dateInput) { showToast('La fecha es obligatoria'); return; }
+
+        const rawGrade = f.get('grade');
+        const parsedGrade = (rawGrade !== null && rawGrade !== '' && !isNaN(parseFloat(rawGrade))) ? parseFloat(rawGrade) : null;
+
+        const data = {
+            subject_id: subjId,
+            type: f.get('type') || 'Parcial',
+            date: dateInput,
+            time: f.get('time') || null,
+            topic: f.get('topic') || null,
+            grade: parsedGrade,
+            status: f.get('status') || 'pending'
+        };
+
         const res = exam ? await api(eel.update_exam, exam.id, data) : await api(eel.create_exam, data);
-        if (res && res.ok) { showToast(exam ? 'Actualizado' : 'Creado'); closeModal(); navigate('university'); }
-        else showToast('Error');
+        if (res && res.ok) {
+            showToast(exam ? 'Examen actualizado' : 'Examen creado');
+            closeModal();
+            navigate('university');
+        } else {
+            showToast('Error: ' + ((res && res.error) || 'No se pudo guardar'));
+        }
     };
 }
 
@@ -5698,29 +5840,69 @@ function showAssignmentForm(subjectId) {
 }
 
 function showAssignmentModal(assign, subjectId) {
-    const html = `<form id="modalForm">
-        <div class="form-group"><label>Título *</label><input class="form-control" name="title" value="${esc(assign ? assign.title : '')}"></div>
-        <div class="form-group"><label>Descripción</label><textarea class="form-control" name="description">${esc(assign ? assign.description : '')}</textarea></div>
-        <div class="form-row"><div class="form-group"><label>Entrega</label><input type="date" class="form-control" name="due_date" value="${assign ? assign.due_date : ''}"></div>
-        <div class="form-group"><label>Grupo</label><input class="form-control" name="group_name" value="${esc(assign ? assign.group_name : '')}"></div></div>
-        <div class="form-row"><div class="form-group"><label>Nota</label><input type="number" step="0.5" class="form-control" name="grade" value="${assign ? assign.grade : ''}"></div>
-        <div class="form-group"><label>Estado</label><select class="form-control" name="status">
-            <option value="pending" ${!assign || assign.status === 'pending' ? 'selected' : ''}>Pendiente</option>
-            <option value="submitted" ${assign && assign.status === 'submitted' ? 'selected' : ''}>Entregado</option>
-            <option value="graded" ${assign && assign.status === 'graded' ? 'selected' : ''}>Corregido</option>
-        </select></div></div>
+    const subjects = window.__uniSubjects || [];
+    const activeSubjId = assign ? assign.subject_id : (subjectId || (subjects[0] ? subjects[0].id : null));
+
+    const subjOptions = subjects.map(s =>
+        `<option value="${s.id}" ${s.id == activeSubjId ? 'selected' : ''}>${esc(s.name)}</option>`
+    ).join('');
+
+    const dateVal = assign && assign.due_date ? assign.due_date.split('T')[0].split(' ')[0] : '';
+    const gradeVal = assign && assign.grade !== null && assign.grade !== undefined && assign.grade !== '' ? assign.grade : '';
+
+    const html = `<form id="modalForm" onsubmit="event.preventDefault(); document.getElementById('modalSave').click();">
+        <div class="form-group"><label>Materia *</label><select class="form-control" name="subject_id" required>
+            ${subjOptions}
+        </select></div>
+        <div class="form-group"><label>Título del TP *</label><input class="form-control" name="title" value="${esc(assign ? assign.title : '')}" placeholder="ej. TP 5: Péndulo Balístico" required></div>
+        <div class="form-group"><label>Descripción / Consigna</label><textarea class="form-control" name="description" placeholder="Detalles de entrega, formato...">${esc(assign ? (assign.description || '') : '')}</textarea></div>
+        <div class="form-row">
+            <div class="form-group"><label>Fecha de Entrega</label><input type="date" class="form-control" name="due_date" value="${dateVal}"></div>
+            <div class="form-group"><label>Grupo / Modalidad</label><input class="form-control" name="group_name" value="${esc(assign ? (assign.group_name || '') : '')}" placeholder="ej. Grupo 6 / Individual"></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Nota (0 a 10)</label><input type="number" step="0.5" min="0" max="10" class="form-control" name="grade" value="${gradeVal}" placeholder="ej. 9"></div>
+            <div class="form-group"><label>Estado</label><select class="form-control" name="status">
+                <option value="pending" ${!assign || assign.status === 'pending' ? 'selected' : ''}>Pendiente</option>
+                <option value="submitted" ${assign && assign.status === 'submitted' ? 'selected' : ''}>Entregado</option>
+                <option value="graded" ${assign && assign.status === 'graded' ? 'selected' : ''}>Corregido</option>
+            </select></div>
+        </div>
+        ${assign ? `
+        <div style="margin-top:20px;padding-top:14px;border-top:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center">
+            <button type="button" class="btn btn-ghost" style="color:var(--rose,#ef4444);border:1px solid rgba(239,68,68,0.25)" onclick="deleteAssignment(${assign.id})">🗑️ Eliminar TP</button>
+            <span style="font-size:0.75rem;color:var(--text-muted)">ID #${assign.id}</span>
+        </div>` : ''}
     </form>`;
+
     openModal(assign ? 'Editar TP' : 'Nuevo TP', html);
     document.getElementById('modalSave').onclick = async () => {
         const f = new FormData(document.getElementById('modalForm'));
-        const data = { subject_id: assign ? assign.subject_id : subjectId,
-            title: f.get('title'), description: f.get('description'),
-            due_date: f.get('due_date'), group_name: f.get('group_name'),
-            grade: parseFloat(f.get('grade')) || null, status: f.get('status') };
-        if (!data.title) { showToast('El título es obligatorio'); return; }
+        const subjId = parseInt(f.get('subject_id')) || (assign ? assign.subject_id : activeSubjId);
+        const titleVal = f.get('title');
+        if (!titleVal) { showToast('El título es obligatorio'); return; }
+
+        const rawGrade = f.get('grade');
+        const parsedGrade = (rawGrade !== null && rawGrade !== '' && !isNaN(parseFloat(rawGrade))) ? parseFloat(rawGrade) : null;
+
+        const data = {
+            subject_id: subjId,
+            title: titleVal,
+            description: f.get('description') || null,
+            due_date: f.get('due_date') || null,
+            group_name: f.get('group_name') || null,
+            grade: parsedGrade,
+            status: f.get('status') || 'pending'
+        };
+
         const res = assign ? await api(eel.update_assignment, assign.id, data) : await api(eel.create_assignment, data);
-        if (res && res.ok) { showToast(assign ? 'Actualizado' : 'Creado'); closeModal(); navigate('university'); }
-        else showToast('Error');
+        if (res && res.ok) {
+            showToast(assign ? 'TP actualizado' : 'TP creado');
+            closeModal();
+            navigate('university');
+        } else {
+            showToast('Error: ' + ((res && res.error) || 'No se pudo guardar'));
+        }
     };
 }
 
@@ -9224,7 +9406,13 @@ window.completeForm = completeForm;
 window.showSubjectForm = showSubjectForm;
 window.deleteSubject = deleteSubject;
 window.showExamForm = showExamForm;
+window.showExamModal = showExamModal;
+window.editExamById = editExamById;
+window.deleteExam = deleteExam;
 window.showAssignmentForm = showAssignmentForm;
+window.showAssignmentModal = showAssignmentModal;
+window.editAssignmentById = editAssignmentById;
+window.deleteAssignment = deleteAssignment;
 window.showPersonalTaskForm = showPersonalTaskForm;
 window.showHabitForm = showHabitForm;
 window.toggleHabit = toggleHabit;

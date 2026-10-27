@@ -869,6 +869,8 @@ def update_curriculum_status(subject_id, status, grade=None, note=None):
 def delete_subject(id):
     conn = get_connection()
     try:
+        conn.execute("DELETE FROM exams WHERE subject_id=?", (id,))
+        conn.execute("DELETE FROM assignments WHERE subject_id=?", (id,))
         conn.execute("DELETE FROM subjects WHERE id=?", (id,))
         conn.commit()
         return {'ok': True}
@@ -901,10 +903,13 @@ def get_exams(subject_id=None):
 def create_exam(data):
     conn = get_connection()
     try:
+        subj_id = data.get('subject_id')
+        if not subj_id:
+            return {'ok': False, 'error': 'subject_id es obligatorio'}
         cur = conn.execute("""
             INSERT INTO exams (subject_id, type, date, time, topic, grade, status)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (data['subject_id'], data.get('type'), data.get('date'),
+        """, (subj_id, data.get('type'), data.get('date'),
               data.get('time'), data.get('topic'), data.get('grade'),
               data.get('status', 'pending')))
         new_id = cur.lastrowid
@@ -919,10 +924,17 @@ def create_exam(data):
 def update_exam(id, data):
     conn = get_connection()
     try:
+        subj_id = data.get('subject_id')
+        if not subj_id:
+            cur_subj = conn.execute("SELECT subject_id FROM exams WHERE id=?", (id,)).fetchone()
+            if cur_subj:
+                subj_id = cur_subj[0]
+            else:
+                return {'ok': False, 'error': 'Examen no encontrado'}
         conn.execute("""
             UPDATE exams SET subject_id=?, type=?, date=?, time=?, topic=?, grade=?, status=?
             WHERE id=?
-        """, (data['subject_id'], data.get('type'), data.get('date'),
+        """, (subj_id, data.get('type'), data.get('date'),
               data.get('time'), data.get('topic'), data.get('grade'),
               data.get('status'), id))
         conn.commit()
@@ -968,10 +980,13 @@ def get_assignments(subject_id=None):
 def create_assignment(data):
     conn = get_connection()
     try:
+        subj_id = data.get('subject_id')
+        if not subj_id:
+            return {'ok': False, 'error': 'subject_id es obligatorio'}
         cur = conn.execute("""
             INSERT INTO assignments (subject_id, title, description, due_date, grade, group_name, status)
             VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (data['subject_id'], data['title'], data.get('description'),
+        """, (subj_id, data.get('title'), data.get('description'),
               data.get('due_date'), data.get('grade'), data.get('group_name'),
               data.get('status', 'pending')))
         new_id = cur.lastrowid
@@ -986,11 +1001,18 @@ def create_assignment(data):
 def update_assignment(id, data):
     conn = get_connection()
     try:
+        subj_id = data.get('subject_id')
+        if not subj_id:
+            cur_subj = conn.execute("SELECT subject_id FROM assignments WHERE id=?", (id,)).fetchone()
+            if cur_subj:
+                subj_id = cur_subj[0]
+            else:
+                return {'ok': False, 'error': 'TP no encontrado'}
         conn.execute("""
             UPDATE assignments SET subject_id=?, title=?, description=?, due_date=?,
                 grade=?, group_name=?, status=?
             WHERE id=?
-        """, (data['subject_id'], data['title'], data.get('description'),
+        """, (subj_id, data.get('title'), data.get('description'),
               data.get('due_date'), data.get('grade'), data.get('group_name'),
               data.get('status'), id))
         conn.commit()
@@ -1210,7 +1232,7 @@ def get_calendar_events(year, month):
         """, (start, end)).fetchall()
 
         exams = conn.execute("""
-            SELECT e.date as due_date, s.name as title, 'exam' as type
+            SELECT e.id, e.subject_id, e.date as due_date, s.name || ' (' || COALESCE(e.type, 'Examen') || ')' as title, 'exam' as type
             FROM exams e JOIN subjects s ON e.subject_id=s.id
             WHERE e.date>=? AND e.date<? AND e.status='pending'
         """, (start, end)).fetchall()
@@ -1222,7 +1244,7 @@ def get_calendar_events(year, month):
         """, (start, end)).fetchall()
 
         assignments = conn.execute("""
-            SELECT a.due_date, a.title, 'assignment' as type
+            SELECT a.id, a.subject_id, a.due_date, 'TP: ' || a.title as title, 'assignment' as type
             FROM assignments a WHERE a.due_date>=? AND a.due_date<? AND a.status='pending'
         """, (start, end)).fetchall()
 

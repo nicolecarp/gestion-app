@@ -2031,6 +2031,14 @@ tr:hover td { background: var(--bg); }
     background: rgba(99, 102, 241, 0.12) !important;
     border-bottom: 2px solid var(--accent, #6366f1) !important;
 }
+.matrix-month-clickable {
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.matrix-month-clickable:hover {
+    background: rgba(242, 139, 168, 0.22) !important;
+    color: var(--primary) !important;
+}
 .matrix-cell-invoiced {
     background: rgba(99, 102, 241, 0.08);
     border-radius: 6px;

@@ -1130,10 +1130,11 @@ function clearMatrixSearch() {
 
 async function renderWorkMatrix(el) {
     state.matrixYear = state.matrixYear || (new Date().getFullYear() || 2026);
+    state.matrixMonthFilter = state.matrixMonthFilter || 'all';
     state.matrixPeriodicityFilter = state.matrixPeriodicityFilter || 'all';
     state.matrixOcStatusFilter = state.matrixOcStatusFilter || 'all';
     state.matrixOcPeriodicityFilter = state.matrixOcPeriodicityFilter || 'all';
-    state.matrixOcMonthFilter = state.matrixOcMonthFilter || 'all';
+    state.matrixOcMonthFilter = state.matrixOcMonthFilter || (state.matrixMonthFilter !== 'all' ? String(state.matrixMonthFilter) : 'all');
     state.matrixOcSearch = state.matrixOcSearch || '';
     state.matrixSearch = state.matrixSearch || '';
     state.expandedEmpresas = state.expandedEmpresas || {};
@@ -1168,17 +1169,39 @@ async function renderWorkMatrix(el) {
     const trimestralSitesCount = allSites.filter(s => s.periodicity === 'trimestral' || s.periodicity === 'semestral').length;
     const eventualSitesCount = allSites.filter(s => (s.periodicity === 'eventual' || !s.is_regular)).length;
 
-    // Calculate KPI totals for the selected year
+    const monthShorts = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Set', 'Oct', 'Nov', 'Dic'];
+    const monthNames = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+    const curYear = new Date().getFullYear();
+    const curMonth = new Date().getMonth() + 1;
+    const isCurYear = state.matrixYear === curYear;
+    const searchVal = (state.matrixSearch || '').toLowerCase().trim();
+
+    const isSingleMonth = state.matrixMonthFilter !== 'all';
+    const mSel = isSingleMonth ? parseInt(state.matrixMonthFilter) : null;
+    const selMonthName = isSingleMonth ? monthNames[mSel - 1] : '';
+
+    // Calculate KPI totals for the selected period (Year or specific Month)
     let totSinIgv = 0, totFacturado = 0, totDetr = 0, totCredito = 0;
+    let kpiSinIgv = 0, kpiFacturado = 0, kpiDetr = 0, kpiCredito = 0;
+
     invoices.forEach(i => {
         totSinIgv += (i.amount || 0);
         totFacturado += (i.total || 0);
         totDetr += (i.detraccion || 0);
         totCredito += (i.credito || 0);
+        if (!isSingleMonth || (i.month_billed || 0) === mSel) {
+            kpiSinIgv += (i.amount || 0);
+            kpiFacturado += (i.total || 0);
+            kpiDetr += (i.detraccion || 0);
+            kpiCredito += (i.credito || 0);
+        }
     });
 
     const pendingOrdersCount = orders.filter(o => o.status === 'pending').length;
     const invoicedOrdersCount = orders.filter(o => o.status === 'invoiced').length;
+
+    const kpiOrders = isSingleMonth ? orders.filter(o => o.month === mSel) : orders;
+    const kpiPendingOrdersCount = kpiOrders.filter(o => o.status === 'pending').length;
 
     // Lookups: array-based so multiple invoices/OCs in same month are never lost
     const invMap = {};
@@ -1208,12 +1231,6 @@ async function renderWorkMatrix(el) {
             ocMap[kc].push(po);
         }
     }
-
-    const monthShorts = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Set', 'Oct', 'Nov', 'Dic'];
-    const curYear = new Date().getFullYear();
-    const curMonth = new Date().getMonth() + 1;
-    const isCurYear = state.matrixYear === curYear;
-    const searchVal = (state.matrixSearch || '').toLowerCase().trim();
 
     // Group filtered sites by client (Empresa)
     const sitesByClient = {};
@@ -1257,7 +1274,6 @@ async function renderWorkMatrix(el) {
             return false;
         });
 
-        // Auto-expand all matching
         for (const cid of companyIds) {
             state.expandedEmpresas[cid] = true;
         }
@@ -1268,15 +1284,15 @@ async function renderWorkMatrix(el) {
         <div>
             <div style="display:flex;align-items:center;gap:10px">
                 <h2 style="margin:0;font-size:1.35rem">📊 Matriz de Facturación Mensual</h2>
-                <span class="tag tag-primary">12 Meses · Agrupada por Empresa</span>
+                <span class="tag tag-primary">${isSingleMonth ? `Mes: ${selMonthName} ${state.matrixYear}` : '12 Meses · Agrupada por Empresa'}</span>
             </div>
-            <div style="font-size:0.8rem;color:var(--text-muted)">Haz clic en cualquier empresa para desplegar/desglosar sus sedes y servicios individuales</div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">${isSingleMonth ? `Visualizando facturación y órdenes de compra de ${selMonthName} ${state.matrixYear}.` : 'Haz clic en cualquier empresa para desplegar/desglosar sus sedes y servicios individuales'}</div>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <div style="display:flex;align-items:center;gap:4px;background:var(--bg-card);padding:4px 8px;border-radius:8px;border:1px solid var(--border-light)">
                 <span style="font-size:0.8rem;font-weight:700;color:var(--text-muted)">Año:</span>
                 <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="changeMatrixYear(${state.matrixYear - 1})">◀</button>
-                <select class="form-control" style="width:90px;font-weight:700;padding:4px 8px;font-size:0.85rem" onchange="changeMatrixYear(this.value)">
+                <select class="form-control" style="width:85px;font-weight:700;padding:4px 8px;font-size:0.85rem" onchange="changeMatrixYear(this.value)">
                     <option value="2024"${state.matrixYear === 2024 ? ' selected' : ''}>2024</option>
                     <option value="2025"${state.matrixYear === 2025 ? ' selected' : ''}>2025</option>
                     <option value="2026"${state.matrixYear === 2026 ? ' selected' : ''}>2026</option>
@@ -1284,38 +1300,49 @@ async function renderWorkMatrix(el) {
                 </select>
                 <button class="btn btn-ghost btn-sm" style="padding:2px 8px" onclick="changeMatrixYear(${state.matrixYear + 1})">▶</button>
             </div>
+            <div style="display:flex;align-items:center;gap:4px;background:var(--bg-card);padding:4px 8px;border-radius:8px;border:1px solid var(--border-light)">
+                <span style="font-size:0.8rem;font-weight:700;color:var(--text-muted)">Mes:</span>
+                <select class="form-control" style="width:135px;font-weight:600;padding:4px 8px;font-size:0.85rem" onchange="changeMatrixMonth(this.value)">
+                    <option value="all"${state.matrixMonthFilter === 'all' ? ' selected' : ''}>📅 12 Meses</option>
+                    ${monthNames.map((mn, idx) => `<option value="${idx+1}"${state.matrixMonthFilter === (idx+1) ? ' selected' : ''}>${mn}${isCurYear && (idx+1) === curMonth ? ' (Hoy)' : ''}</option>`).join('')}
+                </select>
+            </div>
             <button class="btn btn-secondary btn-sm" onclick="showPurchaseOrderModal()">+ Registrar OC</button>
             <button class="btn btn-secondary btn-sm" onclick="showInvoiceForm()">+ Nueva Factura</button>
             <button class="btn btn-primary btn-sm" onclick="switchWorkTab('calculadora')">🧮 Calculadora SUNAT</button>
         </div>
     </div>
 
-    <!-- Year KPI Summary Cards -->
+    <!-- Period KPI Summary Cards -->
     <div class="calc-kpi-grid" style="margin-bottom:20px">
         <div class="calc-kpi-card highlight">
-            <div class="calc-kpi-label">Facturado en ${state.matrixYear} (Con IGV)</div>
-            <div class="calc-kpi-value">S/ ${fmtMoney(totFacturado)}</div>
+            <div class="calc-kpi-label">${isSingleMonth ? `Facturado en ${selMonthName} ${state.matrixYear}` : `Facturado en ${state.matrixYear}`} (Con IGV)</div>
+            <div class="calc-kpi-value">S/ ${fmtMoney(kpiFacturado)}</div>
+            ${isSingleMonth ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">Total Anual ${state.matrixYear}: S/ ${fmtMoney(totFacturado)}</div>` : ''}
         </div>
         <div class="calc-kpi-card">
             <div class="calc-kpi-label">Base Imponible (Sin IGV)</div>
-            <div class="calc-kpi-value">S/ ${fmtMoney(totSinIgv)}</div>
+            <div class="calc-kpi-value">S/ ${fmtMoney(kpiSinIgv)}</div>
+            ${isSingleMonth ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">Total Anual: S/ ${fmtMoney(totSinIgv)}</div>` : ''}
         </div>
         <div class="calc-kpi-card amber">
             <div class="calc-kpi-label">Detracciones SPOT (12%)</div>
-            <div class="calc-kpi-value">S/ ${fmtMoney(totDetr)}</div>
+            <div class="calc-kpi-value">S/ ${fmtMoney(kpiDetr)}</div>
+            ${isSingleMonth ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">Neto a cobrar: S/ ${fmtMoney(kpiCredito)}</div>` : ''}
         </div>
         <div class="calc-kpi-card green">
-            <div class="calc-kpi-label">Órdenes de Compra (OC)</div>
-            <div class="calc-kpi-value">${orders.length} <span style="font-size:0.85rem;font-weight:normal;color:${pendingOrdersCount > 0 ? '#f59e0b' : 'var(--text-muted)'}">(${pendingOrdersCount} por facturar)</span></div>
+            <div class="calc-kpi-label">Órdenes de Compra (OC)${isSingleMonth ? ` · ${selMonthName}` : ''}</div>
+            <div class="calc-kpi-value">${kpiOrders.length} <span style="font-size:0.85rem;font-weight:normal;color:${kpiPendingOrdersCount > 0 ? '#f59e0b' : 'var(--text-muted)'}">(${kpiPendingOrdersCount} por facturar)</span></div>
+            ${isSingleMonth ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">${orders.length} en el año (${pendingOrdersCount} pend.)</div>` : ''}
         </div>
     </div>
 
-    <!-- 12-Month Matrix Card with Accordion Tool -->
+    <!-- Matrix Card with Month Navigator & Accordion Tool -->
     <div class="card" style="margin-bottom:24px;padding:0;overflow:hidden">
         <div style="padding:14px 18px;border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
             <div>
-                <div style="font-weight:700;font-size:1rem">Control de Facturación Mensual y Órdenes de Compra · Año ${state.matrixYear}</div>
-                <div style="font-size:0.78rem;color:var(--text-muted)">Haz clic en una empresa para desglosarla. Haz clic en cualquier celda para emitir o ver ítems.</div>
+                <div style="font-weight:700;font-size:1rem">${isSingleMonth ? `Control de Facturación · ${selMonthName} ${state.matrixYear}` : `Control de Facturación Mensual y Órdenes de Compra · Año ${state.matrixYear}`}</div>
+                <div style="font-size:0.78rem;color:var(--text-muted)">${isSingleMonth ? `Detalle enfocado de ${selMonthName}. Haz clic en una empresa para desplegar sus sedes.` : 'Haz clic en una empresa para desglosarla. Haz clic en cualquier mes para enfocarlo.'}</div>
             </div>
             <div style="display:flex;gap:12px;font-size:0.75rem;align-items:center;flex-wrap:wrap">
                 <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:rgba(99,102,241,0.2);border-radius:2px;display:inline-block"></span> Facturada</span>
@@ -1324,15 +1351,39 @@ async function renderWorkMatrix(el) {
             </div>
         </div>
 
+        <!-- Month Navigation Pills Bar -->
+        <div style="padding:10px 18px;background:var(--bg-card);border-bottom:1px solid var(--border-light);display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:space-between">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                <span style="font-size:0.75rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em">Filtrar Mes:</span>
+                <div class="filter-pills" style="margin:0">
+                    <button class="filter-pill${state.matrixMonthFilter === 'all' ? ' active' : ''}" onclick="changeMatrixMonth('all')">📅 Todo el año (12m)</button>
+                    ${monthShorts.map((name, idx) => {
+                        const mNum = idx + 1;
+                        const isCur = isCurYear && mNum === curMonth;
+                        const isAct = state.matrixMonthFilter === mNum;
+                        return `<button class="filter-pill${isAct ? ' active' : ''}" onclick="changeMatrixMonth(${mNum})" title="Ver sólo ${monthNames[idx]} ${state.matrixYear}">
+                            ${name}${isCur ? ' •' : ''}
+                        </button>`;
+                    }).join('')}
+                </div>
+            </div>
+            ${isSingleMonth ? `
+                <div style="display:flex;align-items:center;gap:6px">
+                    <span class="tag tag-primary" style="font-weight:700;font-size:0.75rem">Mes enfocado: ${selMonthName} ${state.matrixYear}</span>
+                    <button class="btn btn-secondary btn-sm" style="font-size:0.75rem;padding:3px 10px" onclick="changeMatrixMonth('all')">✕ Ver los 12 meses</button>
+                </div>
+            ` : ''}
+        </div>
+
         <!-- Toolbar: Search & Accordion Controls -->
         <div style="padding:10px 18px;background:var(--bg-card);border-bottom:1px solid var(--border-light);display:flex;gap:12px;flex-wrap:wrap;align-items:center">
             <div style="flex:1;min-width:260px">
-                <input type="text" class="form-control" style="font-size:0.85rem;padding:6px 12px" placeholder="🔍 Buscar por N° OC (ej: 4500085548), empresa, sede, servicio..." value="${esc(state.matrixSearch)}" oninput="onSearchMatrixMain(this.value)">
+                <input type="text" class="form-control" style="font-size:0.85rem;padding:6px 14px;border-radius:var(--radius-full)" placeholder="🔍 Buscar por N° OC (ej: 4500085548), empresa, sede, servicio..." value="${esc(state.matrixSearch)}" oninput="onSearchMatrixMain(this.value)">
             </div>
             <div style="display:flex;gap:6px">
                 <button class="btn btn-secondary btn-sm" onclick="expandAllEmpresas(true)" title="Desplegar todas las empresas">⊞ Expandir todas</button>
                 <button class="btn btn-secondary btn-sm" onclick="expandAllEmpresas(false)" title="Colapsar a nivel empresa">⊟ Colapsar todas</button>
-                ${searchVal ? `<button class="btn btn-ghost btn-sm" onclick="clearMatrixSearch()">✕ Limpiar búsqueda</button>` : ''}
+                ${searchVal ? `<button class="btn btn-ghost btn-sm" onclick="clearMatrixSearch()">✕ Limpiar</button>` : ''}
             </div>
             <div class="filter-pills" style="margin:0">
                 <button class="filter-pill${state.matrixPeriodicityFilter === 'all' ? ' active' : ''}" onclick="filterMatrixPeriodicity('all')">Todas (${allSites.length})</button>
@@ -1348,7 +1399,221 @@ async function renderWorkMatrix(el) {
             <p style="font-size:1.1rem;margin-bottom:6px">No se encontraron empresas o sedes con los filtros seleccionados</p>
             ${searchVal ? `<button class="btn btn-secondary btn-sm" onclick="clearMatrixSearch()">Limpiar búsqueda "${esc(searchVal)}"</button>` : ''}
         </div>`;
+    } else if (isSingleMonth) {
+        // ================= SINGLE MONTH FOCUSED TABLE =================
+        html += `<div class="table-wrap" style="overflow-x:auto;max-height:680px">
+            <table class="matrix-table">
+                <thead style="position:sticky;top:0;background:var(--bg-card);z-index:4">
+                    <tr>
+                        <th class="matrix-sticky-col" style="min-width:260px">Empresa / Sede / Servicio</th>
+                        <th style="text-align:center;font-size:0.75rem;padding:6px 6px;min-width:85px">Frecuencia</th>
+                        <th style="text-align:right;font-size:0.75rem;padding:6px 8px;min-width:95px">Cuota Pactada</th>
+                        <th style="text-align:center;font-size:0.8rem;padding:8px 10px;min-width:260px;background:rgba(242,139,168,0.12);color:var(--primary)">
+                            📅 ${selMonthName} ${state.matrixYear}${isCurYear && mSel === curMonth ? ' <span style="font-size:0.68rem;color:var(--accent);display:inline-block;margin-left:4px">(Mes Actual)</span>' : ''}
+                        </th>
+                        <th style="text-align:right;font-size:0.75rem;min-width:105px;padding:6px 8px">Facturado Mes</th>
+                        <th style="text-align:center;font-size:0.75rem;min-width:85px;padding:6px 6px">Diferencia</th>
+                        <th style="text-align:center;font-size:0.75rem;min-width:95px;padding:6px 6px">Acción</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+
+        let singleMonthBilledTotal = 0;
+        let singleMonthExpectedTotal = 0;
+
+        for (const cid of companyIds) {
+            const clientSites = sitesByClient[cid] || [];
+            const clientObj = clientObjMap[cid] || {};
+            const compName = clientObj.business_name || clientSites[0]?.empresa || 'Cliente';
+            const compRuc = clientObj.ruc || clientSites[0]?.ruc || '';
+            const isExpanded = state.expandedEmpresas[cid] !== false;
+
+            let empTotalCuota = 0;
+            let empMonthBilled = 0;
+            let empMonthPendingOcs = 0;
+
+            for (const s of clientSites) {
+                const fee = parseFloat(s.monthly_fee) || 0;
+                empTotalCuota += fee;
+                singleMonthExpectedTotal += fee;
+
+                const invs = invMap[s.id + '-' + mSel] || [];
+                const mTot = invs.reduce((sum, x) => sum + (x.total || 0), 0);
+                empMonthBilled += mTot;
+                singleMonthBilledTotal += mTot;
+
+                const ocs = ocMap[s.id + '-' + mSel] || [];
+                empMonthPendingOcs += ocs.filter(o => o.status === 'pending').length;
+            }
+
+            const empDiff = empMonthBilled - empTotalCuota;
+
+            // Company Parent Row
+            html += `<tr class="matrix-empresa-row ${isExpanded ? '' : 'collapsed'}" onclick="toggleEmpresaExpand(${cid})">
+                <td class="matrix-sticky-col">
+                    <div style="display:flex;align-items:center;justify-content:space-between">
+                        <div style="display:flex;align-items:center">
+                            <span class="matrix-empresa-chevron">${isExpanded ? '▼' : '▶'}</span>
+                            <div>
+                                <span style="font-size:0.88rem;font-weight:700">${esc(compName)}</span>
+                                ${compRuc ? `<span class="tag tag-ghost" style="margin-left:6px;font-size:0.68rem;padding:1px 4px">RUC ${esc(compRuc)}</span>` : ''}
+                            </div>
+                        </div>
+                        <span class="tag tag-primary" style="font-size:0.7rem;padding:2px 6px">${clientSites.length} ${clientSites.length === 1 ? 'servicio' : 'servicios'}</span>
+                    </div>
+                </td>
+                <td style="text-align:center;font-size:0.75rem;color:var(--text-muted);font-weight:600">Empresa</td>
+                <td style="text-align:right;font-family:monospace;font-size:0.83rem;font-weight:700;padding:6px 8px">
+                    ${empTotalCuota > 0 ? `S/ ${fmtMoney(empTotalCuota)}` : '—'}
+                </td>
+                <td style="text-align:center;padding:6px 8px">
+                    ${empMonthBilled > 0 ? `<div style="font-family:monospace;font-weight:700;font-size:0.85rem;color:var(--accent)">S/ ${fmtMoney(empMonthBilled)}</div>` : ''}
+                    ${empMonthPendingOcs > 0 ? `<div style="font-size:0.72rem;color:#b45309;font-weight:700">⏳ ${empMonthPendingOcs} OC por facturar</div>` : ''}
+                    ${empMonthBilled === 0 && empMonthPendingOcs === 0 ? '<span style="color:var(--text-muted);font-size:0.75rem">Sin movimiento en este mes</span>' : ''}
+                </td>
+                <td style="text-align:right;font-family:monospace;font-weight:700;font-size:0.85rem;color:var(--accent);padding:6px 8px">
+                    ${empMonthBilled > 0 ? `S/ ${fmtMoney(empMonthBilled)}` : '—'}
+                </td>
+                <td style="text-align:center;padding:6px 4px">
+                    ${(empTotalCuota > 0 || empMonthBilled > 0) ? `
+                        <span class="tag ${empDiff >= 0 ? 'tag-sage' : 'tag-rose'}" style="font-size:0.7rem;padding:2px 6px">
+                            ${empDiff >= 0 ? '+' : ''}${fmtMoney(empDiff)}
+                        </span>
+                    ` : '<span style="color:var(--text-muted);font-size:0.75rem">-</span>'}
+                </td>
+                <td style="text-align:center;padding:6px 4px;font-size:0.72rem;color:var(--text-muted)">
+                    ${isExpanded ? '▲ Colapsar' : '▼ Desglosar'}
+                </td>
+            </tr>`;
+
+            // Child Site Rows
+            if (isExpanded) {
+                for (const s of clientSites) {
+                    const fee = parseFloat(s.monthly_fee) || 0;
+                    const per = s.periodicity || 'mensual';
+                    const cellInvs = invMap[s.id + '-' + mSel] || [];
+                    const cellOcs = ocMap[s.id + '-' + mSel] || [];
+                    const monthTotal = cellInvs.reduce((acc, x) => acc + (x.total || 0), 0);
+
+                    const isCellMatched = searchVal && (
+                        cellOcs.some(o => o.oc_number.toLowerCase().includes(searchVal)) ||
+                        cellInvs.some(i => (i.purchase_order || '').toLowerCase().includes(searchVal))
+                    );
+
+                    let cellContent = '';
+                    let actionButton = '';
+
+                    if (cellInvs.length > 0 && cellOcs.length > 0) {
+                        const po = cellOcs[0];
+                        const inv = cellInvs[0];
+                        cellContent = `<div class="matrix-cell-invoiced ${isCellMatched ? 'matrix-cell-highlight' : ''}" style="padding:6px 10px;text-align:left;display:flex;justify-content:space-between;align-items:center" onclick="showInvoiceForm(${inv.id})">
+                            <div>
+                                <div style="font-family:monospace;font-weight:700;font-size:0.85rem;color:var(--accent)">S/ ${fmtMoney(monthTotal)}</div>
+                                <div style="font-size:0.72rem;color:var(--text-muted)">Factura: <strong>${esc(inv.series)}-${esc(inv.number)}</strong></div>
+                            </div>
+                            <div style="text-align:right">
+                                <span class="tag tag-gold" style="font-size:0.72rem;cursor:pointer" onclick="event.stopPropagation(); showOcItemsModal(${po.id})" title="Ver detalle de OC">OC ${esc(po.oc_number)}</span>
+                                <div style="font-size:0.68rem;color:#10b981;font-weight:700">✓ Facturado</div>
+                            </div>
+                        </div>`;
+                        actionButton = `<button class="btn btn-ghost btn-sm" style="font-size:0.75rem;padding:3px 8px" onclick="showInvoiceForm(${inv.id})">✎ Factura</button>`;
+                    } else if (cellOcs.length > 0) {
+                        const po = cellOcs[0];
+                        cellContent = `<div class="matrix-cell-oc ${isCellMatched ? 'matrix-cell-highlight' : ''}" style="padding:6px 10px;text-align:left;display:flex;justify-content:space-between;align-items:center" onclick="handleMatrixCellOc(${s.id}, ${s.client_id}, ${mSel}, ${state.matrixYear}, ${po.id})">
+                            <div>
+                                <div style="font-size:0.78rem;font-weight:700;color:#d97706">OC ${esc(po.oc_number)}</div>
+                                <div style="font-size:0.7rem;color:var(--text-muted)">${po.centro_logistico ? 'Centro ' + esc(po.centro_logistico) : 'Registrada'}</div>
+                            </div>
+                            <div style="text-align:right">
+                                <div style="font-size:0.8rem;color:#b45309;font-weight:700">⏳ S/ ${fmtMoney(po.amount || 0)}</div>
+                                <div style="font-size:0.68rem;color:#f59e0b">Por facturar</div>
+                            </div>
+                        </div>`;
+                        actionButton = `<button class="btn btn-primary btn-sm" style="font-size:0.72rem;padding:3px 8px" onclick="emitInvoiceFromOc(${po.id})">Facturar ➔</button>`;
+                    } else if (cellInvs.length > 0) {
+                        const inv = cellInvs[0];
+                        const ocDisp = inv.purchase_order;
+                        cellContent = `<div class="matrix-cell-invoiced ${isCellMatched ? 'matrix-cell-highlight' : ''}" style="padding:6px 10px;text-align:left;display:flex;justify-content:space-between;align-items:center" onclick="showInvoiceForm(${inv.id})">
+                            <div>
+                                <div style="font-family:monospace;font-weight:700;font-size:0.85rem;color:var(--accent)">S/ ${fmtMoney(monthTotal)}</div>
+                                <div style="font-size:0.72rem;color:var(--text-muted)">F: <strong>${esc(inv.series)}-${esc(inv.number)}</strong></div>
+                            </div>
+                            <div style="text-align:right">
+                                ${ocDisp ? `<span class="tag tag-gold" style="font-size:0.72rem">OC ${esc(ocDisp)}</span>` : '<span class="tag tag-sage" style="font-size:0.68rem">✓ Emitida</span>'}
+                            </div>
+                        </div>`;
+                        actionButton = `<button class="btn btn-ghost btn-sm" style="font-size:0.75rem;padding:3px 8px" onclick="showInvoiceForm(${inv.id})">✎ Factura</button>`;
+                    } else {
+                        cellContent = `<div class="matrix-cell-empty" style="padding:8px 6px;text-align:center" onclick="showPurchaseOrderModal(null, ${s.id}, ${s.client_id}, ${mSel}, ${state.matrixYear})">
+                            <span style="font-size:0.75rem;font-weight:600">+ Registrar OC / Cuota</span>
+                        </div>`;
+                        actionButton = `<button class="btn btn-ghost btn-sm" style="font-size:0.72rem;padding:3px 8px" onclick="showPurchaseOrderModal(null, ${s.id}, ${s.client_id}, ${mSel}, ${state.matrixYear})">+ OC</button>`;
+                    }
+
+                    const diffSite = monthTotal - fee;
+                    const diffCls = diffSite >= 0 ? 'tag-sage' : 'tag-rose';
+
+                    html += `<tr class="matrix-site-row">
+                        <td class="matrix-sticky-col matrix-site-indent">
+                            <div style="font-weight:600;font-size:0.82rem">${esc(s.nombre_cliente)}</div>
+                            <div style="font-size:0.72rem;color:var(--text-muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                                <span>${esc(s.servicios || 'Servicio')}</span>
+                                ${s.location_code ? `<span class="tag tag-ghost" style="padding:0 4px;font-size:0.65rem">Loc: ${esc(s.location_code)}</span>` : ''}
+                            </div>
+                        </td>
+                        <td style="text-align:center;padding:4px 6px">
+                            <span class="tag-periodicity-${per}">${per}</span>
+                        </td>
+                        <td style="text-align:right;font-family:monospace;font-size:0.8rem;font-weight:600;padding:6px 8px">
+                            ${fee > 0 ? `S/ ${fmtMoney(fee)}` : '—'}
+                        </td>
+                        <td style="padding:4px 6px">
+                            ${cellContent}
+                        </td>
+                        <td style="text-align:right;font-family:monospace;font-weight:700;font-size:0.82rem;padding:6px 8px">
+                            ${monthTotal > 0 ? `S/ ${fmtMoney(monthTotal)}` : '—'}
+                        </td>
+                        <td style="text-align:center;padding:6px 4px">
+                            ${(fee > 0 || monthTotal > 0) ? `
+                                <span class="tag ${diffCls}" style="font-size:0.7rem;padding:2px 6px">
+                                    ${diffSite >= 0 ? '+' : ''}${fmtMoney(diffSite)}
+                                </span>
+                            ` : '<span style="color:var(--text-muted);font-size:0.75rem">—</span>'}
+                        </td>
+                        <td style="text-align:center;padding:6px 4px;white-space:nowrap">
+                            ${actionButton}
+                        </td>
+                    </tr>`;
+                }
+            }
+        }
+
+        const singleMonthDiff = singleMonthBilledTotal - singleMonthExpectedTotal;
+
+        html += `</tbody>
+                <tfoot style="position:sticky;bottom:0;background:var(--bg-card);font-weight:700;z-index:3;border-top:2px solid var(--border-light)">
+                    <tr>
+                        <td class="matrix-sticky-col" style="font-weight:700;font-size:0.82rem">Totales ${selMonthName} ${state.matrixYear}</td>
+                        <td style="text-align:center">-</td>
+                        <td style="text-align:right;font-family:monospace;font-size:0.8rem">S/ ${fmtMoney(singleMonthExpectedTotal)}</td>
+                        <td style="text-align:center;font-family:monospace;font-size:0.82rem;padding:8px;background:rgba(242,139,168,0.1);color:var(--primary)">
+                            S/ ${fmtMoney(singleMonthBilledTotal)} Facturado
+                        </td>
+                        <td style="text-align:right;font-family:monospace;font-size:0.85rem;color:var(--accent);padding:8px">
+                            S/ ${fmtMoney(singleMonthBilledTotal)}
+                        </td>
+                        <td style="text-align:center">
+                            <span class="tag ${singleMonthDiff >= 0 ? 'tag-sage' : 'tag-rose'}" style="font-size:0.72rem">
+                                ${(singleMonthDiff >= 0 ? '+' : '')}${fmtMoney(singleMonthDiff)}
+                            </span>
+                        </td>
+                        <td style="text-align:center">-</td>
+                    </tr>
+                </tfoot>
+            </table>
+        </div>`;
     } else {
+        // ================= 12-MONTH FULL MATRIX =================
         html += `<div class="table-wrap" style="overflow-x:auto;max-height:680px">
             <table class="matrix-table">
                 <thead style="position:sticky;top:0;background:var(--bg-card);z-index:4">
@@ -1360,7 +1625,7 @@ async function renderWorkMatrix(el) {
         for (let m = 1; m <= 12; m++) {
             const isThisMonth = isCurYear && m === curMonth;
             const extraCls = isThisMonth ? ' matrix-month-cur' : '';
-            html += `<th class="${extraCls}" style="text-align:center;font-size:0.75rem;min-width:74px;padding:6px 4px">${monthShorts[m-1]}${isThisMonth ? ' <span style="font-size:0.65rem;color:var(--accent);display:block;margin-top:-2px">(Hoy)</span>' : ''}</th>`;
+            html += `<th class="${extraCls} matrix-month-clickable" style="text-align:center;font-size:0.75rem;min-width:74px;padding:6px 4px;cursor:pointer" onclick="changeMatrixMonth(${m})" title="Hacer clic para ver solo ${monthNames[m-1]}">${monthShorts[m-1]}${isThisMonth ? ' <span style="font-size:0.65rem;color:var(--accent);display:block;margin-top:-2px">(Hoy)</span>' : ''}</th>`;
         }
 
         html += `
@@ -1378,9 +1643,8 @@ async function renderWorkMatrix(el) {
             const clientObj = clientObjMap[cid] || {};
             const compName = clientObj.business_name || clientSites[0]?.empresa || 'Cliente';
             const compRuc = clientObj.ruc || clientSites[0]?.ruc || '';
-            const isExpanded = state.expandedEmpresas[cid] !== false; // default true
+            const isExpanded = state.expandedEmpresas[cid] !== false;
 
-            // Aggregate totals for the company
             let empTotalCuota = 0;
             const empMonthTotals = new Array(13).fill(0);
             const empMonthPendingOcs = new Array(13).fill(0);
@@ -1473,7 +1737,6 @@ async function renderWorkMatrix(el) {
                             siteBilledMonths++;
                         }
 
-                        // Check if search query matches this cell
                         const isCellMatched = searchVal && (
                             cellOcs.some(o => o.oc_number.toLowerCase().includes(searchVal)) ||
                             cellInvs.some(i => (i.purchase_order || '').toLowerCase().includes(searchVal))
@@ -1482,7 +1745,6 @@ async function renderWorkMatrix(el) {
                         html += `<td style="padding:4px 3px">`;
 
                         if (cellInvs.length > 0 && cellOcs.length > 0) {
-                            // Both Invoice and OC exist for this month!
                             const po = cellOcs[0];
                             const inv = cellInvs[0];
                             html += `<div class="matrix-cell-invoiced ${isCellMatched ? 'matrix-cell-highlight' : ''}" onclick="showInvoiceForm(${inv.id})" title="Factura emitida S/ ${fmtMoney(monthTotal)} - OC: ${esc(po.oc_number)}">
@@ -1491,14 +1753,12 @@ async function renderWorkMatrix(el) {
                                 <div style="font-size:0.68rem;font-weight:700;color:#d97706;margin-top:2px" onclick="event.stopPropagation(); showOcItemsModal(${po.id})" title="Clic para ver detalle de OC">OC ${esc(po.oc_number)}</div>
                             </div>`;
                         } else if (cellOcs.length > 0) {
-                            // Only OC exists (Pending invoicing or standalone)
                             const po = cellOcs[0];
                             html += `<div class="matrix-cell-oc ${isCellMatched ? 'matrix-cell-highlight' : ''}" onclick="handleMatrixCellOc(${s.id}, ${s.client_id}, ${m}, ${state.matrixYear}, ${po.id})" title="OC: ${esc(po.oc_number)} - S/ ${fmtMoney(po.amount)}. Clic para emitir o ver ítems">
                                 <div style="font-size:0.73rem;font-weight:700;color:#d97706">OC ${esc(po.oc_number)}</div>
                                 <div style="font-size:0.65rem;color:#b45309">⏳ S/ ${fmtMoney(po.amount || 0)}</div>
                             </div>`;
                         } else if (cellInvs.length > 0) {
-                            // Only Invoice exists
                             const inv = cellInvs[0];
                             const ocDisp = inv.purchase_order;
                             html += `<div class="matrix-cell-invoiced ${isCellMatched ? 'matrix-cell-highlight' : ''}" onclick="showInvoiceForm(${inv.id})" title="Factura emitida S/ ${fmtMoney(monthTotal)}">
@@ -1507,7 +1767,6 @@ async function renderWorkMatrix(el) {
                                 ${ocDisp ? `<div style="font-size:0.65rem;color:#f59e0b;font-weight:700">OC ${esc(ocDisp)}</div>` : ''}
                             </div>`;
                         } else {
-                            // Empty cell: + OC
                             html += `<div class="matrix-cell-empty" onclick="showPurchaseOrderModal(null, ${s.id}, ${s.client_id}, ${m}, ${state.matrixYear})" title="Registrar OC de ${monthShorts[m-1]}">+ OC</div>`;
                         }
 
@@ -1557,7 +1816,7 @@ async function renderWorkMatrix(el) {
     }
     html += `</div>`;
 
-    // Section 2: Purchase Orders Table for the Selected Year
+    // Section 2: Purchase Orders Table for the Selected Period
     const filteredOrders = orders.filter(o => {
         // Status filter
         if (state.matrixOcStatusFilter === 'pending' && o.status !== 'pending') return false;
@@ -1582,8 +1841,8 @@ async function renderWorkMatrix(el) {
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
             <div>
                 <div style="font-weight:700;font-size:1rem;display:flex;align-items:center;gap:8px">
-                    📋 Órdenes de Compra (OC) Registradas — Año ${state.matrixYear}
-                    <span class="tag tag-ghost">${orders.length} total</span>
+                    📋 Órdenes de Compra (OC) Registradas — Año ${state.matrixYear}${isSingleMonth ? ` (${selMonthName})` : ''}
+                    <span class="tag tag-ghost">${filteredOrders.length} ${filteredOrders.length === 1 ? 'orden' : 'órdenes'}</span>
                 </div>
                 <div style="font-size:0.78rem;color:var(--text-muted)">Desglose de posiciones, frecuencias y enlace directo a la calculadora SUNAT</div>
             </div>
@@ -1593,7 +1852,7 @@ async function renderWorkMatrix(el) {
         <!-- Filter and Search Toolbar -->
         <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
             <div style="flex:1;min-width:240px">
-                <input type="text" class="form-control" style="font-size:0.85rem;padding:6px 12px" placeholder="🔍 Buscar por N° OC, cliente, sede, centro..." value="${esc(state.matrixOcSearch)}" oninput="onSearchMatrixOc(this.value)">
+                <input type="text" class="form-control" style="font-size:0.85rem;padding:6px 14px;border-radius:var(--radius-full)" placeholder="🔍 Buscar por N° OC, cliente, sede, centro..." value="${esc(state.matrixOcSearch)}" oninput="onSearchMatrixOc(this.value)">
             </div>
             <div class="filter-pills" style="margin:0">
                 <button class="filter-pill${state.matrixOcStatusFilter === 'all' ? ' active' : ''}" onclick="filterMatrixOcStatus('all')">Todas (${orders.length})</button>
@@ -1607,11 +1866,9 @@ async function renderWorkMatrix(el) {
                 <button class="filter-pill${state.matrixOcPeriodicityFilter === 'eventual' ? ' active' : ''}" onclick="filterMatrixOcPeriodicity('eventual')">⚡ Eventual</button>
             </div>
             <div>
-                <select class="form-control" style="font-size:0.85rem;padding:5px 8px;width:120px" onchange="filterMatrixOcMonth(this.value)">
+                <select class="form-control" style="font-size:0.85rem;padding:6px 28px 6px 12px;border-radius:var(--radius-full);width:auto" onchange="filterMatrixOcMonth(this.value)">
                     <option value="all"${state.matrixOcMonthFilter === 'all' ? ' selected' : ''}>Todos los meses</option>
-                    <option value="8"${state.matrixOcMonthFilter === '8' ? ' selected' : ''}>Agosto</option>
-                    <option value="9"${state.matrixOcMonthFilter === '9' ? ' selected' : ''}>Septiembre</option>
-                    <option value="10"${state.matrixOcMonthFilter === '10' ? ' selected' : ''}>Octubre</option>
+                    ${monthNames.map((mn, idx) => `<option value="${idx+1}"${String(state.matrixOcMonthFilter) === String(idx+1) ? ' selected' : ''}>${mn}</option>`).join('')}
                 </select>
             </div>
         </div>`;
@@ -1701,6 +1958,20 @@ function changeMatrixYear(year) {
     state.matrixYear = parseInt(year) || 2026;
     navigate('work');
 }
+
+function changeMatrixMonth(month) {
+    if (month === 'all' || month === '' || month === null || month === undefined) {
+        state.matrixMonthFilter = 'all';
+        state.matrixOcMonthFilter = 'all';
+    } else {
+        const m = parseInt(month);
+        state.matrixMonthFilter = m;
+        state.matrixOcMonthFilter = String(m);
+    }
+    const content = document.getElementById('workContent');
+    if (content) renderWorkMatrix(content);
+}
+
 
 function filterMatrixPeriodicity(per) {
     state.matrixPeriodicityFilter = per;
@@ -8763,6 +9034,7 @@ window.onSearchMatrixOc = onSearchMatrixOc;
 window.showOcItemsModal = showOcItemsModal;
 window.renderWorkMatrix = renderWorkMatrix;
 window.changeMatrixYear = changeMatrixYear;
+window.changeMatrixMonth = changeMatrixMonth;
 window.filterMatrixOc = filterMatrixOc;
 window.handleMatrixCellOc = handleMatrixCellOc;
 window.emitInvoiceFromOc = emitInvoiceFromOc;

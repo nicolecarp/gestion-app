@@ -18,10 +18,14 @@
 ```text
 C:\GESTION\
 ├── AGENTS.md                 # This file: dense context for AI agents (save tokens)
+├── CLAUDE.md                 # Entrypoint for Claude Code CLI
 ├── README.md                 # Human & developer landing page
 ├── Procfile                  # Gunicorn entrypoint for Cloud PaaS
 ├── requirements.txt          # Python dependencies (eel, flask, gunicorn, python-docx, openpyxl, pillow, requests)
 ├── iniciar.bat               # Windows launcher for local Eel desktop app
+│
+├── .agents/                  # Agent skills & runbooks (Claude Code / Cursor / Antigravity open standard)
+│   └── skills/               # systematic-debugging, frontend-design, tdd, docx, xlsx, sqlite, vanilla-spa
 │
 ├── main.py                   # Desktop Eel app entrypoint + hot-reload watcher on web/ + Chrome app launcher
 ├── server_cloud.py           # Cloud Flask entrypoint + /eel.js shim + auth + auto-deploy webhook

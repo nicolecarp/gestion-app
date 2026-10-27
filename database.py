@@ -1112,6 +1112,121 @@ def apply_cleanups_and_seeds(conn):
         except Exception as e:
             print("[seed_po_v2] Error:", e)
 
+    # 10. Seed SUNAT SIRE RVIE Invoices 2026 (seed_sunat_invoices_2026_v1)
+    seed_sunat = conn.execute("SELECT value FROM config WHERE key='seed_sunat_invoices_2026_v1'").fetchone()
+    if not seed_sunat:
+        try:
+            import json
+            from collections import defaultdict
+            try:
+                import data_sunat_2026 as ds
+            except ImportError:
+                from . import data_sunat_2026 as ds
+
+            # 1. Clean up placeholder / empty invoices
+            conn.execute("DELETE FROM invoices WHERE number = '' OR number LIKE '957%'")
+
+            # 2. Insert or update clients
+            for c in ds.CLIENTS:
+                ruc = c['ruc']
+                bname = c['business_name']
+                is_reg = c['is_regular']
+                row = conn.execute("SELECT id FROM clients WHERE ruc = ?", (ruc,)).fetchone()
+                if row:
+                    if is_reg:
+                        conn.execute("UPDATE clients SET is_regular = 1 WHERE id = ?", (row[0],))
+                else:
+                    conn.execute("""
+                        INSERT INTO clients (ruc, business_name, is_regular, created_at)
+                        VALUES (?, ?, ?, datetime('now','localtime'))
+                    """, (ruc, bname, is_reg))
+
+            # Build client lookup
+            client_id_by_ruc = {r[0]: r[1] for r in conn.execute("SELECT ruc, id FROM clients WHERE ruc IS NOT NULL").fetchall()}
+
+            # 3. Regular sites
+            for ruc, sede, fee, per, srv in ds.REGULAR_SITES:
+                cid = client_id_by_ruc.get(ruc)
+                if cid:
+                    exists = conn.execute("SELECT id FROM client_sites WHERE client_id=? AND ROUND(monthly_fee,2)=?", (cid, round(fee, 2))).fetchone()
+                    if not exists:
+                        conn.execute("""
+                            INSERT INTO client_sites (client_id, nombre_cliente, sede_cliente, monthly_fee, periodicity, is_regular, is_active, servicios)
+                            VALUES (?, ?, ?, ?, ?, 1, 1, ?)
+                        """, (cid, sede, sede, fee, per, srv))
+
+            # Build site lookups: (client_id, round(fee, 2)) -> site_id
+            site_lookup = {}
+            for r in conn.execute("SELECT id, client_id, ROUND(monthly_fee, 2) FROM client_sites WHERE monthly_fee IS NOT NULL").fetchall():
+                site_lookup[(r[1], round(r[2], 2))] = r[0]
+
+            # 4. Purchase orders lookup
+            pos = conn.execute("SELECT * FROM purchase_orders").fetchall()
+            po_by_match = defaultdict(list)
+            for p in pos:
+                po_by_match[(p['client_id'], p['month'])].append(p)
+
+            # 5. Insert or update invoices
+            for d in ds.INVOICES:
+                cid = client_id_by_ruc.get(d['ruc'])
+                if not cid:
+                    continue
+                bi = round(d['amount'], 2)
+                sid = site_lookup.get((cid, bi))
+                if not sid:
+                    any_s = conn.execute("SELECT id FROM client_sites WHERE client_id=?", (cid,)).fetchone()
+                    if any_s:
+                        sid = any_s[0]
+
+                # Match PO
+                matched_po = None
+                candidates = po_by_match.get((cid, d['month_billed']), [])
+                if not candidates:
+                    candidates = po_by_match.get((cid, d['month_billed'] - 1), [])
+                for p in candidates:
+                    if abs(p['amount'] - bi) < 0.05 or abs(p['amount'] - d['total']) < 0.05:
+                        matched_po = p['oc_number']
+                        conn.execute("UPDATE purchase_orders SET status='invoiced' WHERE id=?", (p['id'],))
+                        break
+
+                meta = {
+                    'car': d['car'],
+                    'periodicity': d['periodicity'],
+                    'moneda': d['moneda']
+                }
+                if d['nc']:
+                    meta['nc'] = d['nc']
+
+                srv_title = "Control Aviar" if "TOPY" in d['cliente'].upper() or "SUR COLOR" in d['cliente'].upper() else "Servicio de Saneamiento y Manejo Integrado de Plagas"
+
+                existing = conn.execute("SELECT id FROM invoices WHERE series=? AND number=?", (d['serie'], d['number'])).fetchone()
+                if existing:
+                    conn.execute("""
+                        UPDATE invoices SET
+                            client_id=?, client_site_id=?, service=?, amount=?, igv=?, total=?,
+                            issue_date=?, due_date=?, status=?, month_billed=?, year_billed=?,
+                            purchase_order=COALESCE(?, purchase_order), detraccion=?, credito=?, items_json=?
+                        WHERE id=?
+                    """, (cid, sid, srv_title, d['amount'], d['igv'], d['total'],
+                          d['issue_date'], d['due_date'], d['status'], d['month_billed'], d['year_billed'],
+                          matched_po, d['detraccion'], d['credito'], json.dumps(meta), existing[0]))
+                else:
+                    conn.execute("""
+                        INSERT INTO invoices (
+                            client_id, client_site_id, series, number, service, payment_type,
+                            amount, igv, total, issue_date, due_date, status, month_billed, year_billed,
+                            purchase_order, detraccion, credito, items_json
+                        ) VALUES (?, ?, ?, ?, ?, 'credito', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (cid, sid, d['serie'], d['number'], srv_title,
+                          d['amount'], d['igv'], d['total'], d['issue_date'], d['due_date'], d['status'],
+                          d['month_billed'], d['year_billed'], matched_po, d['detraccion'], d['credito'], json.dumps(meta)))
+
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('seed_sunat_invoices_2026_v1', '1')")
+            conn.commit()
+            print("[seed_sunat_invoices_2026_v1] Successfully populated 556 SUNAT invoices.")
+        except Exception as e:
+            print("[seed_sunat_invoices_2026_v1] Error:", e)
+
 
 def seed_default_workouts(conn):
     count = conn.execute("SELECT COUNT(*) FROM workout_days").fetchone()[0]

@@ -1886,13 +1886,22 @@ def get_monthly_billing(year=None):
             ORDER BY COALESCE(c.business_name, cs.nombre_cliente) ASC, cs.nombre_cliente ASC
         """).fetchall()
 
-        # Invoices for this year
+        # Invoices for this year (vigentes)
         invoices = conn.execute("""
             SELECT i.*, cs.nombre_cliente as site_name, cs.location_code as site_location, c.business_name as empresa, c.ruc
             FROM invoices i
-            JOIN client_sites cs ON i.client_site_id = cs.id
+            LEFT JOIN client_sites cs ON i.client_site_id = cs.id
             JOIN clients c ON i.client_id = c.id
-            WHERE i.year_billed = ?
+            WHERE i.year_billed = ? AND (i.status != 'annulled' OR i.status IS NULL)
+            ORDER BY i.month_billed ASC, i.id ASC
+        """, (year,)).fetchall()
+
+        # Annulled invoices for reporting / auditing
+        annulled_invoices = conn.execute("""
+            SELECT i.*, c.business_name as empresa, c.ruc
+            FROM invoices i
+            JOIN clients c ON i.client_id = c.id
+            WHERE i.year_billed = ? AND i.status = 'annulled'
             ORDER BY i.month_billed ASC, i.id ASC
         """, (year,)).fetchall()
 
@@ -1910,6 +1919,7 @@ def get_monthly_billing(year=None):
             'year': year,
             'sites': [dict(r) for r in sites],
             'invoices': [dict(r) for r in invoices],
+            'annulled_invoices': [dict(r) for r in annulled_invoices],
             'orders': [dict(r) for r in orders],
         }
     finally:

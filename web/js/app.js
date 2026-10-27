@@ -766,13 +766,15 @@ async function renderWorkMatrix(el) {
     const filteredSites = allSites.filter(s => {
         const per = s.periodicity || 'mensual';
         if (state.matrixPeriodicityFilter === 'mensual') return per === 'mensual';
-        if (state.matrixPeriodicityFilter === 'bimensual') return per === 'bimensual' || per === 'trimestral';
+        if (state.matrixPeriodicityFilter === 'bimensual') return per === 'bimensual';
+        if (state.matrixPeriodicityFilter === 'trimestral') return per === 'trimestral' || per === 'semestral';
         if (state.matrixPeriodicityFilter === 'eventual') return per === 'eventual' || !s.is_regular;
         return true;
     });
 
     const mensualSitesCount = allSites.filter(s => (s.periodicity || 'mensual') === 'mensual').length;
-    const bimensualSitesCount = allSites.filter(s => (s.periodicity === 'bimensual' || s.periodicity === 'trimestral')).length;
+    const bimensualSitesCount = allSites.filter(s => s.periodicity === 'bimensual').length;
+    const trimestralSitesCount = allSites.filter(s => s.periodicity === 'trimestral' || s.periodicity === 'semestral').length;
     const eventualSitesCount = allSites.filter(s => (s.periodicity === 'eventual' || !s.is_regular)).length;
 
     // Calculate KPI totals for the selected year
@@ -787,12 +789,19 @@ async function renderWorkMatrix(el) {
     const pendingOrdersCount = orders.filter(o => o.status === 'pending').length;
     const invoicedOrdersCount = orders.filter(o => o.status === 'invoiced').length;
 
-    // Lookups
+    // Lookups (by site and by client fallback)
     const invMap = {};
     for (const inv of invoices) {
-        const k = inv.client_site_id + '-' + (inv.month_billed || 0);
-        if (!invMap[k]) invMap[k] = [];
-        invMap[k].push(inv);
+        if (inv.client_site_id) {
+            const k = inv.client_site_id + '-' + (inv.month_billed || 0);
+            if (!invMap[k]) invMap[k] = [];
+            invMap[k].push(inv);
+        }
+        if (inv.client_id) {
+            const kc = 'c' + inv.client_id + '-' + (inv.month_billed || 0);
+            if (!invMap[kc]) invMap[kc] = [];
+            invMap[kc].push(inv);
+        }
     }
 
     const ocMap = {};
@@ -875,6 +884,7 @@ async function renderWorkMatrix(el) {
             <button class="filter-pill${state.matrixPeriodicityFilter === 'all' ? ' active' : ''}" onclick="filterMatrixPeriodicity('all')">Todas las sedes (${allSites.length})</button>
             <button class="filter-pill${state.matrixPeriodicityFilter === 'mensual' ? ' active' : ''}" onclick="filterMatrixPeriodicity('mensual')">🔄 Mensuales (${mensualSitesCount})</button>
             <button class="filter-pill${state.matrixPeriodicityFilter === 'bimensual' ? ' active' : ''}" onclick="filterMatrixPeriodicity('bimensual')">🔁 Bimensuales (${bimensualSitesCount})</button>
+            <button class="filter-pill${state.matrixPeriodicityFilter === 'trimestral' ? ' active' : ''}" onclick="filterMatrixPeriodicity('trimestral')">🗓️ Trimestral/Semestral (${allSites.filter(s => s.periodicity === 'trimestral' || s.periodicity === 'semestral').length})</button>
             <button class="filter-pill${state.matrixPeriodicityFilter === 'eventual' ? ' active' : ''}" onclick="filterMatrixPeriodicity('eventual')">⚡ Eventuales (${eventualSitesCount})</button>
         </div>`;
 
@@ -930,7 +940,7 @@ async function renderWorkMatrix(el) {
             for (let m = 1; m <= 12; m++) {
                 const kSite = s.id + '-' + m;
                 const kClient = 'c' + s.client_id + '-' + m;
-                const invs = invMap[kSite] || [];
+                const invs = (s.id && invMap[kSite]) ? invMap[kSite] : (s.client_id && invMap[kClient] ? invMap[kClient] : []);
                 const po = ocMap[kSite] || (s.client_id ? ocMap[kClient] : null);
 
                 if (invs.length > 0) {
@@ -1584,14 +1594,21 @@ async function renderWorkInvoices(el) {
     const sites = await api(eel.get_client_sites_grouped) || [];
     const clients = await api(eel.get_clients) || [];
 
-    // Global totals
+    state.invoiceStatusFilter = state.invoiceStatusFilter || 'all';
+    
+    // Separate active (vigentes) from annulled
+    const vigentes = allInvoices.filter(i => i.status !== 'annulled');
+    const anuladas = allInvoices.filter(i => i.status === 'annulled');
+    
+    // Global totals computed ONLY from valid/active invoices
     let totSinIgv = 0, totFinal = 0, totDetr = 0, totCredito = 0;
-    allInvoices.forEach(i => {
+    vigentes.forEach(i => {
         totSinIgv += (i.amount || 0);
         totFinal += (i.total || 0);
         totDetr += (i.detraccion || 0);
         totCredito += (i.credito || 0);
     });
+    const totAnulado = anuladas.reduce((acc, x) => acc + (x.total || 0), 0);
 
     // Lookup: siteId-month-year
     const invMap = {};
@@ -1622,15 +1639,16 @@ async function renderWorkInvoices(el) {
         </div>
     </div>
 
-    <!-- Summary KPI Cards -->
+    <!-- Summary KPI Cards (Vigentes vs Anuladas) -->
     <div class="calc-kpi-grid" style="margin-bottom:20px">
-        <div class="calc-kpi-card">
-            <div class="calc-kpi-label">Total Sin IGV</div>
-            <div class="calc-kpi-value">S/ ${fmtMoney(totSinIgv)}</div>
-        </div>
         <div class="calc-kpi-card highlight">
-            <div class="calc-kpi-label">Total Facturado (Con IGV)</div>
+            <div class="calc-kpi-label">Total Facturado Vigente (Con IGV)</div>
             <div class="calc-kpi-value">S/ ${fmtMoney(totFinal)}</div>
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">${vigentes.length} comprobantes vigentes</div>
+        </div>
+        <div class="calc-kpi-card">
+            <div class="calc-kpi-label">Base Imponible (Sin IGV)</div>
+            <div class="calc-kpi-value">S/ ${fmtMoney(totSinIgv)}</div>
         </div>
         <div class="calc-kpi-card amber">
             <div class="calc-kpi-label">Detracciones SPOT (12%)</div>
@@ -1640,42 +1658,51 @@ async function renderWorkInvoices(el) {
             <div class="calc-kpi-label">Crédito Neto por Cobrar</div>
             <div class="calc-kpi-value">S/ ${fmtMoney(totCredito)}</div>
         </div>
+        <div class="calc-kpi-card" style="border-left:4px solid #ef4444">
+            <div class="calc-kpi-label" style="color:#ef4444">Comprobantes Anulados (NC)</div>
+            <div class="calc-kpi-value" style="color:#ef4444">${anuladas.length} <span style="font-size:0.8rem;font-weight:normal;color:var(--text-muted)">(S/ ${fmtMoney(totAnulado)})</span></div>
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">Excluidas de ingresos</div>
+        </div>
     </div>
 
-    <!-- Invoices List -->
+    <!-- Invoices List with Status Tabs -->
     <div class="card" style="margin-bottom:24px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
-            <div style="font-weight:700;font-size:1rem">Todas las Facturas Emitidas (${allInvoices.length})</div>
+            <div>
+                <div style="font-weight:700;font-size:1rem">Comprobantes Emitidos SUNAT 2026 (${allInvoices.length})</div>
+                <div style="font-size:0.75rem;color:var(--text-muted)">Registro oficial SIRE RVIE de ventas electrónicas (E001/EB01)</div>
+            </div>
             <div style="display:flex;gap:8px;align-items:center">
                 <input type="text" id="invoiceSearchInput" class="form-control" style="width:230px;padding:6px 12px;font-size:0.85rem" placeholder="🔍 Buscar cliente, OC o factura..." oninput="filterInvoicesTable(this.value)">
                 <button class="btn btn-ghost btn-sm" onclick="showInvoiceForm(null)">+ Agregar</button>
             </div>
+        </div>
+        <!-- Status Filter Pills -->
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border-light)">
+            <button class="filter-pill${state.invoiceStatusFilter === 'all' ? ' active' : ''}" onclick="filterInvoiceStatus('all')">Todas (${allInvoices.length})</button>
+            <button class="filter-pill${state.invoiceStatusFilter === 'vigentes' ? ' active' : ''}" onclick="filterInvoiceStatus('vigentes')">✅ Vigentes (${vigentes.length})</button>
+            <button class="filter-pill${state.invoiceStatusFilter === 'issued' ? ' active' : ''}" onclick="filterInvoiceStatus('issued')">⏳ Emitidas (${allInvoices.filter(x => x.status === 'issued').length})</button>
+            <button class="filter-pill${state.invoiceStatusFilter === 'paid' ? ' active' : ''}" onclick="filterInvoiceStatus('paid')">💳 Pagadas (${allInvoices.filter(x => x.status === 'paid').length})</button>
+            <button class="filter-pill${state.invoiceStatusFilter === 'annulled' ? ' active' : ''}" onclick="filterInvoiceStatus('annulled')">🚫 Anuladas (${anuladas.length})</button>
         </div>`;
 
     if (allInvoices.length === 0) {
         html += '<div class="empty-state"><div class="empty-icon">🧾</div><h3>Sin facturas registradas</h3><p>Registra facturas o utiliza la Calculadora de IGV para crearlas</p></div>';
     } else {
-        const stMap = { issued: {label:'Emitida',cls:'tag-primary'}, paid: {label:'Pagada',cls:'tag-sage'}, overdue: {label:'Vencida',cls:'tag-rose'} };
-        html += `<div class="table-wrap"><table id="invoicesTable">
-            <thead>
-                <tr>
-                    <th>Comprobante</th>
-                    <th>OC</th>
-                    <th style="text-align:center">Loc</th>
-                    <th>Empresa / Sede</th>
-                    <th>Servicio</th>
-                    <th style="text-align:right">Sin IGV</th>
-                    <th style="text-align:right">Total</th>
-                    <th style="text-align:right">Detrac. (12%)</th>
-                    <th style="text-align:right">Crédito Neto</th>
-                    <th style="text-align:center">Periodo</th>
-                    <th style="text-align:center">Estado</th>
-                    <th></th>
-                </tr>
-            </thead>
-            <tbody>`;
+        const stMap = {
+            issued: {label:'Emitida',cls:'tag-primary'},
+            paid: {label:'Pagada',cls:'tag-sage'},
+            overdue: {label:'Vencida',cls:'tag-rose'},
+            annulled: {label:'Anulada',cls:'tag-rose'}
+        };
+
         for (const i of allInvoices) {
-            const s = stMap[i.status] || {label:i.status,cls:'tag-primary'};
+            const isAnulada = i.status === 'annulled';
+            let meta = {};
+            try { if (i.items_json) meta = JSON.parse(i.items_json); } catch(e){}
+            const nc = meta.nc;
+            const per = meta.periodicity;
+
             const mesStr = i.year_billed && i.month_billed ? (i.month_billed < 10 ? '0'+i.month_billed : i.month_billed)+'/'+i.year_billed : '-';
             const compStr = i.series ? (i.number ? esc(i.series)+'-'+esc(i.number) : esc(i.series)) : '-';
             const locStr = i.location_code || i.site_location || '-';
@@ -1685,18 +1712,33 @@ async function renderWorkInvoices(el) {
             const feeDetr = parseFloat(i.detraccion) || 0;
             const feeCred = parseFloat(i.credito) || (feeTotal - feeDetr);
 
-            html += `<tr>
-                <td><strong>${compStr}</strong></td>
+            let statusBadge = '';
+            if (isAnulada) {
+                const ncTip = nc ? `Anulada por NC ${nc.nc_serie}-${nc.nc_num} (${nc.nc_fecha}): ${nc.motivo}` : 'Factura anulada por Nota de Crédito';
+                statusBadge = `<span class="tag tag-rose" style="cursor:help;font-weight:700" title="${esc(ncTip)}">🚫 Anulada ${nc ? '(NC '+esc(nc.nc_num)+')' : ''}</span>`;
+            } else {
+                const s = stMap[i.status] || {label:i.status,cls:'tag-primary'};
+                statusBadge = `<span class="tag ${s.cls}">${s.label}</span>`;
+            }
+
+            const perBadge = per ? `<span class="tag-periodicity-${per}" style="margin-left:4px">${per}</span>` : '';
+            const rowStyle = isAnulada ? 'opacity:0.65;background:rgba(239,68,68,0.02)' : '';
+
+            html += `<tr data-status="${esc(i.status || 'issued')}" style="${rowStyle}">
+                <td>
+                    <strong>${compStr}</strong>
+                    ${perBadge}
+                </td>
                 <td>${ocStr}</td>
                 <td style="text-align:center;font-size:0.8rem;color:var(--text-muted)">${esc(locStr)}</td>
                 <td><strong>${esc(i.business_name || '')}</strong><br><span style="font-size:0.75rem;color:var(--text-muted)">${esc(i.site_name || '')}</span></td>
                 <td style="font-size:0.8rem">${esc(i.service || '-')}</td>
-                <td style="text-align:right;font-family:monospace">S/ ${fmtMoney(feeSinIgv)}</td>
-                <td style="text-align:right;font-family:monospace;font-weight:700">S/ ${fmtMoney(feeTotal)}</td>
+                <td style="text-align:right;font-family:monospace;${isAnulada ? 'text-decoration:line-through;color:var(--text-muted)' : ''}">S/ ${fmtMoney(feeSinIgv)}</td>
+                <td style="text-align:right;font-family:monospace;font-weight:700;${isAnulada ? 'text-decoration:line-through;color:var(--text-muted)' : ''}">S/ ${fmtMoney(feeTotal)}</td>
                 <td style="text-align:right;font-family:monospace;color:#f59e0b">S/ ${fmtMoney(feeDetr)}</td>
                 <td style="text-align:right;font-family:monospace;color:#10b981;font-weight:700">S/ ${fmtMoney(feeCred)}</td>
                 <td style="text-align:center;font-size:0.8rem">${mesStr}</td>
-                <td style="text-align:center"><span class="tag ${s.cls}">${s.label}</span></td>
+                <td style="text-align:center">${statusBadge}</td>
                 <td style="text-align:right;white-space:nowrap">
                     <button class="btn btn-ghost btn-sm" onclick="showInvoiceForm(${i.id})" title="Editar">✎</button>
                     <button class="btn btn-ghost btn-sm" onclick="deleteInvoice(${i.id})" title="Eliminar">✕</button>
@@ -1719,12 +1761,38 @@ async function renderWorkInvoices(el) {
     el.innerHTML = html;
 }
 
+function filterInvoiceStatus(status) {
+    state.invoiceStatusFilter = status;
+    const term = document.getElementById('invoiceSearchInput')?.value || '';
+    filterInvoicesTable(term);
+    document.querySelectorAll('.filter-pill').forEach(b => {
+        const oc = b.getAttribute('onclick') || '';
+        if (oc.includes("filterInvoiceStatus('" + status + "')")) {
+            b.classList.add('active');
+        } else if (oc.includes('filterInvoiceStatus')) {
+            b.classList.remove('active');
+        }
+    });
+}
+
 function filterInvoicesTable(term) {
     const q = (term || '').toLowerCase().trim();
+    const statusFilter = state.invoiceStatusFilter || 'all';
     const rows = document.querySelectorAll('#invoicesTable tbody tr');
     rows.forEach(r => {
+        const rowStatus = r.getAttribute('data-status') || '';
+        let matchStatus = true;
+        if (statusFilter === 'vigentes') {
+            matchStatus = rowStatus !== 'annulled';
+        } else if (statusFilter === 'annulled') {
+            matchStatus = rowStatus === 'annulled';
+        } else if (statusFilter !== 'all') {
+            matchStatus = rowStatus === statusFilter;
+        }
+
         const text = r.innerText.toLowerCase();
-        r.style.display = text.includes(q) ? '' : 'none';
+        const matchText = !q || text.includes(q);
+        r.style.display = (matchStatus && matchText) ? '' : 'none';
     });
 }
 

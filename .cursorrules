@@ -1,0 +1,11 @@
+# Cursor Rules — Project Nicole
+
+See `AGENTS.md` for full project context, architecture, database schemas, and conventions.
+
+Key Rules:
+- Backend: Python 3.12 + SQLite (WAL mode). Business logic in `api.py`.
+- Exposed functions: Decorate with `@eel.expose` in `api.py`. Auto-discovered by `server_cloud.py`.
+- Frontend: Vanilla JS SPA (`web/js/app.js`). Call backend via `await api(eel.<func_name>, ...args)`.
+- Cache busting: Increment `?v=XX` on scripts/styles in `web/index.html` after any frontend modification.
+- Timezone: Argentina UTC-3 (`AR_TZ`). Use `today()` / `local_date()` from `api.py`.
+- Documentation: Check `docs/` (`DATABASE.md`, `API_REFERENCE.md`, `ARCHITECTURE.md`, `FRONTEND.md`) to avoid reading large files and save tokens.

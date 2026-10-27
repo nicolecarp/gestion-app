@@ -1180,7 +1180,7 @@ async function renderWorkMatrix(el) {
     const mSel = isSingleMonth ? parseInt(state.matrixMonthFilter) : null;
     const selMonthName = isSingleMonth ? monthNames[mSel - 1] : '';
 
-    // Calculate KPI totals for the selected period (Year or specific Month)
+    // Calculate KPI totals for the selected period (strictly tracking Sin IGV as primary)
     let totSinIgv = 0, totFacturado = 0, totDetr = 0, totCredito = 0;
     let kpiSinIgv = 0, kpiFacturado = 0, kpiDetr = 0, kpiCredito = 0;
 
@@ -1194,6 +1194,28 @@ async function renderWorkMatrix(el) {
             kpiFacturado += (i.total || 0);
             kpiDetr += (i.detraccion || 0);
             kpiCredito += (i.credito || 0);
+        }
+    });
+
+    // Calculate expected periodic fee sum (Sin IGV) for the selected period
+    let kpiExpected = 0;
+    filteredSites.forEach(s => {
+        const fee = parseFloat(s.monthly_fee) || 0;
+        const per = s.periodicity || 'mensual';
+        if (isSingleMonth) {
+            if (per === 'mensual') kpiExpected += fee;
+            else if (per === 'bimensual' && (mSel % 2 === 0)) kpiExpected += fee;
+            else if (per === 'trimestral' && (mSel % 3 === 0)) kpiExpected += fee;
+            else if (per === 'semestral' && (mSel === 6 || mSel === 12)) kpiExpected += fee;
+            else if (per === 'anual' && mSel === 12) kpiExpected += fee;
+            else if (fee > 0 && !['bimensual', 'trimestral', 'semestral', 'anual'].includes(per)) kpiExpected += fee;
+        } else {
+            if (per === 'mensual') kpiExpected += (fee * 12);
+            else if (per === 'bimensual') kpiExpected += (fee * 6);
+            else if (per === 'trimestral') kpiExpected += (fee * 4);
+            else if (per === 'semestral') kpiExpected += (fee * 2);
+            else if (per === 'anual') kpiExpected += fee;
+            else kpiExpected += (fee * 12);
         }
     });
 
@@ -1263,7 +1285,6 @@ async function renderWorkMatrix(el) {
                 if ((s.nombre_cliente || '').toLowerCase().includes(searchVal)) return true;
                 if ((s.servicios || '').toLowerCase().includes(searchVal)) return true;
                 if ((s.location_code || '').toLowerCase().includes(searchVal)) return true;
-                // Check if any OC matches
                 for (let m = 1; m <= 12; m++) {
                     const ocs = ocMap[s.id + '-' + m] || [];
                     if (ocs.some(o => o.oc_number.toLowerCase().includes(searchVal) || (o.notes || '').toLowerCase().includes(searchVal))) return true;
@@ -1286,7 +1307,9 @@ async function renderWorkMatrix(el) {
                 <h2 style="margin:0;font-size:1.35rem">📊 Matriz de Facturación Mensual</h2>
                 <span class="tag tag-primary">${isSingleMonth ? `Mes: ${selMonthName} ${state.matrixYear}` : '12 Meses · Agrupada por Empresa'}</span>
             </div>
-            <div style="font-size:0.8rem;color:var(--text-muted)">${isSingleMonth ? `Visualizando facturación y órdenes de compra de ${selMonthName} ${state.matrixYear}.` : 'Haz clic en cualquier empresa para desplegar/desglosar sus sedes y servicios individuales'}</div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">
+                ${isSingleMonth ? `Visualizando facturación y órdenes de compra de ${selMonthName} ${state.matrixYear}. Todos los montos se expresan <strong>Sin IGV</strong>.` : 'Control de facturación por sedes. Haz clic en el nombre, frecuencia o cuota de cualquier sede para editarla manualmente.'}
+            </div>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <div style="display:flex;align-items:center;gap:4px;background:var(--bg-card);padding:4px 8px;border-radius:8px;border:1px solid var(--border-light)">
@@ -1313,27 +1336,29 @@ async function renderWorkMatrix(el) {
         </div>
     </div>
 
-    <!-- Period KPI Summary Cards -->
+    <!-- Period KPI Summary Cards (Foco Principal en Montos Sin IGV) -->
     <div class="calc-kpi-grid" style="margin-bottom:20px">
         <div class="calc-kpi-card highlight">
-            <div class="calc-kpi-label">${isSingleMonth ? `Facturado en ${selMonthName} ${state.matrixYear}` : `Facturado en ${state.matrixYear}`} (Con IGV)</div>
-            <div class="calc-kpi-value">S/ ${fmtMoney(kpiFacturado)}</div>
-            ${isSingleMonth ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">Total Anual ${state.matrixYear}: S/ ${fmtMoney(totFacturado)}</div>` : ''}
+            <div class="calc-kpi-label">${isSingleMonth ? `Facturado ${selMonthName} ${state.matrixYear}` : `Facturado Año ${state.matrixYear}`} (Sin IGV)</div>
+            <div class="calc-kpi-value">S/ ${fmtMoney(kpiSinIgv)}</div>
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">Con IGV 18%: S/ ${fmtMoney(kpiFacturado)}${isSingleMonth ? ` · Anual Sin IGV: S/ ${fmtMoney(totSinIgv)}` : ''}</div>
         </div>
         <div class="calc-kpi-card">
-            <div class="calc-kpi-label">Base Imponible (Sin IGV)</div>
-            <div class="calc-kpi-value">S/ ${fmtMoney(kpiSinIgv)}</div>
-            ${isSingleMonth ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">Total Anual: S/ ${fmtMoney(totSinIgv)}</div>` : ''}
+            <div class="calc-kpi-label">Cuota Pactada Teórica (Sin IGV)</div>
+            <div class="calc-kpi-value">S/ ${fmtMoney(kpiExpected)}</div>
+            <div style="font-size:0.75rem;color:${(kpiSinIgv - kpiExpected) >= 0 ? '#10b981' : '#f59e0b'};margin-top:2px;font-weight:600">
+                Dif: ${(kpiSinIgv - kpiExpected) >= 0 ? '+' : ''}S/ ${fmtMoney(kpiSinIgv - kpiExpected)}
+            </div>
         </div>
         <div class="calc-kpi-card amber">
             <div class="calc-kpi-label">Detracciones SPOT (12%)</div>
             <div class="calc-kpi-value">S/ ${fmtMoney(kpiDetr)}</div>
-            ${isSingleMonth ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">Neto a cobrar: S/ ${fmtMoney(kpiCredito)}</div>` : ''}
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">Neto a cobrar: S/ ${fmtMoney(kpiCredito)}</div>
         </div>
         <div class="calc-kpi-card green">
             <div class="calc-kpi-label">Órdenes de Compra (OC)${isSingleMonth ? ` · ${selMonthName}` : ''}</div>
             <div class="calc-kpi-value">${kpiOrders.length} <span style="font-size:0.85rem;font-weight:normal;color:${kpiPendingOrdersCount > 0 ? '#f59e0b' : 'var(--text-muted)'}">(${kpiPendingOrdersCount} por facturar)</span></div>
-            ${isSingleMonth ? `<div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">${orders.length} en el año (${pendingOrdersCount} pend.)</div>` : ''}
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:2px">${orders.length} en el año (${pendingOrdersCount} pend.)</div>
         </div>
     </div>
 
@@ -1342,10 +1367,12 @@ async function renderWorkMatrix(el) {
         <div style="padding:14px 18px;border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
             <div>
                 <div style="font-weight:700;font-size:1rem">${isSingleMonth ? `Control de Facturación · ${selMonthName} ${state.matrixYear}` : `Control de Facturación Mensual y Órdenes de Compra · Año ${state.matrixYear}`}</div>
-                <div style="font-size:0.78rem;color:var(--text-muted)">${isSingleMonth ? `Detalle enfocado de ${selMonthName}. Haz clic en una empresa para desplegar sus sedes.` : 'Haz clic en una empresa para desglosarla. Haz clic en cualquier mes para enfocarlo.'}</div>
+                <div style="font-size:0.78rem;color:var(--text-muted)">
+                    Todos los montos mostrados en las celdas corresponden a <strong>Valores Sin IGV</strong> (Base Imponible acordada). Haz clic en ✏️ para editar cuota o frecuencia.
+                </div>
             </div>
             <div style="display:flex;gap:12px;font-size:0.75rem;align-items:center;flex-wrap:wrap">
-                <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:rgba(99,102,241,0.2);border-radius:2px;display:inline-block"></span> Facturada</span>
+                <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:rgba(99,102,241,0.2);border-radius:2px;display:inline-block"></span> Facturada (Sin IGV)</span>
                 <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:rgba(245,158,11,0.25);border:1px dashed #f59e0b;border-radius:2px;display:inline-block"></span> OC Pendiente</span>
                 <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:var(--border-light);border-radius:2px;display:inline-block"></span> + OC (Pendiente)</span>
             </div>
@@ -1400,20 +1427,20 @@ async function renderWorkMatrix(el) {
             ${searchVal ? `<button class="btn btn-secondary btn-sm" onclick="clearMatrixSearch()">Limpiar búsqueda "${esc(searchVal)}"</button>` : ''}
         </div>`;
     } else if (isSingleMonth) {
-        // ================= SINGLE MONTH FOCUSED TABLE =================
+        // ================= SINGLE MONTH FOCUSED TABLE (EXCLUSIVELY SIN IGV) =================
         html += `<div class="table-wrap" style="overflow-x:auto;max-height:680px">
             <table class="matrix-table">
                 <thead style="position:sticky;top:0;background:var(--bg-card);z-index:4">
                     <tr>
                         <th class="matrix-sticky-col" style="min-width:260px">Empresa / Sede / Servicio</th>
                         <th style="text-align:center;font-size:0.75rem;padding:6px 6px;min-width:85px">Frecuencia</th>
-                        <th style="text-align:right;font-size:0.75rem;padding:6px 8px;min-width:95px">Cuota Pactada</th>
+                        <th style="text-align:right;font-size:0.75rem;padding:6px 8px;min-width:105px">Cuota Pactada (Sin IGV)</th>
                         <th style="text-align:center;font-size:0.8rem;padding:8px 10px;min-width:260px;background:rgba(242,139,168,0.12);color:var(--primary)">
-                            📅 ${selMonthName} ${state.matrixYear}${isCurYear && mSel === curMonth ? ' <span style="font-size:0.68rem;color:var(--accent);display:inline-block;margin-left:4px">(Mes Actual)</span>' : ''}
+                            📅 ${selMonthName} ${state.matrixYear} (Sin IGV)${isCurYear && mSel === curMonth ? ' <span style="font-size:0.68rem;color:var(--accent);display:inline-block;margin-left:4px">(Mes Actual)</span>' : ''}
                         </th>
-                        <th style="text-align:right;font-size:0.75rem;min-width:105px;padding:6px 8px">Facturado Mes</th>
-                        <th style="text-align:center;font-size:0.75rem;min-width:85px;padding:6px 6px">Diferencia</th>
-                        <th style="text-align:center;font-size:0.75rem;min-width:95px;padding:6px 6px">Acción</th>
+                        <th style="text-align:right;font-size:0.75rem;min-width:115px;padding:6px 8px">Facturado Mes (Sin IGV)</th>
+                        <th style="text-align:center;font-size:0.75rem;min-width:90px;padding:6px 6px">Diferencia</th>
+                        <th style="text-align:center;font-size:0.75rem;min-width:115px;padding:6px 6px">Acciones</th>
                     </tr>
                 </thead>
                 <tbody>`;
@@ -1437,8 +1464,9 @@ async function renderWorkMatrix(el) {
                 empTotalCuota += fee;
                 singleMonthExpectedTotal += fee;
 
+                // STRICTLY use x.amount (Sin IGV)
                 const invs = invMap[s.id + '-' + mSel] || [];
-                const mTot = invs.reduce((sum, x) => sum + (x.total || 0), 0);
+                const mTot = invs.reduce((sum, x) => sum + (x.amount || 0), 0);
                 empMonthBilled += mTot;
                 singleMonthBilledTotal += mTot;
 
@@ -1467,7 +1495,7 @@ async function renderWorkMatrix(el) {
                     ${empTotalCuota > 0 ? `S/ ${fmtMoney(empTotalCuota)}` : '—'}
                 </td>
                 <td style="text-align:center;padding:6px 8px">
-                    ${empMonthBilled > 0 ? `<div style="font-family:monospace;font-weight:700;font-size:0.85rem;color:var(--accent)">S/ ${fmtMoney(empMonthBilled)}</div>` : ''}
+                    ${empMonthBilled > 0 ? `<div style="font-family:monospace;font-weight:700;font-size:0.85rem;color:var(--accent)">S/ ${fmtMoney(empMonthBilled)} <span style="font-size:0.68rem;color:var(--text-muted);font-weight:normal">(sin IGV)</span></div>` : ''}
                     ${empMonthPendingOcs > 0 ? `<div style="font-size:0.72rem;color:#b45309;font-weight:700">⏳ ${empMonthPendingOcs} OC por facturar</div>` : ''}
                     ${empMonthBilled === 0 && empMonthPendingOcs === 0 ? '<span style="color:var(--text-muted);font-size:0.75rem">Sin movimiento en este mes</span>' : ''}
                 </td>
@@ -1493,7 +1521,9 @@ async function renderWorkMatrix(el) {
                     const per = s.periodicity || 'mensual';
                     const cellInvs = invMap[s.id + '-' + mSel] || [];
                     const cellOcs = ocMap[s.id + '-' + mSel] || [];
-                    const monthTotal = cellInvs.reduce((acc, x) => acc + (x.total || 0), 0);
+                    // STRICTLY use x.amount (Sin IGV)
+                    const monthAmount = cellInvs.reduce((acc, x) => acc + (x.amount || 0), 0);
+                    const monthTotalConIgv = cellInvs.reduce((acc, x) => acc + (x.total || 0), 0);
 
                     const isCellMatched = searchVal && (
                         cellOcs.some(o => o.oc_number.toLowerCase().includes(searchVal)) ||
@@ -1508,7 +1538,7 @@ async function renderWorkMatrix(el) {
                         const inv = cellInvs[0];
                         cellContent = `<div class="matrix-cell-invoiced ${isCellMatched ? 'matrix-cell-highlight' : ''}" style="padding:6px 10px;text-align:left;display:flex;justify-content:space-between;align-items:center" onclick="showInvoiceForm(${inv.id})">
                             <div>
-                                <div style="font-family:monospace;font-weight:700;font-size:0.85rem;color:var(--accent)">S/ ${fmtMoney(monthTotal)}</div>
+                                <div style="font-family:monospace;font-weight:700;font-size:0.85rem;color:var(--accent)">S/ ${fmtMoney(monthAmount)}</div>
                                 <div style="font-size:0.72rem;color:var(--text-muted)">Factura: <strong>${esc(inv.series)}-${esc(inv.number)}</strong></div>
                             </div>
                             <div style="text-align:right">
@@ -1535,11 +1565,11 @@ async function renderWorkMatrix(el) {
                         const ocDisp = inv.purchase_order;
                         cellContent = `<div class="matrix-cell-invoiced ${isCellMatched ? 'matrix-cell-highlight' : ''}" style="padding:6px 10px;text-align:left;display:flex;justify-content:space-between;align-items:center" onclick="showInvoiceForm(${inv.id})">
                             <div>
-                                <div style="font-family:monospace;font-weight:700;font-size:0.85rem;color:var(--accent)">S/ ${fmtMoney(monthTotal)}</div>
+                                <div style="font-family:monospace;font-weight:700;font-size:0.85rem;color:var(--accent)">S/ ${fmtMoney(monthAmount)}</div>
                                 <div style="font-size:0.72rem;color:var(--text-muted)">F: <strong>${esc(inv.series)}-${esc(inv.number)}</strong></div>
                             </div>
                             <div style="text-align:right">
-                                ${ocDisp ? `<span class="tag tag-gold" style="font-size:0.72rem">OC ${esc(ocDisp)}</span>` : '<span class="tag tag-sage" style="font-size:0.68rem">✓ Emitida</span>'}
+                                ${ocDisp ? `<span class="tag tag-gold" style="font-size:0.72rem">OC ${esc(ocDisp)}</span>` : '<span style="font-size:0.68rem;color:#10b981;font-weight:700">✓ Facturado</span>'}
                             </div>
                         </div>`;
                         actionButton = `<button class="btn btn-ghost btn-sm" style="font-size:0.75rem;padding:3px 8px" onclick="showInvoiceForm(${inv.id})">✎ Factura</button>`;
@@ -1550,31 +1580,36 @@ async function renderWorkMatrix(el) {
                         actionButton = `<button class="btn btn-ghost btn-sm" style="font-size:0.72rem;padding:3px 8px" onclick="showPurchaseOrderModal(null, ${s.id}, ${s.client_id}, ${mSel}, ${state.matrixYear})">+ OC</button>`;
                     }
 
-                    const diffSite = monthTotal - fee;
+                    // Compare Sin IGV against Sin IGV
+                    const diffSite = monthAmount - fee;
                     const diffCls = diffSite >= 0 ? 'tag-sage' : 'tag-rose';
 
                     html += `<tr class="matrix-site-row">
                         <td class="matrix-sticky-col matrix-site-indent">
-                            <div style="font-weight:600;font-size:0.82rem">${esc(s.nombre_cliente)}</div>
+                            <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
+                                <div style="font-weight:600;font-size:0.82rem;cursor:pointer" onclick="showEditSiteModal(${s.id})" title="Clic para editar sede, frecuencia y cuota pactada">
+                                    ${esc(s.nombre_cliente)} <span style="font-size:0.75rem;color:var(--primary);opacity:0.8">✏️</span>
+                                </div>
+                            </div>
                             <div style="font-size:0.72rem;color:var(--text-muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap">
                                 <span>${esc(s.servicios || 'Servicio')}</span>
                                 ${s.location_code ? `<span class="tag tag-ghost" style="padding:0 4px;font-size:0.65rem">Loc: ${esc(s.location_code)}</span>` : ''}
                             </div>
                         </td>
-                        <td style="text-align:center;padding:4px 6px">
+                        <td style="text-align:center;padding:4px 6px;cursor:pointer" onclick="showEditSiteModal(${s.id})" title="Clic para cambiar frecuencia">
                             <span class="tag-periodicity-${per}">${per}</span>
                         </td>
-                        <td style="text-align:right;font-family:monospace;font-size:0.8rem;font-weight:600;padding:6px 8px">
-                            ${fee > 0 ? `S/ ${fmtMoney(fee)}` : '—'}
+                        <td style="text-align:right;font-family:monospace;font-size:0.8rem;font-weight:600;padding:6px 8px;cursor:pointer" onclick="showEditSiteModal(${s.id})" title="Clic para modificar cuota pactada">
+                            ${fee > 0 ? `S/ ${fmtMoney(fee)}` : '—'} <span style="font-size:0.7rem;color:var(--text-muted)">✏️</span>
                         </td>
                         <td style="padding:4px 6px">
                             ${cellContent}
                         </td>
                         <td style="text-align:right;font-family:monospace;font-weight:700;font-size:0.82rem;padding:6px 8px">
-                            ${monthTotal > 0 ? `S/ ${fmtMoney(monthTotal)}` : '—'}
+                            ${monthAmount > 0 ? `S/ ${fmtMoney(monthAmount)}` : '—'}
                         </td>
                         <td style="text-align:center;padding:6px 4px">
-                            ${(fee > 0 || monthTotal > 0) ? `
+                            ${(fee > 0 || monthAmount > 0) ? `
                                 <span class="tag ${diffCls}" style="font-size:0.7rem;padding:2px 6px">
                                     ${diffSite >= 0 ? '+' : ''}${fmtMoney(diffSite)}
                                 </span>
@@ -1582,6 +1617,7 @@ async function renderWorkMatrix(el) {
                         </td>
                         <td style="text-align:center;padding:6px 4px;white-space:nowrap">
                             ${actionButton}
+                            <button class="btn btn-ghost btn-sm" style="font-size:0.72rem;padding:3px 6px;margin-left:2px" onclick="showEditSiteModal(${s.id})" title="Editar cuota y frecuencia de esta sede">✏️ Sede</button>
                         </td>
                     </tr>`;
                 }
@@ -1593,7 +1629,7 @@ async function renderWorkMatrix(el) {
         html += `</tbody>
                 <tfoot style="position:sticky;bottom:0;background:var(--bg-card);font-weight:700;z-index:3;border-top:2px solid var(--border-light)">
                     <tr>
-                        <td class="matrix-sticky-col" style="font-weight:700;font-size:0.82rem">Totales ${selMonthName} ${state.matrixYear}</td>
+                        <td class="matrix-sticky-col" style="font-weight:700;font-size:0.82rem">Totales ${selMonthName} ${state.matrixYear} (Sin IGV)</td>
                         <td style="text-align:center">-</td>
                         <td style="text-align:right;font-family:monospace;font-size:0.8rem">S/ ${fmtMoney(singleMonthExpectedTotal)}</td>
                         <td style="text-align:center;font-family:monospace;font-size:0.82rem;padding:8px;background:rgba(242,139,168,0.1);color:var(--primary)">
@@ -1613,14 +1649,14 @@ async function renderWorkMatrix(el) {
             </table>
         </div>`;
     } else {
-        // ================= 12-MONTH FULL MATRIX =================
+        // ================= 12-MONTH FULL MATRIX (EXCLUSIVELY SIN IGV) =================
         html += `<div class="table-wrap" style="overflow-x:auto;max-height:680px">
             <table class="matrix-table">
                 <thead style="position:sticky;top:0;background:var(--bg-card);z-index:4">
                     <tr>
                         <th class="matrix-sticky-col">Empresa / Sede / Servicio</th>
                         <th style="text-align:center;font-size:0.75rem;padding:6px 6px">Frecuencia</th>
-                        <th style="text-align:right;font-size:0.75rem;padding:6px 8px;min-width:90px">Cuota Pactada</th>`;
+                        <th style="text-align:right;font-size:0.75rem;padding:6px 8px;min-width:105px">Cuota (Sin IGV)</th>`;
 
         for (let m = 1; m <= 12; m++) {
             const isThisMonth = isCurYear && m === curMonth;
@@ -1629,8 +1665,8 @@ async function renderWorkMatrix(el) {
         }
 
         html += `
-                        <th style="text-align:right;font-size:0.75rem;min-width:95px;padding:6px 8px">Total ${state.matrixYear}</th>
-                        <th style="text-align:center;font-size:0.75rem;min-width:75px;padding:6px 6px">Diferencia</th>
+                        <th style="text-align:right;font-size:0.75rem;min-width:100px;padding:6px 8px">Total Sin IGV</th>
+                        <th style="text-align:center;font-size:0.75rem;min-width:80px;padding:6px 6px">Diferencia</th>
                     </tr>
                 </thead>
                 <tbody>`;
@@ -1654,7 +1690,8 @@ async function renderWorkMatrix(el) {
                 empTotalCuota += (parseFloat(s.monthly_fee) || 0);
                 for (let m = 1; m <= 12; m++) {
                     const invs = invMap[s.id + '-' + m] || [];
-                    const mTot = invs.reduce((sum, x) => sum + (x.total || 0), 0);
+                    // STRICTLY use x.amount (Sin IGV)
+                    const mTot = invs.reduce((sum, x) => sum + (x.amount || 0), 0);
                     empMonthTotals[m] += mTot;
                     empAnnualInvoiced += mTot;
                     monthTotals[m] += mTot;
@@ -1714,26 +1751,31 @@ async function renderWorkMatrix(el) {
 
                     html += `<tr class="matrix-site-row">
                         <td class="matrix-sticky-col matrix-site-indent">
-                            <div style="font-weight:600;font-size:0.82rem">${esc(s.nombre_cliente)}</div>
+                            <div style="display:flex;align-items:center;justify-content:space-between;gap:6px">
+                                <div style="font-weight:600;font-size:0.82rem;cursor:pointer" onclick="showEditSiteModal(${s.id})" title="Clic para editar sede, frecuencia y cuota pactada">
+                                    ${esc(s.nombre_cliente)} <span style="font-size:0.75rem;color:var(--primary);opacity:0.8">✏️</span>
+                                </div>
+                            </div>
                             <div style="font-size:0.72rem;color:var(--text-muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap">
                                 <span>${esc(s.servicios || 'Servicio')}</span>
                                 ${s.location_code ? `<span class="tag tag-ghost" style="padding:0 4px;font-size:0.65rem">Loc: ${esc(s.location_code)}</span>` : ''}
                             </div>
                         </td>
-                        <td style="text-align:center;padding:4px 6px">
+                        <td style="text-align:center;padding:4px 6px;cursor:pointer" onclick="showEditSiteModal(${s.id})" title="Clic para cambiar frecuencia">
                             <span class="tag-periodicity-${per}">${per}</span>
                         </td>
-                        <td style="text-align:right;font-family:monospace;font-size:0.8rem;font-weight:600;padding:6px 8px">
-                            ${fee > 0 ? `S/ ${fmtMoney(fee)}` : '—'}
+                        <td style="text-align:right;font-family:monospace;font-size:0.8rem;font-weight:600;padding:6px 8px;cursor:pointer" onclick="showEditSiteModal(${s.id})" title="Clic para modificar cuota pactada">
+                            ${fee > 0 ? `S/ ${fmtMoney(fee)}` : '—'} <span style="font-size:0.7rem;color:var(--text-muted)">✏️</span>
                         </td>`;
 
                     for (let m = 1; m <= 12; m++) {
                         const cellInvs = invMap[s.id + '-' + m] || [];
                         const cellOcs = ocMap[s.id + '-' + m] || [];
-                        const monthTotal = cellInvs.reduce((acc, x) => acc + (x.total || 0), 0);
+                        // STRICTLY use x.amount (Sin IGV)
+                        const monthAmount = cellInvs.reduce((acc, x) => acc + (x.amount || 0), 0);
 
                         if (cellInvs.length > 0) {
-                            siteInvoicedSum += monthTotal;
+                            siteInvoicedSum += monthAmount;
                             siteBilledMonths++;
                         }
 
@@ -1747,8 +1789,8 @@ async function renderWorkMatrix(el) {
                         if (cellInvs.length > 0 && cellOcs.length > 0) {
                             const po = cellOcs[0];
                             const inv = cellInvs[0];
-                            html += `<div class="matrix-cell-invoiced ${isCellMatched ? 'matrix-cell-highlight' : ''}" onclick="showInvoiceForm(${inv.id})" title="Factura emitida S/ ${fmtMoney(monthTotal)} - OC: ${esc(po.oc_number)}">
-                                <div style="font-family:monospace;font-weight:700;font-size:0.76rem;color:var(--accent)">S/ ${fmtMoney(monthTotal)}</div>
+                            html += `<div class="matrix-cell-invoiced ${isCellMatched ? 'matrix-cell-highlight' : ''}" onclick="showInvoiceForm(${inv.id})" title="Factura emitida S/ ${fmtMoney(monthAmount)} (sin IGV) - OC: ${esc(po.oc_number)}">
+                                <div style="font-family:monospace;font-weight:700;font-size:0.76rem;color:var(--accent)">S/ ${fmtMoney(monthAmount)}</div>
                                 <div style="font-size:0.65rem;color:var(--text-muted)">F: ${esc(inv.series)}-${esc(inv.number)}</div>
                                 <div style="font-size:0.68rem;font-weight:700;color:#d97706;margin-top:2px" onclick="event.stopPropagation(); showOcItemsModal(${po.id})" title="Clic para ver detalle de OC">OC ${esc(po.oc_number)}</div>
                             </div>`;
@@ -1761,8 +1803,8 @@ async function renderWorkMatrix(el) {
                         } else if (cellInvs.length > 0) {
                             const inv = cellInvs[0];
                             const ocDisp = inv.purchase_order;
-                            html += `<div class="matrix-cell-invoiced ${isCellMatched ? 'matrix-cell-highlight' : ''}" onclick="showInvoiceForm(${inv.id})" title="Factura emitida S/ ${fmtMoney(monthTotal)}">
-                                <div style="font-family:monospace;font-weight:700;font-size:0.76rem;color:var(--accent)">S/ ${fmtMoney(monthTotal)}</div>
+                            html += `<div class="matrix-cell-invoiced ${isCellMatched ? 'matrix-cell-highlight' : ''}" onclick="showInvoiceForm(${inv.id})" title="Factura emitida S/ ${fmtMoney(monthAmount)} (sin IGV)">
+                                <div style="font-family:monospace;font-weight:700;font-size:0.76rem;color:var(--accent)">S/ ${fmtMoney(monthAmount)}</div>
                                 <div style="font-size:0.65rem;color:var(--text-muted)">F: ${esc(inv.series)}-${esc(inv.number)}</div>
                                 ${ocDisp ? `<div style="font-size:0.65rem;color:#f59e0b;font-weight:700">OC ${esc(ocDisp)}</div>` : ''}
                             </div>`;
@@ -1773,6 +1815,7 @@ async function renderWorkMatrix(el) {
                         html += `</td>`;
                     }
 
+                    // Compare Sin IGV against Sin IGV
                     const expectedSum = fee * (siteBilledMonths || 1);
                     const diff = siteInvoicedSum - expectedSum;
                     const diffCls = diff >= 0 ? 'tag-sage' : 'tag-rose';
@@ -1782,7 +1825,7 @@ async function renderWorkMatrix(el) {
                             S/ ${fmtMoney(siteInvoicedSum)}
                         </td>
                         <td style="text-align:center;padding:6px 4px">
-                            <span class="tag ${diffCls}" style="font-size:0.7rem;padding:2px 6px" title="vs cuota pactada de meses facturados">
+                            <span class="tag ${diffCls}" style="font-size:0.7rem;padding:2px 6px" title="vs cuota pactada sin IGV">
                                 ${diff >= 0 ? '+' : ''}${fmtMoney(diff)}
                             </span>
                         </td>
@@ -1794,7 +1837,7 @@ async function renderWorkMatrix(el) {
         html += `</tbody>
                 <tfoot style="position:sticky;bottom:0;background:var(--bg-card);font-weight:700;z-index:3;border-top:2px solid var(--border-light)">
                     <tr>
-                        <td class="matrix-sticky-col" style="font-weight:700;font-size:0.82rem">Totales Mensuales</td>
+                        <td class="matrix-sticky-col" style="font-weight:700;font-size:0.82rem">Totales Mensuales (Sin IGV)</td>
                         <td style="text-align:center">-</td>
                         <td style="text-align:right;font-family:monospace;font-size:0.8rem">-</td>`;
 
@@ -1818,33 +1861,32 @@ async function renderWorkMatrix(el) {
 
     // Section 2: Purchase Orders Table for the Selected Period
     const filteredOrders = orders.filter(o => {
-        // Status filter
         if (state.matrixOcStatusFilter === 'pending' && o.status !== 'pending') return false;
         if (state.matrixOcStatusFilter === 'invoiced' && o.status !== 'invoiced') return false;
-        // Periodicity filter
         if (state.matrixOcPeriodicityFilter === 'mensual' && (o.periodicity || 'mensual') !== 'mensual') return false;
         if (state.matrixOcPeriodicityFilter === 'bimensual' && o.periodicity !== 'bimensual') return false;
         if (state.matrixOcPeriodicityFilter === 'eventual' && o.periodicity !== 'eventual') return false;
-        // Month filter
         if (state.matrixOcMonthFilter !== 'all' && String(o.month) !== String(state.matrixOcMonthFilter)) return false;
-        // Search term
         if (state.matrixOcSearch) {
-            const q = state.matrixOcSearch.toLowerCase().trim();
-            const str = `${o.oc_number} ${o.empresa || ''} ${o.site_name || ''} ${o.centro_logistico || ''} ${o.notes || ''}`.toLowerCase();
-            if (!str.includes(q)) return false;
+            const q = state.matrixOcSearch.toLowerCase();
+            const hit = (o.oc_number || '').toLowerCase().includes(q) ||
+                        (o.empresa || '').toLowerCase().includes(q) ||
+                        (o.site_name || '').toLowerCase().includes(q) ||
+                        (o.notes || '').toLowerCase().includes(q);
+            if (!hit) return false;
         }
         return true;
     });
 
     html += `
-    <div class="card">
+    <div class="card" style="margin-bottom:24px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
             <div>
                 <div style="font-weight:700;font-size:1rem;display:flex;align-items:center;gap:8px">
                     📋 Órdenes de Compra (OC) Registradas — Año ${state.matrixYear}${isSingleMonth ? ` (${selMonthName})` : ''}
                     <span class="tag tag-ghost">${filteredOrders.length} ${filteredOrders.length === 1 ? 'orden' : 'órdenes'}</span>
                 </div>
-                <div style="font-size:0.78rem;color:var(--text-muted)">Desglose de posiciones, frecuencias y enlace directo a la calculadora SUNAT</div>
+                <div style="font-size:0.78rem;color:var(--text-muted)">Montos de OCs pactados Sin IGV con enlace directo para emitir a la calculadora SUNAT</div>
             </div>
             <button class="btn btn-primary btn-sm" onclick="showPurchaseOrderModal()">+ Nueva OC</button>
         </div>
@@ -1953,6 +1995,108 @@ async function renderWorkMatrix(el) {
 
     el.innerHTML = html;
 }
+
+// Modal para editar manualmente Sede, Cuota Pactada y Frecuencia
+async function showEditSiteModal(siteId) {
+    const site = await api(eel.get_client_site, siteId);
+    if (!site) { showToast('No se encontró la sede seleccionada'); return; }
+
+    const perOpts = [
+        { id: 'mensual', label: '🔄 Mensual (todos los meses)' },
+        { id: 'bimensual', label: '🔁 Bimensual (cada 2 meses)' },
+        { id: 'trimestral', label: '🗓️ Trimestral (cada 3 meses)' },
+        { id: 'semestral', label: '📅 Semestral (cada 6 meses)' },
+        { id: 'anual', label: '📆 Anual (1 vez al año)' },
+        { id: 'eventual', label: '⚡ Eventual / A Demanda' }
+    ].map(p => `<option value="${p.id}"${(site.periodicity || 'mensual') === p.id ? ' selected' : ''}>${p.label}</option>`).join('');
+
+    const html = `
+    <form id="editSiteForm" onsubmit="return false;">
+        <div style="background:var(--bg-card);border:1px solid var(--border-light);border-radius:8px;padding:12px 16px;margin-bottom:16px">
+            <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;font-weight:700">Empresa / Razón Social</div>
+            <div style="font-size:1.05rem;font-weight:700;color:var(--primary);margin-top:2px">${esc(site.business_name || 'Cliente')} ${site.ruc ? `· RUC ${esc(site.ruc)}` : ''}</div>
+        </div>
+        <div class="form-row">
+            <div class="form-group" style="flex:2">
+                <label>Nombre de la Sede / Identificador *</label>
+                <input class="form-control" name="nombre_cliente" value="${esc(site.nombre_cliente || '')}" required placeholder="Ej. SUR COLOR STAR - SEDE PRINCIPAL">
+            </div>
+            <div class="form-group" style="flex:1">
+                <label>Nombre Corto / Sucursal</label>
+                <input class="form-control" name="sede_cliente" value="${esc(site.sede_cliente || '')}" placeholder="Ej. SEDE PRINCIPAL">
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Servicio Realizado *</label>
+            <input class="form-control" name="servicios" value="${esc(site.servicios || '')}" placeholder="Ej. MIP / Control de Plagas, Control Aviar, etc.">
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Frecuencia / Periodicidad *</label>
+                <select class="form-control" name="periodicity" style="font-weight:600">
+                    ${perOpts}
+                </select>
+                <div style="font-size:0.72rem;color:var(--text-muted);margin-top:3px">Determina los meses proyectados en la matriz</div>
+            </div>
+            <div class="form-group">
+                <label>Cuota Pactada Sin IGV (S/) *</label>
+                <div style="position:relative">
+                    <span style="position:absolute;left:10px;top:8px;font-weight:700;color:var(--text-muted)">S/</span>
+                    <input type="number" step="0.01" min="0" class="form-control" style="padding-left:32px;font-family:monospace;font-weight:700;font-size:0.95rem" name="monthly_fee" value="${(parseFloat(site.monthly_fee) || 0).toFixed(2)}" required>
+                </div>
+                <div style="font-size:0.72rem;color:var(--accent);margin-top:3px;font-weight:600">✓ Monto base imponible sin 18% IGV</div>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Código de Ubicación (Loc)</label>
+                <input class="form-control" name="location_code" value="${esc(site.location_code || '')}" placeholder="Ej. 84">
+            </div>
+            <div class="form-group">
+                <label>Centro Logístico</label>
+                <input class="form-control" name="centro_logistico" value="${esc(site.centro_logistico || '')}" placeholder="Ej. LIMA SUR">
+            </div>
+        </div>
+        <div class="form-group">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                <input type="checkbox" name="is_regular" value="1"${site.is_regular ? ' checked' : ''}>
+                <span style="font-weight:600">Mostrar como sede regular en la Matriz de Facturación</span>
+            </label>
+        </div>
+    </form>`;
+
+    openModal('Editar Sede / Parámetros de Facturación', html);
+
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('editSiteForm'));
+        const updateData = {
+            nombre_cliente: (f.get('nombre_cliente') || '').trim(),
+            sede_cliente: (f.get('sede_cliente') || '').trim() || (f.get('nombre_cliente') || '').trim(),
+            servicios: (f.get('servicios') || '').trim(),
+            periodicity: f.get('periodicity'),
+            monthly_fee: parseFloat(f.get('monthly_fee')) || 0,
+            location_code: (f.get('location_code') || '').trim(),
+            centro_logistico: (f.get('centro_logistico') || '').trim(),
+            is_regular: f.get('is_regular') ? 1 : 0
+        };
+
+        if (!updateData.nombre_cliente) {
+            showToast('El nombre de la sede es obligatorio');
+            return;
+        }
+
+        const res = await api(eel.update_client_site, siteId, updateData);
+        if (res && res.ok) {
+            showToast('✓ Sede y parámetros actualizados');
+            closeModal();
+            const workView = document.getElementById('view-work');
+            if (workView) renderWorkMatrix(workView);
+        } else {
+            showToast(res && res.error ? res.error : 'Error al guardar');
+        }
+    };
+}
+
 
 function changeMatrixYear(year) {
     state.matrixYear = parseInt(year) || 2026;
@@ -2668,159 +2812,255 @@ function fmtMoney(n) {
 function showInvoiceForm(id) {
     if (id) {
         api(eel.get_invoices).then(invs => {
-            const i = invs.find(x => x.id === id);
+            const i = (invs || []).find(x => x.id === id);
             if (i) showInvoiceModal(i);
         });
     } else showInvoiceModal(null);
 }
 
 function showInvoiceModal(inv) {
-    api(eel.get_client_sites_grouped).then(sites => {
+    Promise.all([
+        api(eel.get_client_sites_grouped),
+        api(eel.get_clients)
+    ]).then(([sites, clients]) => {
         sites = sites || [];
-        api(eel.get_clients).then(clients => {
-            clients = clients || [];
-            const siteOpts = '<option value="">— Sin sede específica —</option>' + sites.map(s =>
-                '<option value="'+s.id+'" data-fee="'+(s.monthly_fee||0)+'" data-service="'+esc(s.servicios||'')+'" data-loc="'+esc(s.location_code||'')+'" data-client-id="'+s.client_id+'"'+(inv && inv.client_site_id === s.id ? ' selected' : '')+'>'+
-                esc((s.empresa||'')+' - '+s.nombre_cliente)+'</option>'
+        clients = clients || [];
+
+        const today = todayStr();
+        const defClientId = inv ? inv.client_id : (clients[0]?.id || '');
+        const defSiteId = inv ? inv.client_site_id : '';
+        const defSeries = inv ? (inv.series || 'E001') : 'E001';
+        const defNumber = inv ? (inv.number || '') : '';
+        const defOc = inv ? (inv.purchase_order || '') : '';
+        const defLoc = inv ? (inv.location_code || '') : '';
+        const defService = inv ? (inv.service || 'Servicio de Saneamiento y Manejo Integrado de Plagas') : 'Servicio de Saneamiento y Manejo Integrado de Plagas';
+        const defAmount = inv ? (inv.amount || 0) : '';
+        const defTotal = inv ? (inv.total || 0) : '';
+        const defIssueDate = inv ? inv.issue_date : today;
+        let defDueDate = inv ? (inv.due_date || '') : '';
+        if (!defDueDate && defIssueDate) {
+            try {
+                const d = new Date(defIssueDate + 'T12:00:00');
+                d.setDate(d.getDate() + 30);
+                defDueDate = d.toISOString().split('T')[0];
+            } catch(e) {}
+        }
+
+        const clientOpts = clients.map(c =>
+            `<option value="${c.id}"${defClientId == c.id ? ' selected' : ''}>${esc(c.business_name)} (${esc(c.ruc || '')})</option>`
+        ).join('');
+
+        function buildSiteOpts(cid, selectedSiteId) {
+            const clientSites = sites.filter(s => !cid || String(s.client_id) === String(cid));
+            let opts = '<option value="">— Sin sede específica —</option>';
+            opts += clientSites.map(s =>
+                `<option value="${s.id}" data-fee="${s.monthly_fee || 0}" data-service="${esc(s.servicios || '')}" data-loc="${esc(s.location_code || '')}" data-client-id="${s.client_id}"${selectedSiteId == s.id ? ' selected' : ''}>
+                    ${esc(s.nombre_cliente)} (Cuota: S/ ${fmtMoney(s.monthly_fee || 0)})
+                </option>`
             ).join('');
+            return opts;
+        }
 
-            const clientOpts = clients.map(c =>
-                '<option value="'+c.id+'"'+(inv && inv.client_id === c.id ? ' selected' : '')+'>'+esc(c.business_name)+' ('+esc(c.ruc||'')+')</option>'
-            ).join('');
-
-            const today = todayStr();
-            const defSeries = inv ? (inv.series || 'E001') : 'E001';
-            const defNumber = inv ? (inv.number || '') : '';
-            const defOc = inv ? (inv.purchase_order || '') : '';
-            const defLoc = inv ? (inv.location_code || '') : '';
-            const defService = inv ? (inv.service || 'SERV CONTROL DE PLAGAS') : 'SERV CONTROL DE PLAGAS';
-            const defAmount = inv ? (inv.amount || 0) : '';
-            const defIgv = inv ? (inv.igv || 0) : '';
-            const defTotal = inv ? (inv.total || 0) : '';
-            const defDetr = inv ? (inv.detraccion || 0) : '';
-            const defCred = inv ? (inv.credito || 0) : '';
-
-            const html = `
-            <form id="modalForm">
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Empresa *</label>
-                        <select class="form-control" name="client_id" id="modalInvClientId">${clientOpts}</select>
-                    </div>
-                    <div class="form-group">
-                        <label>Sede vinculada</label>
-                        <select class="form-control" name="client_site_id" id="modalInvSiteId" onchange="onModalSiteChange(this)">${siteOpts}</select>
-                    </div>
+        const html = `
+        <form id="modalForm" onsubmit="return false;">
+            <div class="form-row">
+                <div class="form-group" style="flex:1.2">
+                    <label>Empresa / Cliente *</label>
+                    <select class="form-control" name="client_id" id="modalInvClientId" onchange="onModalInvoiceClientChange(this)">${clientOpts}</select>
                 </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Serie</label>
-                        <input class="form-control" name="series" value="${esc(defSeries)}" placeholder="Ej. E001 o F001">
-                    </div>
-                    <div class="form-group">
-                        <label>Número</label>
-                        <input class="form-control" name="number" value="${esc(defNumber)}" placeholder="Ej. 1845">
-                    </div>
-                    <div class="form-group">
-                        <label>Orden de Compra (OC)</label>
-                        <input class="form-control" name="purchase_order" id="modalInvOc" value="${esc(defOc)}" placeholder="Ej. 4501201335">
-                    </div>
-                    <div class="form-group" style="max-width:110px">
-                        <label>Ubicación</label>
-                        <input class="form-control" name="location_code" id="modalInvLoc" value="${esc(defLoc)}" placeholder="Ej. 84">
-                    </div>
+                <div class="form-group" style="flex:1.2">
+                    <label>Sede Vinculada</label>
+                    <select class="form-control" name="client_site_id" id="modalInvSiteId" onchange="onModalInvoiceSiteChange(this)">
+                        ${buildSiteOpts(defClientId, defSiteId)}
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group" style="max-width:90px">
+                    <label>Serie</label>
+                    <input class="form-control" name="series" id="modalInvSeries" value="${esc(defSeries)}" placeholder="E001">
+                </div>
+                <div class="form-group" style="max-width:130px">
+                    <label>Número *</label>
+                    <input class="form-control" name="number" id="modalInvNumber" value="${esc(defNumber)}" placeholder="Ej. 1400" required>
                 </div>
                 <div class="form-group">
-                    <label>Detalle del Servicio *</label>
-                    <input class="form-control" name="service" id="modalInvService" value="${esc(defService)}" placeholder="Ej. SERV CONTROL DE PLAGAS">
+                    <label>Orden de Compra (OC)</label>
+                    <input class="form-control" name="purchase_order" id="modalInvOc" value="${esc(defOc)}" placeholder="Ej. 4501201335">
                 </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Monto Sin IGV (S/) *</label>
-                        <input type="number" step="0.01" class="form-control" name="amount" id="modalInvAmount" value="${defAmount}" oninput="recalcModalInvoice()" placeholder="0.00">
-                    </div>
-                    <div class="form-group">
-                        <label>IGV (18%) (S/)</label>
-                        <input type="number" step="0.01" class="form-control" name="igv" id="modalInvIgv" value="${defIgv}">
-                    </div>
-                    <div class="form-group">
-                        <label>Monto Total (S/)</label>
-                        <input type="number" step="0.01" class="form-control" name="total" id="modalInvTotal" value="${defTotal}" oninput="recalcModalFromTotal()">
-                    </div>
+                <div class="form-group" style="max-width:100px">
+                    <label>Ubicación</label>
+                    <input class="form-control" name="location_code" id="modalInvLoc" value="${esc(defLoc)}" placeholder="Ej. 84">
                 </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Detracción SPOT (12%) (S/)</label>
-                        <input type="number" step="0.01" class="form-control" name="detraccion" id="modalInvDetr" value="${defDetr}">
-                    </div>
-                    <div class="form-group">
-                        <label>Crédito Neto (S/)</label>
-                        <input type="number" step="0.01" class="form-control" name="credito" id="modalInvCred" value="${defCred}">
-                    </div>
-                    <div class="form-group">
-                        <label>Tipo de Pago</label>
-                        <select class="form-control" name="payment_type">
-                            <option value="credito"${(!inv || inv.payment_type === 'credito') ? ' selected' : ''}>Crédito</option>
-                            <option value="contado"${(inv && inv.payment_type === 'contado') ? ' selected' : ''}>Contado</option>
-                        </select>
-                    </div>
-                </div>
-                <div id="modalSonLetras" class="son-letras-box" style="margin-bottom:14px;display:none"></div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Emisión</label>
-                        <input type="date" class="form-control" name="issue_date" id="modalInvIssueDate" value="${inv ? inv.issue_date : today}">
-                    </div>
-                    <div class="form-group">
-                        <label>Vencimiento</label>
-                        <input type="date" class="form-control" name="due_date" value="${inv ? (inv.due_date||'') : ''}">
-                    </div>
-                    <div class="form-group">
-                        <label>Estado</label>
-                        <select class="form-control" name="status">
-                            <option value="issued"${(!inv || inv.status === 'issued') ? ' selected' : ''}>Emitida</option>
-                            <option value="paid"${(inv && inv.status === 'paid') ? ' selected' : ''}>Pagada</option>
-                            <option value="overdue"${(inv && inv.status === 'overdue') ? ' selected' : ''}>Vencida</option>
-                        </select>
-                    </div>
-                </div>
-            </form>`;
+            </div>
 
-            openModal(inv ? 'Editar Factura' : 'Nueva Factura', html);
-            if (defTotal > 0) recalcModalInvoice();
+            <div class="form-group">
+                <label>Detalle del Servicio Facturado *</label>
+                <input class="form-control" name="service" id="modalInvService" value="${esc(defService)}" placeholder="Ej. Servicio de Saneamiento y Manejo Integrado de Plagas" required>
+            </div>
 
-            document.getElementById('modalSave').onclick = async () => {
-                const f = new FormData(document.getElementById('modalForm'));
-                const data = {
-                    client_id: parseInt(f.get('client_id')),
-                    client_site_id: f.get('client_site_id') ? parseInt(f.get('client_site_id')) : null,
-                    series: f.get('series') || 'E001',
-                    number: f.get('number'),
-                    purchase_order: f.get('purchase_order'),
-                    location_code: f.get('location_code'),
-                    service: f.get('service') || 'SERV CONTROL DE PLAGAS',
-                    amount: parseFloat(f.get('amount')) || 0,
-                    igv: parseFloat(f.get('igv')) || 0,
-                    total: parseFloat(f.get('total')) || 0,
-                    detraccion: parseFloat(f.get('detraccion')) || 0,
-                    credito: parseFloat(f.get('credito')) || 0,
-                    payment_type: f.get('payment_type') || 'credito',
-                    issue_date: f.get('issue_date'),
-                    due_date: f.get('due_date'),
-                    status: f.get('status') || 'issued'
-                };
-                if (!data.client_id) { showToast('Selecciona una empresa'); return; }
-                const res = inv ? await api(eel.update_invoice, inv.id, data) : await api(eel.create_invoice, data);
-                if (res && res.ok) { showToast(inv ? 'Factura actualizada' : 'Factura registrada'); closeModal(); navigate('work'); }
-                else showToast(res && res.error ? res.error : 'Error');
+            <!-- Auto-Calculator Station inside Invoice Modal -->
+            <div style="background:var(--bg-card);border:1px solid var(--border-light);border-radius:10px;padding:14px;margin:14px 0">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                    <span style="font-size:0.8rem;text-transform:uppercase;font-weight:700;color:var(--primary);letter-spacing:0.04em">
+                        💰 Cálculo de Montos & Impuestos (SUNAT)
+                    </span>
+                    <span style="font-size:0.75rem;color:var(--text-muted)">Cálculo automático 18% IGV + 12% Detracción SPOT</span>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group" style="flex:1">
+                        <label style="font-weight:700;color:var(--accent)">Monto Sin IGV (Base Imponible) S/ *</label>
+                        <div style="position:relative">
+                            <span style="position:absolute;left:10px;top:8px;font-weight:700;color:var(--text-muted)">S/</span>
+                            <input type="number" step="0.01" class="form-control" style="padding-left:32px;font-family:monospace;font-weight:700;font-size:1.05rem" name="amount" id="modalInvAmount" value="${defAmount}" oninput="recalcInvoiceModal('amount')" placeholder="0.00" required>
+                        </div>
+                        <div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px">Ingresa el valor neto pactado</div>
+                    </div>
+                    <div class="form-group" style="flex:1">
+                        <label style="font-weight:600">O Precio Final (Con IGV 18%) S/</label>
+                        <div style="position:relative">
+                            <span style="position:absolute;left:10px;top:8px;font-weight:700;color:var(--text-muted)">S/</span>
+                            <input type="number" step="0.01" class="form-control" style="padding-left:32px;font-family:monospace;font-size:1rem" name="total" id="modalInvTotal" value="${defTotal}" oninput="recalcInvoiceModal('total')" placeholder="0.00">
+                        </div>
+                        <div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px">Calcula la base dividiendo entre 1.18</div>
+                    </div>
+                </div>
+
+                <!-- Live Summary Badges Grid -->
+                <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(110px, 1fr));gap:8px;margin-top:10px;background:var(--bg-main);padding:10px;border-radius:8px;border:1px solid var(--border-light);text-align:center">
+                    <div>
+                        <div style="font-size:0.68rem;color:var(--text-muted);font-weight:700">SUBTOTAL (NETO)</div>
+                        <div style="font-family:monospace;font-weight:700;font-size:0.95rem;color:var(--accent)" id="boxModalSubtotal">S/ 0.00</div>
+                    </div>
+                    <div>
+                        <div style="font-size:0.68rem;color:var(--text-muted);font-weight:700">+ IGV (18%)</div>
+                        <div style="font-family:monospace;font-weight:700;font-size:0.95rem;color:var(--primary)" id="boxModalIgv">S/ 0.00</div>
+                    </div>
+                    <div>
+                        <div style="font-size:0.68rem;color:var(--text-muted);font-weight:700">= TOTAL FACTURA</div>
+                        <div style="font-family:monospace;font-weight:700;font-size:0.95rem;color:#ef4444" id="boxModalTotal">S/ 0.00</div>
+                    </div>
+                    <div>
+                        <div style="font-size:0.68rem;color:var(--text-muted);font-weight:700">- SPOT (12%)</div>
+                        <div style="font-family:monospace;font-weight:700;font-size:0.95rem;color:#f59e0b" id="boxModalDetr">S/ 0.00</div>
+                    </div>
+                    <div>
+                        <div style="font-size:0.68rem;color:var(--text-muted);font-weight:700">= NETO CRÉDITO</div>
+                        <div style="font-family:monospace;font-weight:700;font-size:0.95rem;color:#10b981" id="boxModalCred">S/ 0.00</div>
+                    </div>
+                </div>
+
+                <!-- Hidden values to preserve form submit structure -->
+                <input type="hidden" name="igv" id="modalInvIgv">
+                <input type="hidden" name="detraccion" id="modalInvDetr">
+                <input type="hidden" name="credito" id="modalInvCred">
+
+                <div id="modalSonLetras" class="son-letras-box" style="margin-top:10px;font-size:0.75rem;padding:6px 10px">CERO CON 00/100 SOLES</div>
+            </div>
+
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Tipo de Pago</label>
+                    <select class="form-control" name="payment_type" id="modalInvPaymentType" onchange="onModalPaymentTypeChange(this)">
+                        <option value="credito"${(!inv || inv.payment_type === 'credito') ? ' selected' : ''}>Crédito (+30 días)</option>
+                        <option value="contado"${(inv && inv.payment_type === 'contado') ? ' selected' : ''}>Contado</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Fecha de Emisión</label>
+                    <input type="date" class="form-control" name="issue_date" id="modalInvIssueDate" value="${defIssueDate}" onchange="onModalIssueDateChange(this.value)">
+                </div>
+                <div class="form-group">
+                    <label>Fecha de Vencimiento</label>
+                    <input type="date" class="form-control" name="due_date" id="modalInvDueDate" value="${defDueDate}">
+                </div>
+                <div class="form-group">
+                    <label>Estado</label>
+                    <select class="form-control" name="status">
+                        <option value="issued"${(!inv || inv.status === 'issued') ? ' selected' : ''}>Emitida</option>
+                        <option value="paid"${(inv && inv.status === 'paid') ? ' selected' : ''}>Pagada</option>
+                        <option value="overdue"${(inv && inv.status === 'overdue') ? ' selected' : ''}>Vencida</option>
+                    </select>
+                </div>
+            </div>
+        </form>`;
+
+        openModal(inv ? 'Editar Factura' : 'Registrar Nueva Factura', html);
+
+        // Store sites for dynamic dropdown filtering
+        window._modalSitesList = sites;
+
+        if (defAmount > 0) recalcInvoiceModal('amount');
+        else if (defTotal > 0) recalcInvoiceModal('total');
+
+        document.getElementById('modalSave').onclick = async () => {
+            const f = new FormData(document.getElementById('modalForm'));
+            const cid = parseInt(f.get('client_id'));
+            const num = (f.get('number') || '').trim();
+            const amt = parseFloat(f.get('amount')) || 0;
+            const tot = parseFloat(f.get('total')) || 0;
+
+            if (!cid) { showToast('Selecciona una empresa'); return; }
+            if (!num) { showToast('El número de comprobante es requerido'); return; }
+            if (amt <= 0 && tot <= 0) { showToast('Ingresa el monto de la factura'); return; }
+
+            const data = {
+                client_id: cid,
+                client_site_id: f.get('client_site_id') ? parseInt(f.get('client_site_id')) : null,
+                series: (f.get('series') || 'E001').trim(),
+                number: num,
+                purchase_order: (f.get('purchase_order') || '').trim(),
+                location_code: (f.get('location_code') || '').trim(),
+                service: (f.get('service') || 'Servicio de Saneamiento y Manejo Integrado de Plagas').trim(),
+                amount: amt,
+                igv: parseFloat(document.getElementById('modalInvIgv').value) || Math.round(amt * 0.18 * 100) / 100,
+                total: parseFloat(document.getElementById('modalInvTotal').value) || Math.round(amt * 1.18 * 100) / 100,
+                detraccion: parseFloat(document.getElementById('modalInvDetr').value) || 0,
+                credito: parseFloat(document.getElementById('modalInvCred').value) || 0,
+                payment_type: f.get('payment_type') || 'credito',
+                issue_date: f.get('issue_date') || todayStr(),
+                due_date: f.get('due_date'),
+                status: f.get('status') || 'issued'
             };
-        });
+
+            const res = inv ? await api(eel.update_invoice, inv.id, data) : await api(eel.create_invoice, data);
+            if (res && res.ok) {
+                showToast(inv ? 'Factura actualizada' : 'Factura registrada con éxito');
+                closeModal();
+                navigate('work');
+            } else {
+                showToast(res?.error || 'Error al guardar la factura');
+            }
+        };
     });
 }
 
-function onModalSiteChange(selectEl) {
-    const opt = selectEl.options[selectEl.selectedIndex];
+function onModalInvoiceClientChange(sel) {
+    const cid = sel.value;
+    const siteSelect = document.getElementById('modalInvSiteId');
+    if (!siteSelect || !window._modalSitesList) return;
+
+    const filtered = window._modalSitesList.filter(s => !cid || String(s.client_id) === String(cid));
+    let opts = '<option value="">— Sin sede específica —</option>';
+    opts += filtered.map(s =>
+        `<option value="${s.id}" data-fee="${s.monthly_fee || 0}" data-service="${esc(s.servicios || '')}" data-loc="${esc(s.location_code || '')}" data-client-id="${s.client_id}">
+            ${esc(s.nombre_cliente)} (Cuota: S/ ${fmtMoney(s.monthly_fee || 0)})
+        </option>`
+    ).join('');
+    siteSelect.innerHTML = opts;
+
+    if (filtered.length === 1) {
+        siteSelect.selectedIndex = 1;
+        onModalInvoiceSiteChange(siteSelect);
+    }
+}
+
+function onModalInvoiceSiteChange(sel) {
+    const opt = sel.options[sel.selectedIndex];
     if (!opt) return;
+
     const fee = parseFloat(opt.getAttribute('data-fee')) || 0;
     const srv = opt.getAttribute('data-service');
     const loc = opt.getAttribute('data-loc');
@@ -2837,107 +3077,108 @@ function onModalSiteChange(selectEl) {
     }
     if (fee > 0 && document.getElementById('modalInvAmount')) {
         document.getElementById('modalInvAmount').value = fee.toFixed(2);
-        recalcModalInvoice();
+        recalcInvoiceModal('amount');
     }
 }
 
-function recalcModalInvoice() {
-    const amount = parseFloat(document.getElementById('modalInvAmount').value) || 0;
-    const igv = Math.round(amount * 0.18 * 100) / 100;
-    const total = Math.round((amount + igv) * 100) / 100;
-    const detr = total >= 700 ? Math.round(total * 0.12 * 100) / 100 : 0;
-    const cred = Math.round((total - detr) * 100) / 100;
-
-    document.getElementById('modalInvIgv').value = igv.toFixed(2);
-    document.getElementById('modalInvTotal').value = total.toFixed(2);
-    document.getElementById('modalInvDetr').value = detr.toFixed(2);
-    document.getElementById('modalInvCred').value = cred.toFixed(2);
-
-    const sonBox = document.getElementById('modalSonLetras');
-    if (sonBox && total > 0) {
-        sonBox.innerText = 'Son: ' + numeroALetras(total);
-        sonBox.style.display = 'block';
+function onModalIssueDateChange(dateStr) {
+    if (!dateStr) return;
+    const dueInput = document.getElementById('modalInvDueDate');
+    const payType = document.getElementById('modalInvPaymentType')?.value;
+    if (dueInput && payType === 'credito') {
+        try {
+            const d = new Date(dateStr + 'T12:00:00');
+            d.setDate(d.getDate() + 30);
+            dueInput.value = d.toISOString().split('T')[0];
+        } catch(e) {}
     }
 }
 
-function recalcModalFromTotal() {
-    const total = parseFloat(document.getElementById('modalInvTotal').value) || 0;
-    const amount = Math.round((total / 1.18) * 100) / 100;
+function onModalPaymentTypeChange(sel) {
+    const issueDate = document.getElementById('modalInvIssueDate')?.value || todayStr();
+    const dueInput = document.getElementById('modalInvDueDate');
+    if (!dueInput) return;
+    if (sel.value === 'contado') {
+        dueInput.value = issueDate;
+    } else {
+        onModalIssueDateChange(issueDate);
+    }
+}
+
+function recalcInvoiceModal(source) {
+    let amount = 0, total = 0;
+    if (source === 'amount') {
+        amount = parseFloat(document.getElementById('modalInvAmount')?.value) || 0;
+        total = Math.round(amount * 1.18 * 100) / 100;
+        if (document.getElementById('modalInvTotal')) {
+            document.getElementById('modalInvTotal').value = total > 0 ? total.toFixed(2) : '';
+        }
+    } else {
+        total = parseFloat(document.getElementById('modalInvTotal')?.value) || 0;
+        amount = Math.round((total / 1.18) * 100) / 100;
+        if (document.getElementById('modalInvAmount')) {
+            document.getElementById('modalInvAmount').value = amount > 0 ? amount.toFixed(2) : '';
+        }
+    }
+
     const igv = Math.round((total - amount) * 100) / 100;
     const detr = total >= 700 ? Math.round(total * 0.12 * 100) / 100 : 0;
     const cred = Math.round((total - detr) * 100) / 100;
 
-    document.getElementById('modalInvAmount').value = amount.toFixed(2);
-    document.getElementById('modalInvIgv').value = igv.toFixed(2);
-    document.getElementById('modalInvDetr').value = detr.toFixed(2);
-    document.getElementById('modalInvCred').value = cred.toFixed(2);
+    const igvInp = document.getElementById('modalInvIgv');
+    const detrInp = document.getElementById('modalInvDetr');
+    const credInp = document.getElementById('modalInvCred');
+
+    if (igvInp) igvInp.value = igv.toFixed(2);
+    if (detrInp) detrInp.value = detr.toFixed(2);
+    if (credInp) credInp.value = cred.toFixed(2);
+
+    const bSub = document.getElementById('boxModalSubtotal');
+    const bIgv = document.getElementById('boxModalIgv');
+    const bTot = document.getElementById('boxModalTotal');
+    const bDet = document.getElementById('boxModalDetr');
+    const bCre = document.getElementById('boxModalCred');
+
+    if (bSub) bSub.innerText = 'S/ ' + fmtMoney(amount);
+    if (bIgv) bIgv.innerText = 'S/ ' + fmtMoney(igv);
+    if (bTot) bTot.innerText = 'S/ ' + fmtMoney(total);
+    if (bDet) bDet.innerText = 'S/ ' + fmtMoney(detr);
+    if (bCre) bCre.innerText = 'S/ ' + fmtMoney(cred);
 
     const sonBox = document.getElementById('modalSonLetras');
-    if (sonBox && total > 0) {
-        sonBox.innerText = 'Son: ' + numeroALetras(total);
-        sonBox.style.display = 'block';
+    if (sonBox) {
+        sonBox.innerText = total > 0 ? ('Son: ' + numeroALetras(total)) : 'CERO CON 00/100 SOLES';
     }
 }
 
-async function deleteInvoice(id) {
-    if (!confirm('¿Eliminar esta factura? Se quitará de los registros de cobro.')) return;
-    const res = await api(eel.delete_invoice, id);
-    if (res && res.ok) { showToast('Factura eliminada'); navigate('work'); }
-}
 
-// ===================== WORK CALCULATOR & SUNAT COPY STATION =====================
+// Global State for SUNAT Billing Assistant
 window.calcState = window.calcState || {
     clientId: null,
-    clientName: 'SUR COLOR STAR S.A.',
-    clientRuc: '20516702649',
-    siteId: 1,
-    siteName: 'SUR COLOR STAR - SEDE PRINCIPAL',
+    clientName: '',
+    clientRuc: '',
+    siteId: null,
+    siteName: '',
+    service: 'Servicio de Saneamiento y Manejo Integrado de Plagas',
     issueDate: todayStr(),
     igvRate: 0.18,
     detrRate: 0.12,
     bnAccount: '00046317769',
     series: 'E001',
     number: '',
-    purchaseOrder: '8600033006',
+    purchaseOrder: '',
     locationCode: '',
-    items: [
-        { desc: 'Control Aviar', cant: 1, pu: 800.00 }
-    ]
+    amountSinIgv: 800.00
 };
-
-function copySunatField(text, label) {
-    if (text === null || text === undefined || text === '') return;
-    const val = String(text).trim();
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(val).then(() => {
-            showToast('📋 Copiado: ' + (label || val));
-        }).catch(() => {
-            fallbackCopy(val);
-            showToast('📋 Copiado: ' + (label || val));
-        });
-    } else {
-        fallbackCopy(val);
-        showToast('📋 Copiado: ' + (label || val));
-    }
-}
-
-function fallbackCopy(text) {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
-    try { document.execCommand('copy'); } catch(e) {}
-    document.body.removeChild(ta);
-}
 
 async function renderWorkCalculator(el) {
     const sites = await api(eel.get_client_sites_grouped) || [];
     const clients = await api(eel.get_clients) || [];
 
-    const siteOptions = '<option value="">— Cargar desde Sede / Cliente —</option>' + sites.map(s =>
-        `<option value="${s.id}" data-client-id="${s.client_id}" data-client-name="${esc(s.empresa||s.nombre_cliente)}" data-client-ruc="${esc(s.ruc||'')}" data-fee="${s.monthly_fee||0}" data-service="${esc(s.servicios||'')}" data-loc="${esc(s.location_code||'')}">${esc(s.empresa||'')} - ${esc(s.nombre_cliente)} (S/ ${fmtMoney(s.monthly_fee||0)})</option>`
+    const siteOptions = '<option value="">— Cargar desde Sede / Cliente Regular —</option>' + sites.map(s =>
+        `<option value="${s.id}" data-client-id="${s.client_id}" data-client-name="${esc(s.empresa || s.nombre_cliente)}" data-client-ruc="${esc(s.ruc || '')}" data-fee="${s.monthly_fee || 0}" data-service="${esc(s.servicios || '')}" data-loc="${esc(s.location_code || '')}"${window.calcState.siteId === s.id ? ' selected' : ''}>
+            ${esc(s.empresa || '')} - ${esc(s.nombre_cliente)} (Cuota: S/ ${fmtMoney(s.monthly_fee || 0)})
+        </option>`
     ).join('');
 
     let html = `
@@ -2947,7 +3188,9 @@ async function renderWorkCalculator(el) {
                 <h2 style="margin:0;font-size:1.35rem">🧮 Asistente de Facturación SUNAT & Calculadora IGV</h2>
                 <span class="tag tag-primary">Emisión Rápida</span>
             </div>
-            <div style="font-size:0.8rem;color:var(--text-muted)">Copia campo a campo los montos, detracciones y fechas exactas al portal SOL de SUNAT con 1 solo clic</div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">
+                Calcula Base Imponible, IGV 18%, Detracción SPOT 12% y copia directamente campo a campo al portal SOL de SUNAT con 1 clic
+            </div>
         </div>
         <div style="display:flex;gap:8px">
             <button class="btn btn-secondary" onclick="resetWorkCalculator()">🔄 Nuevo cálculo</button>
@@ -2955,11 +3198,11 @@ async function renderWorkCalculator(el) {
         </div>
     </div>
 
-    <!-- Quick client loader -->
+    <!-- Quick Client & Sede Loader -->
     <div class="card" style="margin-bottom:16px">
         <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-            <div style="font-weight:700;font-size:0.9rem">🏢 Cliente regular:</div>
-            <div style="flex:1;min-width:260px">
+            <div style="font-weight:700;font-size:0.9rem">🏢 Cliente / Sede:</div>
+            <div style="flex:1;min-width:280px">
                 <select class="form-control" id="calcSiteSelector" onchange="onCalcSiteSelected(this)">${siteOptions}</select>
             </div>
             <div id="calcClientLoadedBadge" style="display:${window.calcState.clientName ? 'block' : 'none'}">
@@ -2968,15 +3211,27 @@ async function renderWorkCalculator(el) {
         </div>
     </div>
 
-    <!-- Config Parameters -->
+    <!-- Billing Configuration Inputs (Monto Sin IGV como eje central) -->
     <div class="card" style="margin-bottom:16px">
         <div class="form-row">
-            <div class="form-group">
-                <label>Fecha de Emisión</label>
-                <input type="date" class="form-control" id="calcIssueDate" value="${window.calcState.issueDate}" onchange="updateCalcParam('issueDate', this.value)">
+            <div class="form-group" style="flex:1.2">
+                <label style="font-weight:700;color:var(--accent)">Monto Sin IGV (Base Imponible) S/ *</label>
+                <div style="position:relative">
+                    <span style="position:absolute;left:10px;top:8px;font-weight:700;color:var(--text-muted)">S/</span>
+                    <input type="number" step="0.01" min="0" class="form-control" style="padding-left:32px;font-family:monospace;font-weight:700;font-size:1.05rem" id="calcAmountSinIgv" value="${window.calcState.amountSinIgv || 0}" oninput="onCalcAmountChange('sin_igv', this.value)">
+                </div>
+                <div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px">Monto del servicio acordado sin impuestos</div>
+            </div>
+            <div class="form-group" style="flex:1.2">
+                <label style="font-weight:600">O Precio Final (Con IGV 18%) S/</label>
+                <div style="position:relative">
+                    <span style="position:absolute;left:10px;top:8px;font-weight:700;color:var(--text-muted)">S/</span>
+                    <input type="number" step="0.01" min="0" class="form-control" style="padding-left:32px;font-family:monospace;font-size:1rem" id="calcAmountConIgv" placeholder="0.00" oninput="onCalcAmountChange('con_igv', this.value)">
+                </div>
+                <div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px">Calcula base imponible automáticamente (÷ 1.18)</div>
             </div>
             <div class="form-group">
-                <label>Tasa de IGV</label>
+                <label>Tasa IGV</label>
                 <select class="form-control" id="calcIgvRate" onchange="updateCalcParam('igvRate', parseFloat(this.value))">
                     <option value="0.18"${window.calcState.igvRate === 0.18 ? ' selected' : ''}>18% (General SUNAT)</option>
                     <option value="0"${window.calcState.igvRate === 0 ? ' selected' : ''}>0% (Exonerado / Inafecto)</option>
@@ -2985,11 +3240,18 @@ async function renderWorkCalculator(el) {
             <div class="form-group">
                 <label>Detracción (SPOT)</label>
                 <select class="form-control" id="calcDetrRate" onchange="updateCalcParam('detrRate', parseFloat(this.value))">
-                    <option value="0.12"${window.calcState.detrRate === 0.12 ? ' selected' : ''}>12% (Saneamiento, Fumigación, Plagas)</option>
+                    <option value="0.12"${window.calcState.detrRate === 0.12 ? ' selected' : ''}>12% (Fumigación / Saneamiento)</option>
                     <option value="0.10"${window.calcState.detrRate === 0.10 ? ' selected' : ''}>10% (Otros servicios)</option>
                     <option value="0.04"${window.calcState.detrRate === 0.04 ? ' selected' : ''}>4% (Transporte)</option>
-                    <option value="0"${window.calcState.detrRate === 0 ? ' selected' : ''}>0% (Sin detracción / menor a S/ 700)</option>
+                    <option value="0"${window.calcState.detrRate === 0 ? ' selected' : ''}>0% (Sin detracción)</option>
                 </select>
+            </div>
+        </div>
+
+        <div class="form-row" style="margin-top:6px">
+            <div class="form-group" style="flex:2">
+                <label>Descripción del Servicio a Facturar</label>
+                <input type="text" class="form-control" id="calcServiceDesc" value="${esc(window.calcState.service || 'Servicio de Saneamiento y Manejo Integrado de Plagas')}" oninput="updateCalcParam('service', this.value)">
             </div>
             <div class="form-group">
                 <label>Cuenta Detracción BN</label>
@@ -3000,52 +3262,31 @@ async function renderWorkCalculator(el) {
             </div>
             <div class="form-group">
                 <label>Orden de Compra (OC)</label>
-                <input type="text" class="form-control" id="calcOc" value="${esc(window.calcState.purchaseOrder)}" placeholder="Ej. 8600033006" oninput="updateCalcParam('purchaseOrder', this.value)">
+                <input type="text" class="form-control" id="calcOc" value="${esc(window.calcState.purchaseOrder || '')}" placeholder="Ej. 8600033006" oninput="updateCalcParam('purchaseOrder', this.value)">
             </div>
             <div class="form-group" style="max-width:130px">
                 <label>Comprobante</label>
                 <div style="display:flex;gap:4px">
-                    <input type="text" class="form-control" style="width:65px" id="calcSerie" value="${esc(window.calcState.series)}" oninput="updateCalcParam('series', this.value)">
-                    <input type="text" class="form-control" id="calcNum" value="${esc(window.calcState.number)}" placeholder="N°" oninput="updateCalcParam('number', this.value)">
+                    <input type="text" class="form-control" style="width:65px" id="calcSerie" value="${esc(window.calcState.series || 'E001')}" oninput="updateCalcParam('series', this.value)">
+                    <input type="text" class="form-control" id="calcNum" value="${esc(window.calcState.number || '')}" placeholder="N°" oninput="updateCalcParam('number', this.value)">
                 </div>
+            </div>
+            <div class="form-group" style="max-width:130px">
+                <label>Emisión</label>
+                <input type="date" class="form-control" id="calcIssueDate" value="${window.calcState.issueDate || todayStr()}" onchange="updateCalcParam('issueDate', this.value)">
             </div>
         </div>
     </div>
 
-    <!-- Units / Items Table -->
-    <div class="card" style="margin-bottom:16px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-            <div style="font-weight:700;font-size:1rem">Desglose de Unidades e Ítems a Facturar</div>
-            <button class="btn btn-secondary btn-sm" onclick="addCalcItem()">+ Agregar Unidad / Ítem</button>
-        </div>
-
-        <div class="table-wrap">
-            <table>
-                <thead>
-                    <tr>
-                        <th style="min-width:280px">Descripción del Servicio / Producto</th>
-                        <th style="width:110px;text-align:center">Cantidad</th>
-                        <th style="width:160px;text-align:right">P. Unitario Sin IGV (S/)</th>
-                        <th style="width:160px;text-align:right">Subtotal (S/)</th>
-                        <th style="width:50px"></th>
-                    </tr>
-                </thead>
-                <tbody id="calcItemsBody">
-                    <!-- Dynamic Rows -->
-                </tbody>
-            </table>
-        </div>
-    </div>
-
-    <!-- ===================== SUNAT COPY STATION (ESTILO NICOLE) ===================== -->
+    <!-- ===================== SUNAT COPY STATION ===================== -->
     <div class="sunat-station">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;border-bottom:1px solid var(--border-light);padding-bottom:12px">
             <div>
                 <h3 style="margin:0;font-size:1.15rem;display:flex;align-items:center;gap:8px">
-                    ⚡ Panel de Copiado Rápido para SUNAT (Portal SOL)
+                    ⚡ Tablero de Copiado Rápido para SUNAT (Portal SOL)
                 </h3>
                 <div style="font-size:0.8rem;color:var(--text-muted);margin-top:2px">
-                    Haz clic en "Copiar" al lado de cada casilla para pegarla de inmediato en la web de SUNAT sin errores
+                    Haz clic en "Copiar" al lado de cada casilla para pegarla de inmediato en el formulario de emisión electrónica de SUNAT
                 </div>
             </div>
             <button class="btn btn-ghost btn-sm" onclick="copyCalcSummary()">📋 Copiar Todo el Resumen</button>
@@ -3071,22 +3312,22 @@ async function renderWorkCalculator(el) {
                 <button class="btn-sunat-copy" onclick="copySunatField(window.calcState.clientName, 'Razón Social')">📋 Copiar</button>
             </div>
 
-            <!-- 3. Cuenta Banco de la Nación -->
+            <!-- 3. Descripción del Servicio -->
             <div class="sunat-field-card">
                 <div class="sunat-field-info">
-                    <div class="sunat-field-label">3. Cuenta Detracción (Banco de la Nación)</div>
-                    <div class="sunat-field-val" id="sunatValBnAccount" style="color:#f59e0b">${esc(window.calcState.bnAccount)}</div>
+                    <div class="sunat-field-label">3. Descripción del Ítem / Servicio</div>
+                    <div class="sunat-field-val" id="sunatValServiceDesc" style="font-size:0.8rem">${esc(window.calcState.service || '-')}</div>
                 </div>
-                <button class="btn-sunat-copy" onclick="copySunatField(window.calcState.bnAccount, 'Cuenta Banco de la Nación')">📋 Copiar</button>
+                <button class="btn-sunat-copy" onclick="copySunatField(window.calcState.service, 'Descripción')">📋 Copiar</button>
             </div>
 
             <!-- 4. Subtotal / Base Imponible -->
-            <div class="sunat-field-card">
+            <div class="sunat-field-card" style="border-color:var(--accent);background:rgba(99,102,241,0.06)">
                 <div class="sunat-field-info">
-                    <div class="sunat-field-label">4. Subtotal / Base Imponible (Sin IGV)</div>
-                    <div class="sunat-field-val" id="sunatValSubtotal">S/ 0.00</div>
+                    <div class="sunat-field-label">4. Base Imponible (Sin IGV)</div>
+                    <div class="sunat-field-val" id="sunatValSubtotal" style="color:var(--accent);font-size:1.15rem">S/ 0.00</div>
                 </div>
-                <button class="btn-sunat-copy" onclick="copySunatRaw('subtotal', 'Subtotal Sin IGV')">📋 Copiar</button>
+                <button class="btn-sunat-copy" onclick="copySunatRaw('subtotal', 'Base Imponible Sin IGV')">📋 Copiar</button>
             </div>
 
             <!-- 5. IGV 18% -->
@@ -3102,7 +3343,7 @@ async function renderWorkCalculator(el) {
             <div class="sunat-field-card" style="border-color:#ef4444;background:rgba(239,68,68,0.06)">
                 <div class="sunat-field-info">
                     <div class="sunat-field-label">6. Monto Total (Precio Final)</div>
-                    <div class="sunat-field-val" id="sunatValTotal" style="color:#ef4444">S/ 0.00</div>
+                    <div class="sunat-field-val" id="sunatValTotal" style="color:#ef4444;font-size:1.15rem">S/ 0.00</div>
                 </div>
                 <button class="btn-sunat-copy" style="background:#ef4444;color:#fff;border:none" onclick="copySunatRaw('total', 'Monto Total')">📋 Copiar</button>
             </div>
@@ -3116,19 +3357,28 @@ async function renderWorkCalculator(el) {
                 <button class="btn-sunat-copy" onclick="copySunatRaw('detr', 'Monto Detracción')">📋 Copiar</button>
             </div>
 
-            <!-- 8. Monto Neto de Crédito -->
+            <!-- 8. Cuenta Banco de la Nación -->
+            <div class="sunat-field-card">
+                <div class="sunat-field-info">
+                    <div class="sunat-field-label">8. Cuenta BN Detracción</div>
+                    <div class="sunat-field-val" id="sunatValBnAccount" style="color:#f59e0b">${esc(window.calcState.bnAccount)}</div>
+                </div>
+                <button class="btn-sunat-copy" onclick="copySunatField(window.calcState.bnAccount, 'Cuenta BN')">📋 Copiar</button>
+            </div>
+
+            <!-- 9. Monto Neto de Crédito -->
             <div class="sunat-field-card" style="border-color:#10b981;background:rgba(16,185,129,0.06)">
                 <div class="sunat-field-info">
-                    <div class="sunat-field-label">8. Monto Neto de Crédito (Total - Detrac.)</div>
-                    <div class="sunat-field-val" id="sunatValCred" style="color:#10b981">S/ 0.00</div>
+                    <div class="sunat-field-label">9. Monto Neto Crédito (Total - Detracción)</div>
+                    <div class="sunat-field-val" id="sunatValCred" style="color:#10b981;font-size:1.15rem">S/ 0.00</div>
                 </div>
                 <button class="btn-sunat-copy" style="background:#10b981;color:#fff;border:none" onclick="copySunatRaw('cred', 'Monto Neto Crédito')">📋 Copiar</button>
             </div>
 
-            <!-- 9. Orden de Compra -->
+            <!-- 10. Orden de Compra -->
             <div class="sunat-field-card">
                 <div class="sunat-field-info">
-                    <div class="sunat-field-label">9. Orden de Compra (OC)</div>
+                    <div class="sunat-field-label">10. Orden de Compra (OC)</div>
                     <div class="sunat-field-val" id="sunatValOc">${esc(window.calcState.purchaseOrder || '-')}</div>
                 </div>
                 <button class="btn-sunat-copy" onclick="copySunatField(window.calcState.purchaseOrder, 'Orden de Compra')">📋 Copiar</button>
@@ -3141,7 +3391,7 @@ async function renderWorkCalculator(el) {
                 <div style="font-size:0.75rem;text-transform:uppercase;font-weight:700;color:var(--text-muted)">
                     📅 Fechas de Vencimiento de Cuota (Formato DD/MM/AAAA para SUNAT)
                 </div>
-                <div style="font-size:0.75rem;color:var(--text-muted)">Haz clic para copiar la fecha de vencimiento elegida</div>
+                <div style="font-size:0.75rem;color:var(--text-muted)">Haz clic en "Copiar" para pegar directo al portal</div>
             </div>
             <div class="calc-dates-grid" id="calcSunatDatesGrid"></div>
         </div>
@@ -3164,67 +3414,27 @@ async function renderWorkCalculator(el) {
     `;
 
     el.innerHTML = html;
-    renderCalcItems();
     recalcAllCalc();
 }
 
-function renderCalcItems() {
-    const tbody = document.getElementById('calcItemsBody');
-    if (!tbody) return;
-    tbody.innerHTML = '';
-
-    window.calcState.items.forEach((item, index) => {
-        const sub = (item.cant * item.pu) || 0;
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-            <td>
-                <input type="text" class="form-control" style="padding:6px 10px;font-size:0.85rem" value="${esc(item.desc)}" placeholder="Descripción" oninput="updateCalcItem(${index}, 'desc', this.value)">
-            </td>
-            <td>
-                <input type="number" step="any" min="0" class="form-control" style="padding:6px 10px;font-size:0.85rem;text-align:center" value="${item.cant}" oninput="updateCalcItem(${index}, 'cant', this.value)">
-            </td>
-            <td>
-                <input type="number" step="0.01" min="0" class="form-control" style="padding:6px 10px;font-size:0.85rem;text-align:right;font-family:monospace" value="${item.pu.toFixed(2)}" oninput="updateCalcItem(${index}, 'pu', this.value)">
-            </td>
-            <td style="text-align:right;font-family:monospace;font-weight:700;font-size:0.9rem">
-                S/ ${fmtMoney(sub)}
-            </td>
-            <td style="text-align:center">
-                ${window.calcState.items.length > 1 ? `<button class="btn btn-ghost btn-sm" onclick="delCalcItem(${index})" style="color:#ef4444" title="Quitar">✕</button>` : ''}
-            </td>
-        `;
-        tbody.appendChild(tr);
-    });
-}
-
-function addCalcItem() {
-    window.calcState.items.push({ desc: 'SERV CONTROL DE PLAGAS', cant: 1, pu: 0 });
-    renderCalcItems();
-    recalcAllCalc();
-}
-
-function delCalcItem(index) {
-    if (window.calcState.items.length > 1) {
-        window.calcState.items.splice(index, 1);
-        renderCalcItems();
-        recalcAllCalc();
-    }
-}
-
-function updateCalcItem(index, field, val) {
-    if (field === 'cant') {
-        window.calcState.items[index].cant = parseFloat(val) || 0;
-    } else if (field === 'pu') {
-        window.calcState.items[index].pu = parseFloat(val) || 0;
+function onCalcAmountChange(mode, val) {
+    const num = parseFloat(val) || 0;
+    if (mode === 'sin_igv') {
+        window.calcState.amountSinIgv = num;
+        const tot = Math.round(num * 1.18 * 100) / 100;
+        const cTot = document.getElementById('calcAmountConIgv');
+        if (cTot && document.activeElement !== cTot) {
+            cTot.value = tot > 0 ? tot.toFixed(2) : '';
+        }
     } else {
-        window.calcState.items[index].desc = val;
+        const base = Math.round((num / 1.18) * 100) / 100;
+        window.calcState.amountSinIgv = base;
+        const cSin = document.getElementById('calcAmountSinIgv');
+        if (cSin && document.activeElement !== cSin) {
+            cSin.value = base > 0 ? base.toFixed(2) : '';
+        }
     }
     recalcAllCalc();
-    const rows = document.querySelectorAll('#calcItemsBody tr');
-    if (rows[index]) {
-        const sub = (window.calcState.items[index].cant * window.calcState.items[index].pu) || 0;
-        rows[index].cells[3].innerText = 'S/ ' + fmtMoney(sub);
-    }
 }
 
 function updateCalcParam(key, val) {
@@ -3236,6 +3446,10 @@ function updateCalcParam(key, val) {
     if (key === 'bnAccount') {
         const bnEl = document.getElementById('sunatValBnAccount');
         if (bnEl) bnEl.innerText = val;
+    }
+    if (key === 'service') {
+        const sEl = document.getElementById('sunatValServiceDesc');
+        if (sEl) sEl.innerText = val || '-';
     }
     recalcAllCalc();
 }
@@ -3249,7 +3463,7 @@ function onCalcSiteSelected(sel) {
     const clientName = opt.getAttribute('data-client-name') || '';
     const clientRuc = opt.getAttribute('data-client-ruc') || '';
     const fee = parseFloat(opt.getAttribute('data-fee')) || 0;
-    const srv = opt.getAttribute('data-service') || 'SERV CONTROL DE PLAGAS';
+    const srv = opt.getAttribute('data-service') || 'Servicio de Saneamiento y Manejo Integrado de Plagas';
     const loc = opt.getAttribute('data-loc') || '';
 
     window.calcState.siteId = siteId;
@@ -3257,13 +3471,8 @@ function onCalcSiteSelected(sel) {
     window.calcState.clientName = clientName;
     window.calcState.clientRuc = clientRuc;
     window.calcState.locationCode = loc;
-
-    if (window.calcState.items.length === 0) {
-        window.calcState.items = [{ desc: srv, cant: 1, pu: fee }];
-    } else {
-        window.calcState.items[0].desc = srv;
-        window.calcState.items[0].pu = fee;
-    }
+    window.calcState.service = srv;
+    window.calcState.amountSinIgv = fee;
 
     const badge = document.getElementById('calcClientLoadedBadge');
     const nameEl = document.getElementById('calcClientLoadedName');
@@ -3276,29 +3485,30 @@ function onCalcSiteSelected(sel) {
     if (rucEl) rucEl.innerText = clientRuc || '-';
     const cnameEl = document.getElementById('sunatValClientName');
     if (cnameEl) cnameEl.innerText = clientName || '-';
+    const srvEl = document.getElementById('calcServiceDesc');
+    if (srvEl) srvEl.value = srv;
+    const srvValEl = document.getElementById('sunatValServiceDesc');
+    if (srvValEl) srvValEl.innerText = srv;
 
-    renderCalcItems();
-    recalcAllCalc();
+    const sinEl = document.getElementById('calcAmountSinIgv');
+    if (sinEl) sinEl.value = fee > 0 ? fee.toFixed(2) : '';
+
+    onCalcAmountChange('sin_igv', fee);
     showToast('Datos de ' + clientName + ' cargados');
 }
 
-// Stores calculated raw numeric values for SUNAT pasting
+// Stores raw calculated numbers for SUNAT copying
 window.calcRawNumbers = { subtotal: 0, igv: 0, total: 0, detr: 0, cred: 0 };
 
 function copySunatRaw(key, label) {
     const num = window.calcRawNumbers[key] || 0;
-    // Copies exact two-decimal string, e.g. 14700.00
     copySunatField(num.toFixed(2), label + ' (' + num.toFixed(2) + ')');
 }
 
 function recalcAllCalc() {
-    let subtotal = 0;
-    window.calcState.items.forEach(it => {
-        subtotal += (it.cant * it.pu);
-    });
-
-    const igvRate = window.calcState.igvRate;
-    const detrRate = window.calcState.detrRate;
+    const subtotal = window.calcState.amountSinIgv || 0;
+    const igvRate = window.calcState.igvRate !== undefined ? window.calcState.igvRate : 0.18;
+    const detrRate = window.calcState.detrRate !== undefined ? window.calcState.detrRate : 0.12;
 
     const igv = Math.round(subtotal * igvRate * 100) / 100;
     const total = Math.round((subtotal + igv) * 100) / 100;
@@ -3307,7 +3517,6 @@ function recalcAllCalc() {
 
     window.calcRawNumbers = { subtotal, igv, total, detr, cred };
 
-    // Update SUNAT station values
     const sSub = document.getElementById('sunatValSubtotal');
     const sIgv = document.getElementById('sunatValIgv');
     const sTot = document.getElementById('sunatValTotal');
@@ -3322,10 +3531,9 @@ function recalcAllCalc() {
 
     const sonEl = document.getElementById('calcSonLetras');
     if (sonEl) {
-        sonEl.innerText = numeroALetras(total);
+        sonEl.innerText = total > 0 ? numeroALetras(total) : 'CERO CON 00/100 SOLES';
     }
 
-    // Render payment dates in SUNAT format (DD/MM/AAAA)
     renderCalcSunatDates();
 }
 
@@ -3369,6 +3577,7 @@ function resetWorkCalculator() {
         clientRuc: '',
         siteId: null,
         siteName: '',
+        service: 'Servicio de Saneamiento y Manejo Integrado de Plagas',
         issueDate: todayStr(),
         igvRate: 0.18,
         detrRate: 0.12,
@@ -3377,55 +3586,33 @@ function resetWorkCalculator() {
         number: '',
         purchaseOrder: '',
         locationCode: '',
-        items: [
-            { desc: 'SERV CONTROL DE PLAGAS', cant: 1, pu: 800.00 }
-        ]
+        amountSinIgv: 800.00
     };
     navigate('work');
     showToast('Calculadora reiniciada');
 }
 
 function copyCalcSummary() {
-    let sub = 0;
-    window.calcState.items.forEach(it => { sub += (it.cant * it.pu); });
-    const igv = Math.round(sub * window.calcState.igvRate * 100) / 100;
-    const tot = Math.round((sub + igv) * 100) / 100;
-    const detr = (tot >= 700 && window.calcState.detrRate > 0) ? Math.round(tot * window.calcState.detrRate * 100) / 100 : 0;
-    const cred = Math.round((tot - detr) * 100) / 100;
+    const sub = window.calcRawNumbers.subtotal || 0;
+    const igv = window.calcRawNumbers.igv || 0;
+    const tot = window.calcRawNumbers.total || 0;
+    const detr = window.calcRawNumbers.detr || 0;
+    const cred = window.calcRawNumbers.cred || 0;
 
-    let txt = `DATOS PARA EMISIÓN SUNAT
-`;
-    if (window.calcState.clientName) txt += `Cliente: ${window.calcState.clientName}
-`;
-    if (window.calcState.clientRuc) txt += `RUC: ${window.calcState.clientRuc}
-`;
-    txt += `Emisión: ${window.calcState.issueDate || todayStr()}
-`;
-    if (window.calcState.purchaseOrder) txt += `Orden de Compra: ${window.calcState.purchaseOrder}
-`;
-    txt += `Cuenta Detracción Banco de la Nación: ${window.calcState.bnAccount}
-`;
-    txt += `----------------------------------------
-`;
-    window.calcState.items.forEach((it, i) => {
-        const lTot = (it.cant * it.pu).toFixed(2);
-        txt += `${i+1}. ${it.desc} | Cant: ${it.cant} x S/ ${it.pu.toFixed(2)} = S/ ${lTot}
-`;
-    });
-    txt += `----------------------------------------
-`;
-    txt += `Subtotal (Base Imponible): S/ ${fmtMoney(sub)}
-`;
-    txt += `IGV (18%): S/ ${fmtMoney(igv)}
-`;
-    txt += `Importe Total: S/ ${fmtMoney(tot)}
-`;
-    txt += `Detracción (12% SPOT): S/ ${fmtMoney(detr)}
-`;
-    txt += `Monto Neto Pendiente de Pago (Crédito): S/ ${fmtMoney(cred)}
-`;
-    txt += `Son: ${numeroALetras(tot)}
-`;
+    let txt = `DATOS PARA EMISIÓN SUNAT\n`;
+    if (window.calcState.clientName) txt += `Cliente: ${window.calcState.clientName}\n`;
+    if (window.calcState.clientRuc) txt += `RUC: ${window.calcState.clientRuc}\n`;
+    txt += `Emisión: ${window.calcState.issueDate || todayStr()}\n`;
+    if (window.calcState.purchaseOrder) txt += `Orden de Compra: ${window.calcState.purchaseOrder}\n`;
+    txt += `Cuenta Detracción Banco de la Nación: ${window.calcState.bnAccount}\n`;
+    txt += `----------------------------------------\n`;
+    txt += `Servicio: ${window.calcState.service || 'Servicio de Saneamiento y MIP'}\n`;
+    txt += `Base Imponible (Sin IGV): S/ ${fmtMoney(sub)}\n`;
+    txt += `IGV (18%): S/ ${fmtMoney(igv)}\n`;
+    txt += `Importe Total: S/ ${fmtMoney(tot)}\n`;
+    txt += `Detracción (12% SPOT): S/ ${fmtMoney(detr)}\n`;
+    txt += `Monto Neto Pendiente de Pago (Crédito): S/ ${fmtMoney(cred)}\n`;
+    txt += `Son: ${numeroALetras(tot)}\n`;
 
     navigator.clipboard.writeText(txt).then(() => {
         showToast('¡Resumen copiado para SUNAT!');
@@ -3435,19 +3622,17 @@ function copyCalcSummary() {
 }
 
 async function saveCalculatorAsInvoice() {
-    let sub = 0;
-    window.calcState.items.forEach(it => { sub += (it.cant * it.pu); });
+    const sub = window.calcRawNumbers.subtotal || 0;
     if (sub <= 0) {
-        showToast('El monto debe ser mayor a cero');
+        showToast('El monto sin IGV debe ser mayor a cero');
         return;
     }
 
-    const igv = Math.round(sub * window.calcState.igvRate * 100) / 100;
-    const tot = Math.round((sub + igv) * 100) / 100;
-    const detr = (tot >= 700 && window.calcState.detrRate > 0) ? Math.round(tot * window.calcState.detrRate * 100) / 100 : 0;
-    const cred = Math.round((tot - detr) * 100) / 100;
+    const igv = window.calcRawNumbers.igv || 0;
+    const tot = window.calcRawNumbers.total || 0;
+    const detr = window.calcRawNumbers.detr || 0;
+    const cred = window.calcRawNumbers.cred || 0;
 
-    // If client is not set, open modal to select client
     if (!window.calcState.clientId) {
         const invDraft = {
             client_id: null,
@@ -3456,7 +3641,7 @@ async function saveCalculatorAsInvoice() {
             number: window.calcState.number,
             purchase_order: window.calcState.purchaseOrder,
             location_code: window.calcState.locationCode,
-            service: window.calcState.items.map(it => it.desc).join(', '),
+            service: window.calcState.service || 'Servicio de Saneamiento y Manejo Integrado de Plagas',
             amount: sub,
             igv: igv,
             total: tot,
@@ -3470,7 +3655,6 @@ async function saveCalculatorAsInvoice() {
         return;
     }
 
-    const serviceName = window.calcState.items.map(it => it.desc).join(', ');
     const invoiceData = {
         client_id: window.calcState.clientId,
         client_site_id: window.calcState.siteId,
@@ -3478,7 +3662,7 @@ async function saveCalculatorAsInvoice() {
         number: window.calcState.number,
         purchase_order: window.calcState.purchaseOrder,
         location_code: window.calcState.locationCode,
-        service: serviceName,
+        service: window.calcState.service || 'Servicio de Saneamiento y Manejo Integrado de Plagas',
         amount: sub,
         igv: igv,
         total: tot,
@@ -3486,20 +3670,19 @@ async function saveCalculatorAsInvoice() {
         credito: cred,
         payment_type: 'credito',
         issue_date: window.calcState.issueDate || todayStr(),
-        status: 'issued',
-        items_json: JSON.stringify(window.calcState.items)
+        status: 'issued'
     };
 
     const res = await api(eel.create_invoice, invoiceData);
     if (res && res.ok) {
-        showToast('¡Factura guardada exitosamente!');
+        showToast('✓ ¡Factura guardada exitosamente en el sistema!');
         switchWorkTab('invoices');
     } else {
-        showToast(res && res.error ? res.error : 'Error al guardar');
+        showToast(res?.error || 'Error al guardar la factura');
     }
 }
 
-// Algoritmo oficial de conversión de números a letras en español peruano (SUNAT)
+
 function numeroALetras(num) {
     if (isNaN(num) || num === null || num === undefined) return "CERO CON 00/100 SOLES";
     num = Math.round(num * 100) / 100;

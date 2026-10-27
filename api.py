@@ -1810,17 +1810,33 @@ def get_client_sites_grouped():
         conn.close()
 
 @eel.expose
+def get_client_site(id):
+    conn = get_connection()
+    try:
+        row = conn.execute("""
+            SELECT cs.*, c.business_name, c.ruc, c.contact_name, c.phone
+            FROM client_sites cs
+            LEFT JOIN clients c ON cs.client_id = c.id
+            WHERE cs.id = ?
+        """, (id,)).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+@eel.expose
 def create_client_site(data):
     conn = get_connection()
     try:
         cur = conn.execute("""
             INSERT INTO client_sites (client_id, codigo_cliente, codigo_sede, codigo_cliente_sede,
-                nombre_cliente, sede_cliente, distrito, is_regular, monthly_fee, servicios, contract_start, contract_end, location_code)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                nombre_cliente, sede_cliente, distrito, is_regular, monthly_fee, servicios,
+                contract_start, contract_end, location_code, periodicity, centro_logistico)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (data.get('client_id'), data.get('codigo_cliente'), data.get('codigo_sede'), data.get('codigo_cliente_sede'),
               data.get('nombre_cliente'), data.get('sede_cliente'), data.get('distrito'),
               1 if data.get('is_regular') else 0, data.get('monthly_fee'), data.get('servicios'),
-              data.get('contract_start'), data.get('contract_end'), data.get('location_code')))
+              data.get('contract_start'), data.get('contract_end'), data.get('location_code'),
+              data.get('periodicity', 'mensual'), data.get('centro_logistico')))
         new_id = cur.lastrowid
         conn.commit()
         return {'ok': True, 'id': new_id}
@@ -1833,15 +1849,40 @@ def create_client_site(data):
 def update_client_site(id, data):
     conn = get_connection()
     try:
-        conn.execute("""
-            UPDATE client_sites SET client_id=?, codigo_cliente=?, codigo_sede=?, codigo_cliente_sede=?,
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM client_sites WHERE id = ?", (id,))
+        row = cur.fetchone()
+        if not row:
+            return {'ok': False, 'error': f'Sede {id} no encontrada'}
+        curr = dict(row)
+
+        client_id = data['client_id'] if 'client_id' in data else curr.get('client_id')
+        codigo_cliente = data['codigo_cliente'] if 'codigo_cliente' in data else curr.get('codigo_cliente')
+        codigo_sede = data['codigo_sede'] if 'codigo_sede' in data else curr.get('codigo_sede')
+        codigo_cliente_sede = data['codigo_cliente_sede'] if 'codigo_cliente_sede' in data else curr.get('codigo_cliente_sede')
+        nombre_cliente = data['nombre_cliente'] if 'nombre_cliente' in data else curr.get('nombre_cliente')
+        sede_cliente = data['sede_cliente'] if 'sede_cliente' in data else curr.get('sede_cliente')
+        distrito = data['distrito'] if 'distrito' in data else curr.get('distrito')
+        is_regular = (1 if data['is_regular'] else 0) if 'is_regular' in data else curr.get('is_regular')
+        monthly_fee = float(data['monthly_fee']) if 'monthly_fee' in data and data['monthly_fee'] is not None else curr.get('monthly_fee')
+        servicios = data['servicios'] if 'servicios' in data else curr.get('servicios')
+        contract_start = data['contract_start'] if 'contract_start' in data else curr.get('contract_start')
+        contract_end = data['contract_end'] if 'contract_end' in data else curr.get('contract_end')
+        location_code = data['location_code'] if 'location_code' in data else curr.get('location_code')
+        periodicity = data['periodicity'] if 'periodicity' in data else (curr.get('periodicity') or 'mensual')
+        centro_logistico = data['centro_logistico'] if 'centro_logistico' in data else curr.get('centro_logistico')
+
+        cur.execute("""
+            UPDATE client_sites SET
+                client_id=?, codigo_cliente=?, codigo_sede=?, codigo_cliente_sede=?,
                 nombre_cliente=?, sede_cliente=?, distrito=?, is_regular=?, monthly_fee=?,
-                servicios=?, contract_start=?, contract_end=?, location_code=?
+                servicios=?, contract_start=?, contract_end=?, location_code=?,
+                periodicity=?, centro_logistico=?
             WHERE id=?
-        """, (data.get('client_id'), data.get('codigo_cliente'), data.get('codigo_sede'), data.get('codigo_cliente_sede'),
-              data.get('nombre_cliente'), data.get('sede_cliente'), data.get('distrito'), data.get('is_regular'),
-              data.get('monthly_fee'), data.get('servicios'), data.get('contract_start'), data.get('contract_end'),
-              data.get('location_code'), id))
+        """, (client_id, codigo_cliente, codigo_sede, codigo_cliente_sede,
+              nombre_cliente, sede_cliente, distrito, is_regular, monthly_fee,
+              servicios, contract_start, contract_end, location_code,
+              periodicity, centro_logistico, id))
         conn.commit()
         return {'ok': True}
     except Exception as e:

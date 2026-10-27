@@ -54,6 +54,7 @@ Todas las funciones listadas en este documento están implementadas en `api.py` 
 | `delete_client(id)` | `id` | `{'ok': True}` | Elimina un cliente |
 | `get_client_sites(only_active=True)` | `only_active` (bool) | `[dict]` | Obtiene sedes con nombre y RUC del cliente |
 | `get_client_sites_grouped()` | Ninguno | `[dict]` | Obtiene clientes agrupados con sus respectivas sedes anidadas |
+| `get_client_site(id)` | `id` (int) | `dict` | Obtiene los datos detallados de una sede específica |
 | `create_client_site(data)` | `data` (`client_id`, `codigo_cliente`, `codigo_sede`, `sede_cliente`, `distrito`, `is_regular`, `monthly_fee`, `servicios`, ...) | `{'ok': True, 'id': int}` | Registra una nueva sede con código autogenerado |
 | `update_client_site(id, data)` | `id`, `data` | `{'ok': True}` | Actualiza la sede |
 | `delete_client_site(id)` | `id` | `{'ok': True}` | Elimina la sede |

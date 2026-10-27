@@ -2,7 +2,7 @@
 
 La base de datos del sistema está implementada en **SQLite 3** (`gestion.db`), configurada con `PRAGMA journal_mode=WAL` para alta concurrencia y `PRAGMA foreign_keys = ON` para integridad referencial estricta.
 
-Total de tablas activas: **42 tablas**.
+Total de tablas activas: **47 tablas**.
 
 ---
 
@@ -251,6 +251,11 @@ Diario personal de hitos y reflexiones del proceso de transición (`date`, `titl
 - **`finance_categories`**: Catálogo de categorías para gastos e ingresos (`name`, `type`, `icon`, `color`, `sort_order`, `is_active`).
 - **`finance_goals`**: Metas de ahorro personal, enfocada en la Meta Quirúrgica en USD (`title`, `target_amount`, `current_amount`, `currency`, `usd_exchange_rate`, `target_date`, `notes`, `is_active`).
 - **`finance_transactions`**: Registro de movimientos de gastos, ingresos, transferencias entre cuentas y aportes a la meta (`account_id`, `category_id`, `type`, `amount`, `currency`, `date`, `description`, `destination_account_id`, `goal_id`, `goal_amount_usd`).
+- **`finance_debts`**: Plan de desendeudamiento y amortización de deudas (`title`, `creditor`, `total_amount`, `initial_paid`, `currency`, `due_date`, `installments_total`, `installments_paid`, `status`, `notes`).
+- **`finance_debt_payments`**: Historial de abonos y cuotas pagadas hacia deudas (`debt_id`, `transaction_id`, `account_id`, `amount`, `date`, `installment_number`, `notes`).
+- **`finance_recurring_expenses`**: Catálogo de gastos fijos mensuales habituales (`name`, `category_id`, `account_id`, `amount`, `currency`, `due_day`, `auto_debit`, `is_active`, `notes`).
+- **`finance_recurring_logs`**: Control mensual de pagos de gastos fijos (Pagado/Pendiente) (`recurring_id`, `month`, `year`, `paid_amount`, `paid_date`, `transaction_id`, `is_paid`, `notes`).
+- **`finance_salaries`**: Registro y comparativa de sueldos esperados/pactados vs cobrados reales (`month`, `year`, `expected_amount`, `received_amount`, `currency`, `payment_date`, `account_id`, `status`, `notes`, `transaction_id`).
 
 ---
 

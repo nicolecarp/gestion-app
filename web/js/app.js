@@ -9495,7 +9495,7 @@ async function showShortcutSetupModal(actionId) {
                 'Abre <strong>Atajos</strong> y toca <strong>+</strong>.',
                 'Agrega la acción: <strong>Solicitar entrada</strong> (Tipo: Número, Pregunta: "¿Cuánto pesas hoy?").',
                 'Agrega: <strong>Obtener contenido de URL</strong> con método <strong>POST</strong>.',
-                `URL: <code style="word-break:break-all">${cloudUrl}/api/shortcut/log_weight?token=${token}</code>.',
+                `URL: <code style="word-break:break-all">${cloudUrl}/api/shortcut/log_weight?token=${token}</code>.`,
                 'En el cuerpo JSON agrega: clave <code>weight</code> con el valor de la <strong>Entrada provista</strong>.',
                 'Agrega: <strong>Obtener valor de diccionario</strong> (clave: <code>message</code>) → <strong>Leer con voz</strong>.'
             ]
@@ -9511,7 +9511,7 @@ async function showShortcutSetupModal(actionId) {
                 'Agrega: <strong>Solicitar entrada</strong> (Número: "¿Kilos?").',
                 'Agrega: <strong>Solicitar entrada</strong> (Número: "¿Repeticiones?").',
                 'Agrega: <strong>Obtener contenido de URL</strong> (POST).',
-                `URL: <code style="word-break:break-all">${cloudUrl}/api/shortcut/log_workout_set?token=${token}</code>.',
+                `URL: <code style="word-break:break-all">${cloudUrl}/api/shortcut/log_workout_set?token=${token}</code>.`,
                 'En el cuerpo JSON agrega los campos: <code>exercise_name</code>, <code>weight</code> y <code>reps</code>.',
                 'Agrega: <strong>Leer texto con voz</strong> con el valor de la clave <code>message</code>.'
             ]
@@ -9525,7 +9525,7 @@ async function showShortcutSetupModal(actionId) {
                 'Abre <strong>Atajos</strong> y toca <strong>+</strong>.',
                 'Agrega: <strong>Solicitar entrada</strong> (Texto: "¿Qué tarea quieres anotar?").',
                 'Agrega: <strong>Obtener contenido de URL</strong> (POST).',
-                `URL: <code style="word-break:break-all">${cloudUrl}/api/shortcut/create_task?token=${token}</code>.',
+                `URL: <code style="word-break:break-all">${cloudUrl}/api/shortcut/create_task?token=${token}</code>.`,
                 'En el cuerpo JSON agrega: <code>title</code> con la entrada provista y <code>area</code>: personal.',
                 'Agrega: <strong>Leer texto con voz</strong> con <code>message</code>.'
             ]
@@ -9540,7 +9540,7 @@ async function showShortcutSetupModal(actionId) {
                 'Agrega: <strong>Solicitar entrada</strong> (Número: "¿Monto en soles?").',
                 'Agrega: <strong>Solicitar entrada</strong> (Texto: "¿Concepto o motivo?").',
                 'Agrega: <strong>Obtener contenido de URL</strong> (POST).',
-                `URL: <code style="word-break:break-all">${cloudUrl}/api/shortcut/create_reimbursement?token=${token}</code>.',
+                `URL: <code style="word-break:break-all">${cloudUrl}/api/shortcut/create_reimbursement?token=${token}</code>.`,
                 'En el cuerpo JSON agrega: <code>amount</code> y <code>concept</code>.',
                 'Agrega: <strong>Leer texto con voz</strong> con <code>message</code>.'
             ]

@@ -306,6 +306,21 @@ Todas las funciones listadas en este documento están implementadas en `api.py` 
 | `get_finance_goals()` | Ninguno | `dict` | Consulta el estado de la Meta Operación en USD con desglose de aportes |
 | `update_finance_goal(id, data)` | `id` (int), `data` (dict) | `{'ok': True}` | Actualiza objetivo USD, ahorro base inicial, cotización de referencia y fecha |
 | `add_goal_contribution(data)` | `data` (dict) | `{'ok': True, 'id': int}` | Registra un aporte directo a la Meta Operación convirtiendo USD/ARS al vuelo |
+| `get_finance_debts()` | Ninguno | `{'ok': True, 'debts': list, 'summary': dict}` | Lista de deudas, desglose de pagos y métricas de avance y saldo pendiente |
+| `create_finance_debt(data)` | `data` (dict) | `{'ok': True, 'id': int}` | Crea una nueva deuda (título, acreedor, monto total, cuotas, notas) |
+| `update_finance_debt(id, data)` | `id` (int), `data` (dict) | `{'ok': True}` | Modifica los datos de una deuda |
+| `delete_finance_debt(id)` | `id` (int) | `{'ok': True}` | Borra una deuda y sus pagos |
+| `pay_finance_debt(data)` | `data` (dict) | `{'ok': True}` | Registra un abono/cuota, debita de la cuenta elegida e incrementa avance |
+| `delete_debt_payment(id)` | `id` (int) | `{'ok': True}` | Anula un pago de deuda y revierte la transacción generada |
+| `get_finance_recurring(month, year)` | `month`, `year` | `{'ok': True, 'recurring': list, 'summary': dict}` | Gastos fijos con estado Pagado/Pendiente/Vencido para el mes indicado |
+| `create_finance_recurring(data)` | `data` (dict) | `{'ok': True, 'id': int}` | Registra un gasto fijo habitual (nombre, categoría, día de vencimiento, monto) |
+| `update_finance_recurring(id, data)` | `id` (int), `data` (dict) | `{'ok': True}` | Actualiza los parámetros de un gasto fijo |
+| `delete_finance_recurring(id)` | `id` (int) | `{'ok': True}` | Elimina un gasto fijo |
+| `mark_recurring_paid(data)` | `data` (dict) | `{'ok': True}` | Marca como pagado el gasto fijo e impacta el gasto en la cuenta bancaria |
+| `unmark_recurring_paid(id)` | `id` (int) | `{'ok': True}` | Desmarca el pago de un gasto fijo |
+| `get_finance_salaries(year)` | `year` (opcional) | `{'ok': True, 'months': list, 'summary': dict}` | Comparativa anual mensual de sueldo esperado/pactado vs cobrado y diferencias |
+| `save_finance_salary(data)` | `data` (dict) | `{'ok': True}` | Carga/edita liquidación de sueldo de un mes y sincroniza el ingreso bancario |
+| `delete_finance_salary(id)` | `id` (int) | `{'ok': True}` | Elimina el registro de sueldo de un mes |
 
 ---
 

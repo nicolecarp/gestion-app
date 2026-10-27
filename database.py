@@ -507,6 +507,57 @@ def init_db():
             notes TEXT,
             created_at TEXT DEFAULT (datetime('now','localtime'))
         )""",
+        """CREATE TABLE IF NOT EXISTS finance_accounts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            account_type TEXT DEFAULT 'wallet',
+            currency TEXT DEFAULT 'ARS',
+            initial_balance REAL DEFAULT 0.0,
+            color TEXT DEFAULT '#8b5cf6',
+            icon TEXT DEFAULT '💳',
+            is_active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        )""",
+        """CREATE TABLE IF NOT EXISTS finance_categories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL,
+            icon TEXT DEFAULT '🏷️',
+            color TEXT DEFAULT '#f43f5e',
+            sort_order INTEGER DEFAULT 0,
+            is_active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        )""",
+        """CREATE TABLE IF NOT EXISTS finance_goals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL DEFAULT 'Meta Operación',
+            target_amount REAL NOT NULL DEFAULT 5000.0,
+            current_amount REAL DEFAULT 0.0,
+            currency TEXT DEFAULT 'USD',
+            target_date TEXT,
+            usd_exchange_rate REAL DEFAULT 1200.0,
+            notes TEXT,
+            is_active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        )""",
+        """CREATE TABLE IF NOT EXISTS finance_transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            account_id INTEGER NOT NULL REFERENCES finance_accounts(id) ON DELETE CASCADE,
+            category_id INTEGER REFERENCES finance_categories(id) ON DELETE SET NULL,
+            type TEXT NOT NULL,
+            amount REAL NOT NULL,
+            currency TEXT DEFAULT 'ARS',
+            date TEXT NOT NULL,
+            description TEXT,
+            destination_account_id INTEGER REFERENCES finance_accounts(id) ON DELETE SET NULL,
+            goal_id INTEGER REFERENCES finance_goals(id) ON DELETE SET NULL,
+            goal_amount_usd REAL DEFAULT 0.0,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_finance_tx_date ON finance_transactions(date)",
+        "CREATE INDEX IF NOT EXISTS idx_finance_tx_account ON finance_transactions(account_id)",
+        "CREATE INDEX IF NOT EXISTS idx_finance_tx_category ON finance_transactions(category_id)",
+        "CREATE INDEX IF NOT EXISTS idx_finance_tx_goal ON finance_transactions(goal_id)",
     ]:
         try:
             conn.execute(stmt)
@@ -536,6 +587,7 @@ def init_db():
 
     conn.commit()
     seed_default_workouts(conn)
+    seed_default_finance(conn)
     apply_cleanups_and_seeds(conn)
     conn.close()
 
@@ -1363,4 +1415,64 @@ def seed_default_workouts(conn):
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (day_id, phase, ex_name, sets, reps_text, equip, weight, rest_s, trackable, idx))
     conn.commit()
+
+
+def seed_default_finance(conn):
+    # Seed default accounts if empty
+    acc_count = conn.execute("SELECT COUNT(*) FROM finance_accounts").fetchone()[0]
+    if acc_count == 0:
+        default_accounts = [
+            ("Mercado Pago", "wallet", "ARS", 0.0, "#009EE3", "📱"),
+            ("Efectivo", "cash", "ARS", 0.0, "#10B981", "💵"),
+            ("Banco", "bank", "ARS", 0.0, "#6366F1", "🏦"),
+            ("Ahorros Operación (USD)", "savings", "USD", 0.0, "#EC4899", "🗽"),
+        ]
+        for name, acc_type, curr, init_bal, color, icon in default_accounts:
+            conn.execute("""
+                INSERT INTO finance_accounts (name, account_type, currency, initial_balance, color, icon)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (name, acc_type, curr, init_bal, color, icon))
+
+    # Seed default categories if empty
+    cat_count = conn.execute("SELECT COUNT(*) FROM finance_categories").fetchone()[0]
+    if cat_count == 0:
+        default_categories = [
+            # Gastos
+            ("Comida y Supermercado", "expense", "🛒", "#F59E0B", 1),
+            ("Salud y TRH / Farmacia", "expense", "💊", "#EC4899", 2),
+            ("Alquiler y Servicios", "expense", "🏠", "#6366F1", 3),
+            ("Transporte", "expense", "🚌", "#3B82F6", 4),
+            ("Universidad y Estudio", "expense", "📚", "#8B5CF6", 5),
+            ("Salidas y Cafés", "expense", "☕", "#F97316", 6),
+            ("Ropa y Cuidado Personal", "expense", "🛍️", "#D946EF", 7),
+            ("Aporte Meta Operación", "expense", "🏥", "#E11D48", 8),
+            ("Varios y Otros", "expense", "📦", "#6B7280", 9),
+            # Ingresos
+            ("Sueldo / Trabajo", "income", "💼", "#10B981", 10),
+            ("Extras / Freelance", "income", "🪙", "#059669", 11),
+            ("Transferencia / Regalo", "income", "🎁", "#14B8A6", 12),
+            ("Rendimientos / Inversión", "income", "📈", "#06B6D4", 13),
+        ]
+        for name, ctype, icon, color, sorder in default_categories:
+            conn.execute("""
+                INSERT INTO finance_categories (name, type, icon, color, sort_order)
+                VALUES (?, ?, ?, ?, ?)
+            """, (name, ctype, icon, color, sorder))
+
+    # Seed default goal if empty
+    goal_count = conn.execute("SELECT COUNT(*) FROM finance_goals").fetchone()[0]
+    if goal_count == 0:
+        conn.execute("""
+            INSERT INTO finance_goals (title, target_amount, current_amount, currency, usd_exchange_rate, notes)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            "Mi Operación",
+            5000.0,
+            0.0,
+            "USD",
+            1200.0,
+            "Fondo de ahorro para la intervención quirúrgica"
+        ))
+    conn.commit()
+
 

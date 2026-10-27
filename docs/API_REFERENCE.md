@@ -28,6 +28,7 @@ Todas las funciones listadas en este documento están implementadas en `api.py` 
 15. [Entrenamiento & Gimnasio](#15-entrenamiento--gimnasio)
 16. [Taller de Cosplays](#16-taller-de-cosplays)
 17. [Configuración y Sistema](#17-configuración-y-sistema)
+18. [Finanzas Personales & Meta Operación](#18-finanzas-personales--meta-operación)
 
 ---
 
@@ -283,3 +284,26 @@ Todas las funciones listadas en este documento están implementadas en `api.py` 
 | `check_reload()` | Ninguno | `bool` | Usado por el frontend en escritorio para saber si hubo cambios de código |
 | `get_lan_info()` | Ninguno | `{'ip': str, 'port': int, 'url': str}` | Obtiene la IP local para conectar el iPhone vía red Wi-Fi |
 | `sync_cloud_from_github()` | Ninguno | `{'ok': bool, 'output': str}` | Ejecuta `git pull` y recarga WSGI en la nube desde Ajustes |
+
+---
+
+## 18. Finanzas Personales & Meta Operación
+
+| Función | Parámetros | Retorno | Descripción |
+| :--- | :--- | :--- | :--- |
+| `get_finance_summary(month, year)` | `month` (opcional), `year` (opcional) | `{'ok': True, 'total_income': float, 'total_expense': float, 'net_balance': float, 'expenses_by_category': list, 'incomes_by_category': list, 'accounts': list, 'goal': dict, 'transactions': list}` | Resumen mensual consolidado en ARS, saldos de cuentas en vivo y estado de la meta en USD |
+| `get_finance_transactions(filters)` | `filters` (dict opcional) | `list[dict]` | Historial de transacciones con filtros por mes/año, cuenta, categoría, tipo o texto de búsqueda |
+| `create_finance_transaction(data)` | `data` (dict) | `{'ok': True, 'id': int}` | Registra gasto, ingreso, transferencia entre cuentas o aporte directo a la meta |
+| `update_finance_transaction(id, data)` | `id` (int), `data` (dict) | `{'ok': True}` | Actualiza monto, fecha, cuenta o detalles de un movimiento |
+| `delete_finance_transaction(id)` | `id` (int) | `{'ok': True}` | Elimina una transacción |
+| `get_finance_accounts()` | Ninguno | `list[dict]` | Lista de cuentas activas con saldo real calculado en tiempo real |
+| `create_finance_account(data)` | `data` (dict) | `{'ok': True, 'id': int}` | Crea una nueva cuenta o billetera (ej. Mercado Pago, Efectivo, Banco) |
+| `update_finance_account(id, data)` | `id` (int), `data` (dict) | `{'ok': True}` | Modifica nombre, tipo, saldo inicial o ícono de la cuenta |
+| `delete_finance_account(id)` | `id` (int) | `{'ok': True}` | Desactiva o borra una cuenta |
+| `get_finance_categories()` | Ninguno | `list[dict]` | Catálogo de categorías para gastos e ingresos |
+| `create_finance_category(data)` | `data` (dict) | `{'ok': True, 'id': int}` | Añade una categoría de gasto o ingreso |
+| `delete_finance_category(id)` | `id` (int) | `{'ok': True}` | Elimina o desactiva una categoría |
+| `get_finance_goals()` | Ninguno | `dict` | Consulta el estado de la Meta Operación en USD con desglose de aportes |
+| `update_finance_goal(id, data)` | `id` (int), `data` (dict) | `{'ok': True}` | Actualiza objetivo USD, ahorro base inicial, cotización de referencia y fecha |
+| `add_goal_contribution(data)` | `data` (dict) | `{'ok': True, 'id': int}` | Registra un aporte directo a la Meta Operación convirtiendo USD/ARS al vuelo |
+

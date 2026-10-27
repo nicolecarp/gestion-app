@@ -2,7 +2,7 @@
 
 La base de datos del sistema está implementada en **SQLite 3** (`gestion.db`), configurada con `PRAGMA journal_mode=WAL` para alta concurrencia y `PRAGMA foreign_keys = ON` para integridad referencial estricta.
 
-Total de tablas activas: **38 tablas**.
+Total de tablas activas: **42 tablas**.
 
 ---
 
@@ -11,9 +11,10 @@ Total de tablas activas: **38 tablas**.
 2. [Personal Operativo, Seguridad y Asistencia](#2-personal-operativo-seguridad-y-asistencia)
 3. [Universidad (UTN FRA)](#3-universidad-utn-fra)
 4. [Salud, TRH y Entrenamiento](#4-salud-trh-y-entrenamiento)
-5. [Taller de Cosplays](#5-taller-de-cosplays)
-6. [Productividad Personal & Tareas](#6-productividad-personal--tareas)
-7. [Configuración del Sistema](#7-configuración-del-sistema)
+5. [Finanzas Personales & Meta Operación](#5-finanzas-personales--meta-operación)
+6. [Taller de Cosplays](#6-taller-de-cosplays)
+7. [Productividad Personal & Tareas](#7-productividad-personal--tareas)
+8. [Configuración del Sistema](#8-configuración-del-sistema)
 
 ---
 
@@ -243,7 +244,16 @@ Diario personal de hitos y reflexiones del proceso de transición (`date`, `titl
 
 ---
 
-## 5. Taller de Cosplays
+## 5. Finanzas Personales & Meta Operación
+
+- **`finance_accounts`**: Billeteras y cuentas financieras (`name`, `account_type`, `currency`, `initial_balance`, `color`, `icon`, `is_active`).
+- **`finance_categories`**: Catálogo de categorías para gastos e ingresos (`name`, `type`, `icon`, `color`, `sort_order`, `is_active`).
+- **`finance_goals`**: Metas de ahorro personal, enfocada en la Meta Quirúrgica en USD (`title`, `target_amount`, `current_amount`, `currency`, `usd_exchange_rate`, `target_date`, `notes`, `is_active`).
+- **`finance_transactions`**: Registro de movimientos de gastos, ingresos, transferencias entre cuentas y aportes a la meta (`account_id`, `category_id`, `type`, `amount`, `currency`, `date`, `description`, `destination_account_id`, `goal_id`, `goal_amount_usd`).
+
+---
+
+## 6. Taller de Cosplays
 
 - **`cosplay_projects`**: Proyectos y trajes en desarrollo (`character_name`, `series_name`, `client_name`, `project_type`, `price`, `deposit`, `materials_cost`, `due_date`, `status`).
 - **`cosplay_items`**: Desglose de piezas, telas, accesorios y materiales de un proyecto (`project_id`, `name`, `item_type`, `cost`, `done`).
@@ -251,7 +261,7 @@ Diario personal de hitos y reflexiones del proceso de transición (`date`, `titl
 
 ---
 
-## 6. Productividad Personal & Tareas
+## 7. Productividad Personal & Tareas
 
 - **`areas`**: Categorías maestras de tareas (1: *Trabajo*, 2: *Universidad*, 3: *Personal*).
 - **`tasks`**: Tareas pendientes con alerta (`area_id`, `title`, `description`, `due_date`, `priority`, `status`, `reminder_days`).
@@ -260,7 +270,7 @@ Diario personal de hitos y reflexiones del proceso de transición (`date`, `titl
 
 ---
 
-## 7. Configuración del Sistema
+## 8. Configuración del Sistema
 
 ### `config`
 Almacén clave-valor para parámetros operacionales del sistema:

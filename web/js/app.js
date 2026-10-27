@@ -26,6 +26,12 @@ const state = {
     activeWorkout: null, // { dayId, dayName, warmup, cooldown, startTime, elapsedSec, timerId, restSec, restTimerId, exercises: [...] }
     progressExercise: '',
     progressMetric: 'max_weight',
+    financeTab: 'resumen',
+    financeMonth: new Date().getMonth() + 1,
+    financeYear: new Date().getFullYear(),
+    financeFilterType: 'all',
+    financeFilterAccount: '',
+    financeSearch: '',
 };
 
 function applyTheme(theme) {
@@ -42,7 +48,7 @@ function toggleTheme() {
     if (typeof window.eel !== 'undefined' && window.eel.set_config) {
         api(eel.set_config, 'theme', next).catch(() => {});
     }
-    if (state.view === 'health' || state.view === 'personal') {
+    if (state.view === 'health' || state.view === 'personal' || state.view === 'finance') {
         navigate(state.view);
     }
 }
@@ -196,6 +202,10 @@ function startReloadPoller() {
 
 // ===== NAVIGATION =====
 async function navigate(view) {
+    if (view === 'health') {
+        state.personalTab = (state.healthTab === 'measurements') ? 'measurements' : 'injections';
+        view = 'personal';
+    }
     const isSameView = (state.view === view);
     const savedScrollY = window.scrollY;
     state.view = view;
@@ -216,7 +226,8 @@ async function navigate(view) {
             case 'work': await renderWork(el); break;
             case 'university': await renderUniversity(el); break;
             case 'personal': await renderPersonal(el); break;
-            case 'health': await renderHealth(el); break;
+            case 'health': await renderPersonal(el); break;
+            case 'finance': await renderFinance(el); break;
             case 'cosplays':
             case 'print3d': await renderCosplays(el); break;
             case 'settings': await renderSettings(el); break;
@@ -608,7 +619,8 @@ async function renderDashboard(el) {
             </div>
             <div class="page-actions" style="display:flex;gap:8px;flex-wrap:wrap">
                 <button class="btn btn-primary btn-sm" onclick="state.personalTab='routine';navigate('personal')">🏋️‍♀️ Entrenar</button>
-                <button class="btn btn-secondary btn-sm" onclick="state.healthTab='measurements';navigate('health')">📏 Medidas</button>
+                <button class="btn btn-secondary btn-sm" onclick="state.personalTab='measurements';navigate('personal')">📏 Medidas</button>
+                <button class="btn btn-secondary btn-sm" onclick="navigate('finance')">💸 Finanzas</button>
                 <button class="btn btn-secondary btn-sm" onclick="navigate('cosplays')">🎭 Cosplays</button>
                 <button class="btn btn-secondary btn-sm" onclick="showPersonalTaskForm()">+ Tarea</button>
             </div>
@@ -619,12 +631,12 @@ async function renderDashboard(el) {
                 <div class="stat-value" style="font-size:1.05rem;line-height:1.25;margin:4px 0">${esc(nextWorkout)}</div>
                 <div class="stat-label">Toca hoy · ${workoutsMonth} este mes</div>
             </div>
-            <div class="stat-card ${injOverdue || (stats && stats.estradiol_stock !== null && stats.estradiol_stock <= 2) ? 'rose' : 'lavender'}" style="cursor:pointer" onclick="state.healthTab='injections';navigate('health')">
+            <div class="stat-card ${injOverdue || (stats && stats.estradiol_stock !== null && stats.estradiol_stock <= 2) ? 'rose' : 'lavender'}" style="cursor:pointer" onclick="state.personalTab='injections';navigate('personal')">
                 <div class="stat-icon">💉</div>
                 <div class="stat-value">${injLabel}</div>
                 <div class="stat-label">${stats && stats.estradiol_stock !== null ? (stats.estradiol_stock <= 2 ? `⚠️ Quedan ${stats.estradiol_stock} dosis` : `E₂ · Stock: ${stats.estradiol_stock} dosis`) : 'Próxima dosis E₂'}</div>
             </div>
-            <div class="stat-card sage" style="cursor:pointer" onclick="state.healthTab='measurements';navigate('health')">
+            <div class="stat-card sage" style="cursor:pointer" onclick="state.personalTab='measurements';navigate('personal')">
                 <div class="stat-icon">⚖️</div>
                 <div class="stat-value">${latestWeight}</div>
                 <div class="stat-label">Último peso</div>
@@ -735,7 +747,7 @@ function buildUpcomingTasks(tasks, stats) {
         const injOverdue = stats.overdue_injection;
         const badge = injOverdue ? '<span class="task-badge overdue">Vencida</span>' :
                       stats.next_injection_days <= 1 ? '<span class="task-badge due-soon">Hoy</span>' : '';
-        html += `<div class="task-item injection-reminder" onclick="state.healthTab='injections';navigate('health')">
+        html += `<div class="task-item injection-reminder" onclick="state.personalTab='injections';navigate('personal')">
             <div class="task-check" style="border-color:#B388EB;background:var(--bg-lavender)"></div>
             <div class="task-info">
                 <div class="task-title">💉 Dosis de Estradiol</div>
@@ -5906,22 +5918,36 @@ function showAssignmentModal(assign, subjectId) {
     };
 }
 
-// ===================== PERSONAL =====================
+// ===================== PERSONAL (UNIFICADO CON SALUD) =====================
 async function renderPersonal(el) {
     let tab = state.personalTab || 'routine';
     if (tab === 'tasks') tab = 'progress';
     const tabs = [
         { id: 'routine', label: '🏋️‍♀️ Mi Rutina' },
-        { id: 'progress', label: '📈 Progreso, Tareas y Hábitos' },
+        { id: 'progress', label: '📈 Progreso y Hábitos' },
+        { id: 'injections', label: '💉 Inyecciones (TRH)' },
+        { id: 'measurements', label: '📏 Medidas Corporales' },
     ];
 
+    let actionBtn = '';
+    let subtitle = 'Entrenamiento y hábitos';
+    if (tab === 'routine') {
+        actionBtn = '<button class="btn btn-primary" onclick="showWorkoutDayForm()">+ Nuevo día</button>';
+        subtitle = 'Entrenamiento y rutina semanal';
+    } else if (tab === 'progress') {
+        actionBtn = '<button class="btn btn-primary" onclick="showPersonalTaskForm()">+ Tarea</button><button class="btn btn-secondary" onclick="showHabitForm()">+ Hábito</button>';
+        subtitle = 'Hábitos, tareas y evolución en el gimnasio';
+    } else if (tab === 'injections') {
+        actionBtn = '<button class="btn btn-primary" onclick="showInjectionForm()">+ Registrar dosis</button>';
+        subtitle = 'Terapia de Reemplazo Hormonal (E₂)';
+    } else if (tab === 'measurements') {
+        actionBtn = '<button class="btn btn-secondary" onclick="showMeasurementGoalsModal()">🎯 Metas</button><button class="btn btn-primary" onclick="showMeasurementForm()">+ Medida</button>';
+        subtitle = 'Registro antropométrico y evolución corporal';
+    }
+
     let html = `<div class="page-header">
-        <div><h1>Personal</h1><div class="subtitle">Entrenamiento y organización</div></div>
-        <div class="page-actions">
-            ${tab === 'routine'
-                ? '<button class="btn btn-primary" onclick="showWorkoutDayForm()">+ Nuevo día</button>'
-                : '<button class="btn btn-primary" onclick="showPersonalTaskForm()">+ Tarea</button><button class="btn btn-secondary" onclick="showHabitForm()">+ Hábito</button>'}
-        </div>
+        <div><h1>Personal</h1><div class="subtitle">${subtitle}</div></div>
+        <div class="page-actions">${actionBtn}</div>
     </div>
     <div class="subnav">
         ${tabs.map(t => `<button class="subnav-item${tab === t.id ? ' active' : ''}" onclick="switchPersonalTab('${t.id}')">${t.label}</button>`).join('')}
@@ -5930,12 +5956,38 @@ async function renderPersonal(el) {
 
     el.innerHTML = html;
     const content = el.querySelector('#personalContent');
-    if (tab === 'routine') await renderPersonalRoutine(content);
-    else await renderPersonalProgress(content);
+
+    if (tab === 'routine') {
+        await renderPersonalRoutine(content);
+    } else if (tab === 'progress') {
+        await renderPersonalProgress(content);
+    } else if (tab === 'injections' || tab === 'measurements') {
+        const [injections, measurements, proj, goals, e2StockRaw, nextLabRaw] = await Promise.all([
+            api(eel.get_injections),
+            api(eel.get_body_measurements),
+            api(eel.get_estradiol_projection),
+            api(eel.get_measurement_goals),
+            api(eel.get_config, 'estradiol_stock'),
+            api(eel.get_config, 'next_lab_date')
+        ]);
+        state.measurementGoals = goals || {};
+        state.lastMeasurementsList = measurements || [];
+        state.estradiolStock = (e2StockRaw !== null && e2StockRaw !== undefined && e2StockRaw !== '') ? parseInt(e2StockRaw) : null;
+        state.nextLabDate = nextLabRaw || '';
+
+        if (tab === 'injections') {
+            renderHealthInjections(content, injections || [], proj || {});
+        } else {
+            renderHealthMeasurements(content, measurements || [], state.measurementGoals);
+        }
+    }
 }
 
 function switchPersonalTab(tab) {
     state.personalTab = tab;
+    if (tab === 'injections' || tab === 'measurements') {
+        state.healthTab = tab;
+    }
     navigate('personal');
 }
 
@@ -7543,41 +7595,14 @@ function drawWorkoutProgressChart(points, metric, exName) {
 
 // ===================== HEALTH =====================
 async function renderHealth(el) {
-    const [injections, measurements, proj, goals, e2StockRaw, nextLabRaw] = await Promise.all([
-        api(eel.get_injections),
-        api(eel.get_body_measurements),
-        api(eel.get_estradiol_projection),
-        api(eel.get_measurement_goals),
-        api(eel.get_config, 'estradiol_stock'),
-        api(eel.get_config, 'next_lab_date')
-    ]);
-    state.measurementGoals = goals || {};
-    state.lastMeasurementsList = measurements || [];
-    state.estradiolStock = (e2StockRaw !== null && e2StockRaw !== undefined && e2StockRaw !== '') ? parseInt(e2StockRaw) : null;
-    state.nextLabDate = nextLabRaw || '';
-
-    const tabs = ['injections', 'measurements'];
-    const labels = ['Inyecciones', 'Medidas'];
-    const tab = state.healthTab || 'injections';
-
-    let html = `<div class="page-header">
-        <div><h1>Salud</h1><div class="subtitle">Transición · bienestar</div></div>
-    </div>
-    <div class="subnav">`;
-    tabs.forEach(t => {
-        html += `<button class="subnav-item${tab === t ? ' active' : ''}" onclick="switchHealthTab('${t}')">${labels[tabs.indexOf(t)]}</button>`;
-    });
-    html += '</div><div id="healthContent"></div>';
-    el.innerHTML = html;
-
-    const content = el.querySelector('#healthContent');
-    if (tab === 'injections') renderHealthInjections(content, injections || [], proj || {});
-    else if (tab === 'measurements') renderHealthMeasurements(content, measurements || [], state.measurementGoals);
+    state.personalTab = state.healthTab || 'injections';
+    await renderPersonal(el);
 }
 
 function switchHealthTab(t) {
     state.healthTab = t;
-    navigate('health');
+    state.personalTab = t;
+    navigate('personal');
 }
 
 // --- HEALTH: INJECTIONS ---
@@ -9481,6 +9506,1073 @@ window.showPurchaseOrderModal = showPurchaseOrderModal;
 window.onPoClientChanged = onPoClientChanged;
 window.savePurchaseOrderForm = savePurchaseOrderForm;
 window.deletePurchaseOrder = deletePurchaseOrder;
+
+// ===================== FINANZAS =====================
+
+function fmtARS(n) {
+    if (isNaN(n) || n === null || n === undefined) return '$ 0';
+    return '$ ' + Number(n).toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+
+function fmtUSD(n) {
+    if (isNaN(n) || n === null || n === undefined) return 'US$ 0';
+    return 'US$ ' + Number(n).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+}
+
+async function renderFinance(el) {
+    const tab = state.financeTab || 'resumen';
+    const month = state.financeMonth || (new Date().getMonth() + 1);
+    const year = state.financeYear || new Date().getFullYear();
+
+    const summaryRes = await api(eel.get_finance_summary, month, year);
+    const summary = (summaryRes && summaryRes.ok) ? summaryRes : {
+        total_income: 0, total_expense: 0, net_balance: 0,
+        expenses_by_category: [], incomes_by_category: [],
+        accounts: [], goal: null, transactions: []
+    };
+
+    const months = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+    const tabs = [
+        { id: 'resumen', label: '📊 Resumen & Movimientos' },
+        { id: 'meta', label: '🗽 Meta Operación USD' },
+        { id: 'cuentas', label: '💳 Cuentas & Billeteras' },
+    ];
+
+    let monthOptions = '';
+    for (let i = 1; i <= 12; i++) {
+        monthOptions += `<option value="${i}" ${i === month ? 'selected' : ''}>${months[i - 1]}</option>`;
+    }
+    let yearOptions = '';
+    [2025, 2026, 2027].forEach(y => {
+        yearOptions += `<option value="${y}" ${y === year ? 'selected' : ''}>${y}</option>`;
+    });
+
+    let html = `
+    <div class="page-header" style="margin-bottom:14px">
+        <div>
+            <h1>Finanzas</h1>
+            <div class="subtitle">Control de gastos, ingresos y meta de ahorro</div>
+        </div>
+        <div class="page-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <div style="display:flex;gap:4px;align-items:center">
+                <select class="form-control" style="width:auto;padding:6px 10px;font-size:0.82rem" onchange="changeFinancePeriod(this.value, null)">${monthOptions}</select>
+                <select class="form-control" style="width:auto;padding:6px 10px;font-size:0.82rem" onchange="changeFinancePeriod(null, this.value)">${yearOptions}</select>
+            </div>
+            <button class="btn btn-secondary" onclick="showGoalContributionModal()">🗽 Sumar a Operación</button>
+            <button class="btn btn-primary" onclick="showNewFinanceTransactionModal()">+ Nuevo movimiento</button>
+        </div>
+    </div>
+    <div class="subnav">
+        ${tabs.map(t => `<button class="subnav-item${tab === t.id ? ' active' : ''}" onclick="switchFinanceTab('${t.id}')">${t.label}</button>`).join('')}
+    </div>
+    <div id="financeContent"></div>`;
+
+    el.innerHTML = html;
+    const content = el.querySelector('#financeContent');
+
+    if (tab === 'resumen') renderFinanceResumen(content, summary);
+    else if (tab === 'meta') renderFinanceMeta(content, summary);
+    else if (tab === 'cuentas') renderFinanceCuentas(content, summary);
+}
+
+function switchFinanceTab(tab) {
+    state.financeTab = tab;
+    navigate('finance');
+}
+
+function changeFinancePeriod(month, year) {
+    if (month !== null) state.financeMonth = parseInt(month);
+    if (year !== null) state.financeYear = parseInt(year);
+    navigate('finance');
+}
+
+function filterFinanceTxType(type) {
+    state.financeFilterType = type;
+    navigate('finance');
+}
+
+function filterFinanceTxAccount(accId) {
+    state.financeFilterAccount = accId;
+    navigate('finance');
+}
+
+function onSearchFinanceTx(query) {
+    state.financeSearch = (query || '').toLowerCase().trim();
+    const rows = document.querySelectorAll('.finance-tx-row');
+    rows.forEach(r => {
+        const text = (r.getAttribute('data-search') || '').toLowerCase();
+        if (!state.financeSearch || text.includes(state.financeSearch)) {
+            r.style.display = '';
+        } else {
+            r.style.display = 'none';
+        }
+    });
+}
+
+function renderFinanceResumen(el, data) {
+    const goal = data.goal;
+    let goalHtml = '';
+    if (goal) {
+        const pct = goal.progress_percent || 0;
+        goalHtml = `
+        <div class="finance-hero-card">
+            <div class="finance-goal-header">
+                <div class="finance-goal-title-group">
+                    <div class="finance-goal-icon">🗽</div>
+                    <div>
+                        <div class="finance-goal-title">${esc(goal.title)}</div>
+                        <div class="finance-goal-subtitle">Meta quirúrgica · TC Ref: $ ${goal.usd_exchange_rate || 1200} ARS/USD</div>
+                    </div>
+                </div>
+                <div class="finance-goal-amount-badge">
+                    <div class="finance-goal-val-main">${fmtUSD(goal.total_saved_usd)}</div>
+                    <div class="finance-goal-val-target">Objetivo: ${fmtUSD(goal.target_amount)}</div>
+                </div>
+            </div>
+            <div class="finance-progress-bar-wrap">
+                <div class="finance-progress-bar-fill" style="width:${Math.max(2, Math.min(100, pct))}%"></div>
+            </div>
+            <div class="finance-goal-footer">
+                <div>
+                    <strong>${pct}%</strong> completado · Faltan <strong>${fmtUSD(goal.remaining_usd)}</strong>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center">
+                    <span>Equiv. ARS: <strong>${fmtARS(goal.saved_ars_equiv)}</strong> / ${fmtARS(goal.target_ars_equiv)}</span>
+                    <button class="btn btn-primary btn-sm" onclick="showGoalContributionModal()" style="padding:4px 10px;font-size:0.78rem">+ Aporte</button>
+                    <button class="btn btn-ghost btn-sm" onclick="switchFinanceTab('meta')" style="padding:4px 10px;font-size:0.78rem">Detalle →</button>
+                </div>
+            </div>
+        </div>`;
+    }
+
+    // KPIs
+    const net = data.net_balance;
+    const netColor = net >= 0 ? 'var(--sage-dark, #2D6A4F)' : 'var(--rose-dark, #C9184A)';
+    const netBg = net >= 0 ? 'rgba(82, 183, 136, 0.12)' : 'rgba(242, 139, 168, 0.12)';
+    const kpiHtml = `
+    <div class="finance-kpi-grid">
+        <div class="finance-kpi-card">
+            <div class="finance-kpi-icon" style="background:rgba(82,183,136,0.15);color:#2D6A4F">💼</div>
+            <div class="finance-kpi-info">
+                <div class="finance-kpi-label">Ingresos del mes</div>
+                <div class="finance-kpi-value" style="color:#2D6A4F">+${fmtARS(data.total_income)}</div>
+                <div class="finance-kpi-sub">${data.incomes_by_category ? data.incomes_by_category.length : 0} categorías</div>
+            </div>
+        </div>
+        <div class="finance-kpi-card">
+            <div class="finance-kpi-icon" style="background:rgba(242,139,168,0.15);color:#C9184A">🛍️</div>
+            <div class="finance-kpi-info">
+                <div class="finance-kpi-label">Gastos del mes</div>
+                <div class="finance-kpi-value" style="color:#C9184A">-${fmtARS(data.total_expense)}</div>
+                <div class="finance-kpi-sub">${data.expenses_by_category ? data.expenses_by_category.length : 0} categorías</div>
+            </div>
+        </div>
+        <div class="finance-kpi-card">
+            <div class="finance-kpi-icon" style="background:${netBg};color:${netColor}">⚖️</div>
+            <div class="finance-kpi-info">
+                <div class="finance-kpi-label">Balance neto</div>
+                <div class="finance-kpi-value" style="color:${netColor}">${net >= 0 ? '+' : ''}${fmtARS(net)}</div>
+                <div class="finance-kpi-sub">${net >= 0 ? 'Superávit mensual' : 'Déficit mensual'}</div>
+            </div>
+        </div>
+    </div>`;
+
+    // Account chips strip
+    let accountsStrip = '<div class="finance-accounts-strip">';
+    (data.accounts || []).forEach(acc => {
+        const isSelected = String(state.financeFilterAccount) === String(acc.id);
+        const currFmt = acc.currency === 'USD' ? fmtUSD(acc.current_balance) : fmtARS(acc.current_balance);
+        accountsStrip += `
+        <div class="finance-account-chip${isSelected ? ' selected' : ''}" onclick="filterFinanceTxAccount('${isSelected ? '' : acc.id}')">
+            <div class="finance-acc-icon">${acc.icon || '💳'}</div>
+            <div style="min-width:0;flex:1">
+                <div class="finance-acc-name">${esc(acc.name)}</div>
+                <div class="finance-acc-balance">${currFmt}</div>
+            </div>
+        </div>`;
+    });
+    accountsStrip += `
+        <div class="finance-account-chip" onclick="showFinanceTransferModal()" style="border-style:dashed;justify-content:center;color:var(--text-muted)">
+            <span>⇆ Transferir</span>
+        </div>
+    </div>`;
+
+    // Category breakdown
+    let catsHtml = '';
+    if (data.expenses_by_category && data.expenses_by_category.length > 0) {
+        catsHtml = `
+        <div class="finance-cats-card">
+            <div style="font-weight:700;font-size:0.95rem;margin-bottom:14px;display:flex;justify-content:space-between">
+                <span>Desglose de Gastos por Categoría</span>
+                <span style="font-size:0.8rem;color:var(--text-muted);font-weight:normal">${data.expenses_by_category.length} rubros</span>
+            </div>
+            <div>`;
+        data.expenses_by_category.forEach(c => {
+            catsHtml += `
+            <div class="finance-cat-item">
+                <div class="finance-cat-header">
+                    <span>${c.icon || '🏷️'} <strong>${esc(c.name)}</strong></span>
+                    <span style="font-variant-numeric:tabular-nums">${fmtARS(c.total)} <span style="color:var(--text-muted);font-size:0.75rem">(${c.percent}%)</span></span>
+                </div>
+                <div class="finance-cat-bar-bg">
+                    <div class="finance-cat-bar-fill" style="width:${Math.max(1, c.percent)}%;background:${c.color || '#F28BA8'}"></div>
+                </div>
+            </div>`;
+        });
+        catsHtml += `</div></div>`;
+    }
+
+    // Filter transactions
+    const txs = data.transactions || [];
+    const filterType = state.financeFilterType || 'all';
+    const filterAcc = state.financeFilterAccount ? parseInt(state.financeFilterAccount) : null;
+
+    let filteredTxs = txs.filter(t => {
+        if (filterType === 'expense' && t.type !== 'expense') return false;
+        if (filterType === 'income' && t.type !== 'income') return false;
+        if (filterType === 'goal_contribution' && t.type !== 'goal_contribution') return false;
+        if (filterType === 'transfer' && t.type !== 'transfer') return false;
+        if (filterAcc && t.account_id !== filterAcc && t.destination_account_id !== filterAcc) return false;
+        return true;
+    });
+
+    let txListHtml = '';
+    if (filteredTxs.length === 0) {
+        txListHtml = `
+        <div class="empty-state" style="padding:40px 20px">
+            <div class="empty-icon">💸</div>
+            <h3>Sin movimientos en este período</h3>
+            <p>Registra tu primer gasto, ingreso o aporte a la meta.</p>
+            <div style="margin-top:12px;display:flex;gap:8px;justify-content:center">
+                <button class="btn btn-primary" onclick="showNewFinanceTransactionModal()">+ Nuevo movimiento</button>
+                <button class="btn btn-secondary" onclick="showGoalContributionModal()">🗽 Sumar a Operación</button>
+            </div>
+        </div>`;
+    } else {
+        txListHtml = '<div class="finance-tx-list">';
+        filteredTxs.forEach(t => {
+            const isGoal = (t.type === 'goal_contribution');
+            const isInc = (t.type === 'income');
+            const isExp = (t.type === 'expense');
+            const isTrf = (t.type === 'transfer');
+
+            let icon = t.category_icon || '🏷️';
+            let color = t.category_color || '#8b5cf6';
+            if (isGoal) { icon = '🗽'; color = '#B388EB'; }
+            if (isTrf) { icon = '⇆'; color = '#6366F1'; }
+
+            let sign = '-';
+            let amtClass = 'expense';
+            if (isInc) { sign = '+'; amtClass = 'income'; }
+            else if (isGoal) { sign = '🗽'; amtClass = 'goal_contribution'; }
+            else if (isTrf) { sign = '⇆'; amtClass = 'transfer'; }
+
+            let accountText = esc(t.account_name || 'Cuenta');
+            if (isTrf && t.dest_account_name) {
+                accountText = `${esc(t.account_name)} → ${esc(t.dest_account_name)}`;
+            }
+
+            const searchKey = `${t.description || ''} ${t.category_name || ''} ${t.account_name || ''} ${t.date || ''}`;
+
+            txListHtml += `
+            <div class="finance-tx-row" data-search="${esc(searchKey)}">
+                <div class="finance-tx-left">
+                    <div class="finance-tx-icon-bubble" style="background:${color}22;color:${color}">
+                        ${icon}
+                    </div>
+                    <div class="finance-tx-details">
+                        <div class="finance-tx-desc">${esc(t.description || t.category_name || (isTrf ? 'Transferencia' : (isGoal ? 'Aporte Operación' : 'Movimiento')))}</div>
+                        <div class="finance-tx-meta">
+                            <span>${fmtDate(t.date)}</span>
+                            <span>·</span>
+                            <span style="font-weight:600">${accountText}</span>
+                            ${t.category_name && !isGoal && !isTrf ? `<span>·</span><span>${esc(t.category_name)}</span>` : ''}
+                        </div>
+                    </div>
+                </div>
+                <div class="finance-tx-right">
+                    <div style="text-align:right">
+                        <div class="finance-tx-amount ${amtClass}">
+                            ${sign} ${fmtARS(t.amount)}
+                        </div>
+                        ${isGoal && t.goal_amount_usd ? `<span class="finance-tx-usd-badge">+${fmtUSD(t.goal_amount_usd)} a la meta</span>` : ''}
+                    </div>
+                    <div style="display:flex;gap:4px">
+                        <button class="btn btn-ghost btn-sm" onclick="showNewFinanceTransactionModal(${t.id})" title="Editar" style="padding:4px 8px">✏️</button>
+                        <button class="btn btn-ghost btn-sm" onclick="deleteFinanceTransactionPrompt(${t.id})" title="Eliminar" style="padding:4px 8px;color:var(--rose)">🗑️</button>
+                    </div>
+                </div>
+            </div>`;
+        });
+        txListHtml += '</div>';
+    }
+
+    // Filter bar
+    const filterPills = [
+        { id: 'all', label: 'Todos' },
+        { id: 'expense', label: 'Gastos' },
+        { id: 'income', label: 'Ingresos' },
+        { id: 'goal_contribution', label: '🗽 Meta Operación' },
+        { id: 'transfer', label: 'Transferencias' },
+    ];
+
+    let filterPillsHtml = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+        <div style="display:flex;gap:4px;flex-wrap:wrap">
+            ${filterPills.map(p => `
+                <button class="subnav-item${filterType === p.id ? ' active' : ''}" style="padding:5px 12px;font-size:0.78rem" onclick="filterFinanceTxType('${p.id}')">
+                    ${p.label}
+                </button>
+            `).join('')}
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <input type="text" class="form-control" placeholder="🔍 Buscar concepto..." style="width:200px;padding:6px 10px;font-size:0.82rem" oninput="onSearchFinanceTx(this.value)">
+            ${state.financeFilterAccount ? `<button class="btn btn-ghost btn-sm" onclick="filterFinanceTxAccount('')" style="font-size:0.75rem">Limpiar filtro cuenta ✕</button>` : ''}
+        </div>
+    </div>`;
+
+    el.innerHTML = goalHtml + kpiHtml + accountsStrip + catsHtml + filterPillsHtml + txListHtml;
+}
+
+async function renderFinanceMeta(el, data) {
+    const goalRes = await api(eel.get_finance_goals);
+    const goal = goalRes || data.goal;
+
+    if (!goal) {
+        el.innerHTML = '<div class="empty-state"><h3>No se encontró la meta</h3></div>';
+        return;
+    }
+
+    const pct = goal.progress_percent || 0;
+    const rate = goal.usd_exchange_rate || 1200;
+
+    // Monthly saving calculation
+    let targetDateNote = '';
+    let monthlyRec = '';
+    if (goal.target_date) {
+        const tDate = new Date(goal.target_date);
+        const now = new Date();
+        const diffMonths = Math.max(1, (tDate.getFullYear() - now.getFullYear()) * 12 + (tDate.getMonth() - now.getMonth()));
+        const reqMonthlyUSD = Math.round(goal.remaining_usd / diffMonths);
+        targetDateNote = `Objetivo fijado para: <strong>${fmtDate(goal.target_date)}</strong> (${diffMonths} meses restantes)`;
+        monthlyRec = `Para alcanzar la meta a tiempo, necesitas ahorrar aproximadamente <strong>${fmtUSD(reqMonthlyUSD)}/mes</strong> (unos <strong>${fmtARS(reqMonthlyUSD * rate)}/mes</strong>).`;
+    } else {
+        targetDateNote = 'Sin fecha límite definida (puedes fijar una en configuración).';
+        const sample6 = Math.round(goal.remaining_usd / 6);
+        const sample12 = Math.round(goal.remaining_usd / 12);
+        monthlyRec = `Ejemplos de ritmo: Ahorrando <strong>${fmtUSD(sample6)}/mes</strong> llegás en 6 meses · Con <strong>${fmtUSD(sample12)}/mes</strong> llegás en 12 meses.`;
+    }
+
+    let contribsHtml = '';
+    const contribs = goal.contributions || [];
+    if (contribs.length === 0) {
+        contribsHtml = `
+        <div class="empty-state" style="padding:24px 10px">
+            <p>Todavía no hay aportes registrados directamente. ¡Haz tu primer aporte!</p>
+            <button class="btn btn-primary" onclick="showGoalContributionModal()" style="margin-top:8px">+ Sumar Aporte</button>
+        </div>`;
+    } else {
+        contribsHtml = `
+        <div class="table-container">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Fecha</th>
+                        <th>Aporte USD</th>
+                        <th>Monto ARS</th>
+                        <th>Cuenta</th>
+                        <th>Detalle</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${contribs.map(c => `
+                        <tr>
+                            <td>${fmtDate(c.date)}</td>
+                            <td><strong style="color:#B388EB">${fmtUSD(c.goal_amount_usd || (c.amount / rate))}</strong></td>
+                            <td>${fmtARS(c.amount)}</td>
+                            <td>${c.account_icon || '💳'} ${esc(c.account_name || 'Cuenta')}</td>
+                            <td>${esc(c.description || '-')}</td>
+                            <td style="text-align:right">
+                                <button class="btn btn-ghost btn-sm" onclick="deleteFinanceTransactionPrompt(${c.id})" style="color:var(--rose);padding:2px 6px">🗑️</button>
+                            </td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        </div>`;
+    }
+
+    el.innerHTML = `
+    <div class="finance-hero-card" style="padding:28px">
+        <div class="finance-goal-header">
+            <div class="finance-goal-title-group">
+                <div class="finance-goal-icon" style="width:54px;height:54px;font-size:2rem">🗽</div>
+                <div>
+                    <h2 style="margin:0 0 4px 0">${esc(goal.title)}</h2>
+                    <div style="font-size:0.85rem;color:var(--text-muted)">${esc(goal.notes || 'Fondo de ahorro para la intervención quirúrgica')}</div>
+                </div>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn btn-secondary" onclick="showGoalConfigModal()">⚙️ Configurar Meta</button>
+                <button class="btn btn-primary" onclick="showGoalContributionModal()">+ Sumar Aporte</button>
+            </div>
+        </div>
+
+        <div style="display:flex;align-items:baseline;gap:12px;margin:18px 0 10px 0">
+            <span style="font-size:2.4rem;font-weight:800;color:#E87A9A;font-variant-numeric:tabular-nums">${fmtUSD(goal.total_saved_usd)}</span>
+            <span style="font-size:1.1rem;color:var(--text-muted)">de ${fmtUSD(goal.target_amount)}</span>
+            <span class="task-badge" style="background:rgba(179,136,235,0.2);color:#B388EB;font-size:0.9rem;padding:4px 10px">${pct}%</span>
+        </div>
+
+        <div class="finance-progress-bar-wrap" style="height:18px">
+            <div class="finance-progress-bar-fill" style="width:${Math.max(2, Math.min(100, pct))}%"></div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-top:16px;padding-top:16px;border-top:1px solid var(--border-light)">
+            <div>
+                <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase">Monto Restante</div>
+                <div style="font-size:1.15rem;font-weight:700;color:var(--text)">${fmtUSD(goal.remaining_usd)}</div>
+                <div style="font-size:0.75rem;color:var(--text-muted)">≈ ${fmtARS(goal.remaining_ars_equiv)}</div>
+            </div>
+            <div>
+                <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase">Ahorro Actual en ARS</div>
+                <div style="font-size:1.15rem;font-weight:700;color:var(--text)">${fmtARS(goal.saved_ars_equiv)}</div>
+                <div style="font-size:0.75rem;color:var(--text-muted)">Base USD: ${fmtUSD(goal.base_usd)}</div>
+            </div>
+            <div>
+                <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase">Cotización Dólar Ref.</div>
+                <div style="font-size:1.15rem;font-weight:700;color:var(--text)">$ ${rate} ARS</div>
+                <div style="font-size:0.75rem;color:var(--text-muted)">Editable en ajustes</div>
+            </div>
+            <div>
+                <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase">Aportes Realizados</div>
+                <div style="font-size:1.15rem;font-weight:700;color:var(--text)">${goal.contributions_count || 0} registros</div>
+                <div style="font-size:0.75rem;color:var(--text-muted)">${fmtUSD(goal.contributed_usd)} sumados</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px;padding:18px 20px">
+        <div style="font-weight:700;font-size:0.95rem;margin-bottom:8px">💡 Proyección & Ritmo de Ahorro</div>
+        <div style="font-size:0.85rem;color:var(--text);line-height:1.5;margin-bottom:6px">${targetDateNote}</div>
+        <div style="font-size:0.85rem;color:var(--text-muted);line-height:1.5">${monthlyRec}</div>
+    </div>
+
+    <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+            <div style="font-weight:700;font-size:0.95rem">Historial de Aportes a la Operación</div>
+            <button class="btn btn-primary btn-sm" onclick="showGoalContributionModal()">+ Nuevo Aporte</button>
+        </div>
+        ${contribsHtml}
+    </div>`;
+}
+
+async function renderFinanceCuentas(el, data) {
+    const accounts = data.accounts || [];
+
+    let gridHtml = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px">
+        <div>
+            <div style="font-weight:700;font-size:1.05rem">Cuentas y Billeteras</div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">Saldos calculados en tiempo real según movimientos</div>
+        </div>
+        <div style="display:flex;gap:8px">
+            <button class="btn btn-secondary" onclick="showFinanceTransferModal()">⇆ Transferencia entre cuentas</button>
+            <button class="btn btn-primary" onclick="showFinanceAccountModal()">+ Nueva cuenta</button>
+        </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px">`;
+
+    accounts.forEach(acc => {
+        const currFmt = acc.currency === 'USD' ? fmtUSD(acc.current_balance) : fmtARS(acc.current_balance);
+        const initFmt = acc.currency === 'USD' ? fmtUSD(acc.initial_balance) : fmtARS(acc.initial_balance);
+        gridHtml += `
+        <div class="card" style="padding:18px 20px;border-top:4px solid ${acc.color || '#8b5cf6'}">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+                <div style="display:flex;align-items:center;gap:10px">
+                    <span style="font-size:1.6rem">${acc.icon || '💳'}</span>
+                    <div>
+                        <div style="font-weight:700;font-size:1rem">${esc(acc.name)}</div>
+                        <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase">${acc.currency} · ${esc(acc.account_type)}</div>
+                    </div>
+                </div>
+                <div style="display:flex;gap:4px">
+                    <button class="btn btn-ghost btn-sm" onclick="showFinanceAccountModal(${acc.id})" style="padding:3px 6px">✏️</button>
+                    <button class="btn btn-ghost btn-sm" onclick="deleteFinanceAccountPrompt(${acc.id})" style="padding:3px 6px;color:var(--rose)">🗑️</button>
+                </div>
+            </div>
+            <div style="margin:12px 0 8px 0">
+                <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase">Saldo Actual</div>
+                <div style="font-size:1.6rem;font-weight:800;color:var(--text);font-variant-numeric:tabular-nums">${currFmt}</div>
+            </div>
+            <div style="font-size:0.78rem;color:var(--text-muted);border-top:1px solid var(--border-light);padding-top:8px;display:flex;justify-content:space-between">
+                <span>Saldo inicial: ${initFmt}</span>
+                <span onclick="filterFinanceTxAccount(${acc.id});switchFinanceTab('resumen')" style="cursor:pointer;color:var(--accent);font-weight:600">Ver movs →</span>
+            </div>
+        </div>`;
+    });
+    gridHtml += '</div>';
+
+    el.innerHTML = gridHtml;
+}
+
+// ===================== MODALES FINANZAS =====================
+
+async function showNewFinanceTransactionModal(txId = null) {
+    const [accounts, categories, goals] = await Promise.all([
+        api(eel.get_finance_accounts),
+        api(eel.get_finance_categories),
+        api(eel.get_finance_goals)
+    ]);
+
+    let tx = null;
+    if (txId) {
+        const txs = await api(eel.get_finance_transactions, {});
+        tx = (txs || []).find(t => t.id === txId);
+    }
+
+    const defaultType = tx ? tx.type : (state.financeFilterType !== 'all' ? state.financeFilterType : 'expense');
+    const defaultDate = tx ? tx.date : todayStr();
+    const defaultAcc = tx ? tx.account_id : (accounts[0] ? accounts[0].id : 1);
+    const defaultCat = tx ? tx.category_id : '';
+    const defaultAmt = tx ? tx.amount : '';
+    const defaultDesc = tx ? tx.description : '';
+    const defaultDestAcc = tx ? tx.destination_account_id : '';
+    const defaultGoalUsd = tx ? tx.goal_amount_usd : '';
+
+    const rate = (goals && goals.usd_exchange_rate) ? goals.usd_exchange_rate : 1200;
+
+    let accOptions = accounts.map(a => `<option value="${a.id}" ${a.id === defaultAcc ? 'selected' : ''}>${a.icon || '💳'} ${esc(a.name)} (${a.currency})</option>`).join('');
+    let destAccOptions = accounts.map(a => `<option value="${a.id}" ${a.id === defaultDestAcc ? 'selected' : ''}>${a.icon || '💳'} ${esc(a.name)} (${a.currency})</option>`).join('');
+
+    let expCats = categories.filter(c => c.type === 'expense');
+    let incCats = categories.filter(c => c.type === 'income');
+
+    let catOptions = `<option value="">-- Sin categoría --</option>`;
+    catOptions += `<optgroup label="Gastos">`;
+    expCats.forEach(c => { catOptions += `<option value="${c.id}" ${c.id === defaultCat ? 'selected' : ''}>${c.icon || '🏷️'} ${esc(c.name)}</option>`; });
+    catOptions += `</optgroup><optgroup label="Ingresos">`;
+    incCats.forEach(c => { catOptions += `<option value="${c.id}" ${c.id === defaultCat ? 'selected' : ''}>${c.icon || '💼'} ${esc(c.name)}</option>`; });
+    catOptions += `</optgroup>`;
+
+    const bodyHtml = `
+    <div style="display:flex;gap:6px;margin-bottom:14px;background:var(--border-light);padding:4px;border-radius:var(--radius-sm)">
+        <button type="button" class="btn btn-sm ${defaultType === 'expense' ? 'btn-primary' : 'btn-ghost'}" id="txTypeExp" onclick="setTxModalType('expense')" style="flex:1">Gasto (-)</button>
+        <button type="button" class="btn btn-sm ${defaultType === 'income' ? 'btn-primary' : 'btn-ghost'}" id="txTypeInc" onclick="setTxModalType('income')" style="flex:1">Ingreso (+)</button>
+        <button type="button" class="btn btn-sm ${defaultType === 'goal_contribution' ? 'btn-primary' : 'btn-ghost'}" id="txTypeGoal" onclick="setTxModalType('goal_contribution')" style="flex:1">🗽 Operación</button>
+        <button type="button" class="btn btn-sm ${defaultType === 'transfer' ? 'btn-primary' : 'btn-ghost'}" id="txTypeTrf" onclick="setTxModalType('transfer')" style="flex:1">⇆ Transfer</button>
+    </div>
+    <input type="hidden" id="txType" value="${defaultType}">
+    <input type="hidden" id="txId" value="${txId || ''}">
+    <input type="hidden" id="txRate" value="${rate}">
+
+    <div class="form-group">
+        <label class="form-label">Monto ($ ARS) *</label>
+        <input type="number" step="any" id="txAmount" class="form-control" placeholder="0.00" value="${defaultAmt}" required style="font-size:1.1rem;font-weight:700" oninput="onTxAmountChanged()">
+    </div>
+
+    <div id="txGoalFields" style="display:${defaultType === 'goal_contribution' ? 'block' : 'none'};background:rgba(179,136,235,0.1);padding:12px;border-radius:var(--radius-sm);margin-bottom:14px;border:1px solid rgba(179,136,235,0.25)">
+        <div style="font-size:0.8rem;font-weight:600;color:#B388EB;margin-bottom:6px">🗽 Aporte a Meta Operación</div>
+        <div style="display:flex;gap:10px;align-items:center">
+            <div style="flex:1">
+                <label class="form-label" style="font-size:0.75rem">Equivalente USD</label>
+                <input type="number" step="any" id="txGoalUsd" class="form-control" placeholder="USD" value="${defaultGoalUsd}" oninput="onTxGoalUsdChanged()">
+            </div>
+            <div style="font-size:0.8rem;color:var(--text-muted);padding-top:16px">
+                TC: $ ${rate}
+            </div>
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label class="form-label" id="txAccLabel">Cuenta / Billetera *</label>
+        <select id="txAccount" class="form-control">${accOptions}</select>
+    </div>
+
+    <div class="form-group" id="txDestAccGroup" style="display:${defaultType === 'transfer' ? 'block' : 'none'}">
+        <label class="form-label">Cuenta Destino *</label>
+        <select id="txDestAccount" class="form-control">${destAccOptions}</select>
+    </div>
+
+    <div class="form-group" id="txCatGroup" style="display:${defaultType === 'transfer' ? 'none' : 'block'}">
+        <label class="form-label">Categoría</label>
+        <select id="txCategory" class="form-control">${catOptions}</select>
+    </div>
+
+    <div class="form-group">
+        <label class="form-label">Fecha *</label>
+        <input type="date" id="txDate" class="form-control" value="${defaultDate}" required>
+    </div>
+
+    <div class="form-group">
+        <label class="form-label">Descripción / Comercio / Detalle</label>
+        <input type="text" id="txDescription" class="form-control" placeholder="Ej: Supermercado, Farmacia TRH, Sueldo..." value="${esc(defaultDesc)}">
+    </div>`;
+
+    openModal(txId ? 'Editar Movimiento' : 'Nuevo Movimiento', bodyHtml);
+    document.getElementById('modalSave').onclick = saveFinanceTransactionForm;
+}
+
+function setTxModalType(type) {
+    document.getElementById('txType').value = type;
+    ['txTypeExp', 'txTypeInc', 'txTypeGoal', 'txTypeTrf'].forEach(btnId => {
+        const b = document.getElementById(btnId);
+        if (b) { b.classList.remove('btn-primary'); b.classList.add('btn-ghost'); }
+    });
+    if (type === 'expense') document.getElementById('txTypeExp').className = 'btn btn-sm btn-primary';
+    else if (type === 'income') document.getElementById('txTypeInc').className = 'btn btn-sm btn-primary';
+    else if (type === 'goal_contribution') document.getElementById('txTypeGoal').className = 'btn btn-sm btn-primary';
+    else if (type === 'transfer') document.getElementById('txTypeTrf').className = 'btn btn-sm btn-primary';
+
+    document.getElementById('txDestAccGroup').style.display = (type === 'transfer') ? 'block' : 'none';
+    document.getElementById('txCatGroup').style.display = (type === 'transfer') ? 'none' : 'block';
+    document.getElementById('txGoalFields').style.display = (type === 'goal_contribution') ? 'block' : 'none';
+    document.getElementById('txAccLabel').textContent = (type === 'transfer') ? 'Cuenta Origen *' : 'Cuenta / Billetera *';
+
+    if (type === 'goal_contribution') {
+        onTxAmountChanged();
+    }
+}
+
+function onTxAmountChanged() {
+    const type = document.getElementById('txType').value;
+    if (type === 'goal_contribution') {
+        const amt = parseFloat(document.getElementById('txAmount').value) || 0;
+        const rate = parseFloat(document.getElementById('txRate').value) || 1200;
+        if (amt > 0 && rate > 0) {
+            document.getElementById('txGoalUsd').value = (amt / rate).toFixed(2);
+        }
+    }
+}
+
+function onTxGoalUsdChanged() {
+    const usd = parseFloat(document.getElementById('txGoalUsd').value) || 0;
+    const rate = parseFloat(document.getElementById('txRate').value) || 1200;
+    if (usd > 0 && rate > 0) {
+        document.getElementById('txAmount').value = Math.round(usd * rate);
+    }
+}
+
+async function saveFinanceTransactionForm() {
+    const txId = document.getElementById('txId').value;
+    const type = document.getElementById('txType').value;
+    const amount = parseFloat(document.getElementById('txAmount').value);
+    const account_id = document.getElementById('txAccount').value;
+    const destination_account_id = document.getElementById('txDestAccount') ? document.getElementById('txDestAccount').value : null;
+    const category_id = document.getElementById('txCategory') ? document.getElementById('txCategory').value : null;
+    const date = document.getElementById('txDate').value;
+    const description = document.getElementById('txDescription').value;
+    const goal_amount_usd = document.getElementById('txGoalUsd') ? parseFloat(document.getElementById('txGoalUsd').value) : 0;
+
+    if (isNaN(amount) || amount <= 0) {
+        showToast('Ingresa un monto válido mayor a 0');
+        return;
+    }
+    if (!account_id) {
+        showToast('Selecciona una cuenta');
+        return;
+    }
+    if (type === 'transfer' && (!destination_account_id || destination_account_id === account_id)) {
+        showToast('Selecciona una cuenta destino distinta a la de origen');
+        return;
+    }
+
+    const payload = {
+        type, amount, account_id, destination_account_id, category_id,
+        date, description, goal_amount_usd, currency: 'ARS'
+    };
+
+    let res;
+    if (txId) {
+        res = await api(eel.update_finance_transaction, parseInt(txId), payload);
+    } else {
+        res = await api(eel.create_finance_transaction, payload);
+    }
+
+    if (res && res.ok) {
+        showToast(txId ? 'Movimiento actualizado' : 'Movimiento registrado');
+        closeModal();
+        navigate('finance');
+    } else {
+        showToast('Error: ' + ((res && res.error) || 'No se pudo guardar'));
+    }
+}
+
+async function showGoalContributionModal() {
+    const [accounts, goal] = await Promise.all([
+        api(eel.get_finance_accounts),
+        api(eel.get_finance_goals)
+    ]);
+
+    const rate = (goal && goal.usd_exchange_rate) ? goal.usd_exchange_rate : 1200;
+    let accOptions = accounts.map(a => `<option value="${a.id}">${a.icon || '💳'} ${esc(a.name)} (${a.currency})</option>`).join('');
+
+    const bodyHtml = `
+    <div style="background:rgba(179,136,235,0.12);padding:14px;border-radius:var(--radius);margin-bottom:16px;border:1px solid rgba(179,136,235,0.3)">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+            <span style="font-size:1.6rem">🗽</span>
+            <div>
+                <strong style="color:#B388EB">${esc((goal && goal.title) || 'Meta Operación')}</strong>
+                <div style="font-size:0.78rem;color:var(--text-muted)">Cotización ref: $ ${rate} ARS/USD</div>
+            </div>
+        </div>
+    </div>
+    <input type="hidden" id="goalRate" value="${rate}">
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+        <div class="form-group" style="margin:0">
+            <label class="form-label">Aporte en USD (Dólares)</label>
+            <input type="number" step="any" id="goalUsdInput" class="form-control" placeholder="US$ 100" style="font-size:1.15rem;font-weight:700;color:#B388EB" oninput="onGoalUsdType()">
+        </div>
+        <div class="form-group" style="margin:0">
+            <label class="form-label">Monto en ARS (Pesos)</label>
+            <input type="number" step="any" id="goalArsInput" class="form-control" placeholder="$ 120.000" style="font-size:1.15rem;font-weight:700" oninput="onGoalArsType()">
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label class="form-label">¿De qué cuenta sale el dinero? *</label>
+        <select id="goalAccount" class="form-control">${accOptions}</select>
+    </div>
+
+    <div class="form-group">
+        <label class="form-label">Fecha del aporte</label>
+        <input type="date" id="goalDate" class="form-control" value="${todayStr()}">
+    </div>
+
+    <div class="form-group">
+        <label class="form-label">Nota / Concepto</label>
+        <input type="text" id="goalNotes" class="form-control" placeholder="Ej: Ahorro de mes, aguinaldo, freelance..." value="Aporte a Meta Operación">
+    </div>`;
+
+    openModal('🗽 Sumar Aporte a la Operación', bodyHtml);
+    document.getElementById('modalSave').onclick = saveGoalContributionForm;
+}
+
+function onGoalUsdType() {
+    const usd = parseFloat(document.getElementById('goalUsdInput').value) || 0;
+    const rate = parseFloat(document.getElementById('goalRate').value) || 1200;
+    if (usd > 0) {
+        document.getElementById('goalArsInput').value = Math.round(usd * rate);
+    }
+}
+
+function onGoalArsType() {
+    const ars = parseFloat(document.getElementById('goalArsInput').value) || 0;
+    const rate = parseFloat(document.getElementById('goalRate').value) || 1200;
+    if (ars > 0 && rate > 0) {
+        document.getElementById('goalUsdInput').value = (ars / rate).toFixed(2);
+    }
+}
+
+async function saveGoalContributionForm() {
+    const usd = parseFloat(document.getElementById('goalUsdInput').value) || 0;
+    const ars = parseFloat(document.getElementById('goalArsInput').value) || 0;
+    const account_id = document.getElementById('goalAccount').value;
+    const date = document.getElementById('goalDate').value;
+    const notes = document.getElementById('goalNotes').value;
+
+    if (usd <= 0 && ars <= 0) {
+        showToast('Ingresa un monto en USD o ARS mayor a 0');
+        return;
+    }
+    if (!account_id) {
+        showToast('Selecciona la cuenta de origen');
+        return;
+    }
+
+    const res = await api(eel.add_goal_contribution, {
+        amount_usd: usd,
+        amount_ars: ars,
+        account_id: parseInt(account_id),
+        date: date,
+        notes: notes
+    });
+
+    if (res && res.ok) {
+        showToast('¡Aporte a la Operación guardado con éxito! ✨');
+        closeModal();
+        navigate('finance');
+    } else {
+        showToast('Error: ' + ((res && res.error) || 'No se pudo registrar'));
+    }
+}
+
+async function showGoalConfigModal() {
+    const goal = await api(eel.get_finance_goals);
+    if (!goal) return;
+
+    const bodyHtml = `
+    <input type="hidden" id="cfgGoalId" value="${goal.id}">
+    <div class="form-group">
+        <label class="form-label">Nombre de la Meta</label>
+        <input type="text" id="cfgGoalTitle" class="form-control" value="${esc(goal.title || 'Mi Operación')}" required>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group">
+            <label class="form-label">Monto Objetivo (USD) *</label>
+            <input type="number" step="any" id="cfgGoalTarget" class="form-control" value="${goal.target_amount || 5000}" required>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Ahorro Base Inicial (USD)</label>
+            <input type="number" step="any" id="cfgGoalBase" class="form-control" value="${goal.base_usd || 0}">
+            <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px">Dólares que ya tenías ahorrados previamente</div>
+        </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group">
+            <label class="form-label">Cotización Dólar Ref. (ARS/USD) *</label>
+            <input type="number" step="any" id="cfgGoalRate" class="form-control" value="${goal.usd_exchange_rate || 1200}" required>
+            <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px">Para equivalencias en pesos</div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Fecha Objetivo Estimada</label>
+            <input type="date" id="cfgGoalDate" class="form-control" value="${goal.target_date || ''}">
+        </div>
+    </div>
+    <div class="form-group">
+        <label class="form-label">Notas / Objetivos</label>
+        <textarea id="cfgGoalNotes" class="form-control" rows="3">${esc(goal.notes || '')}</textarea>
+    </div>`;
+
+    openModal('⚙️ Configurar Meta Operación', bodyHtml);
+    document.getElementById('modalSave').onclick = saveGoalConfigForm;
+}
+
+async function saveGoalConfigForm() {
+    const id = parseInt(document.getElementById('cfgGoalId').value);
+    const title = document.getElementById('cfgGoalTitle').value;
+    const target_amount = parseFloat(document.getElementById('cfgGoalTarget').value) || 5000;
+    const current_amount = parseFloat(document.getElementById('cfgGoalBase').value) || 0;
+    const usd_exchange_rate = parseFloat(document.getElementById('cfgGoalRate').value) || 1200;
+    const target_date = document.getElementById('cfgGoalDate').value || null;
+    const notes = document.getElementById('cfgGoalNotes').value;
+
+    const res = await api(eel.update_finance_goal, id, {
+        title, target_amount, current_amount, usd_exchange_rate, target_date, notes
+    });
+
+    if (res && res.ok) {
+        showToast('Meta actualizada exitosamente');
+        closeModal();
+        navigate('finance');
+    } else {
+        showToast('Error: ' + ((res && res.error) || 'No se pudo guardar'));
+    }
+}
+
+async function showFinanceAccountModal(accId = null) {
+    let acc = null;
+    if (accId) {
+        const accounts = await api(eel.get_finance_accounts);
+        acc = (accounts || []).find(a => a.id === accId);
+    }
+
+    const defaultName = acc ? acc.name : '';
+    const defaultType = acc ? acc.account_type : 'wallet';
+    const defaultCurr = acc ? acc.currency : 'ARS';
+    const defaultBal = acc ? acc.initial_balance : 0;
+    const defaultColor = acc ? acc.color : '#8b5cf6';
+    const defaultIcon = acc ? acc.icon : '💳';
+
+    const bodyHtml = `
+    <input type="hidden" id="accId" value="${accId || ''}">
+    <div class="form-group">
+        <label class="form-label">Nombre de la cuenta *</label>
+        <input type="text" id="accName" class="form-control" placeholder="Ej: Mercado Pago, Galicia, Dólares..." value="${esc(defaultName)}" required>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group">
+            <label class="form-label">Tipo de cuenta</label>
+            <select id="accType" class="form-control">
+                <option value="wallet" ${defaultType === 'wallet' ? 'selected' : ''}>Billetera digital</option>
+                <option value="cash" ${defaultType === 'cash' ? 'selected' : ''}>Efectivo</option>
+                <option value="bank" ${defaultType === 'bank' ? 'selected' : ''}>Cuenta bancaria</option>
+                <option value="savings" ${defaultType === 'savings' ? 'selected' : ''}>Ahorros / Inversión</option>
+            </select>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Moneda</label>
+            <select id="accCurrency" class="form-control">
+                <option value="ARS" ${defaultCurr === 'ARS' ? 'selected' : ''}>Pesos Argentinos (ARS)</option>
+                <option value="USD" ${defaultCurr === 'USD' ? 'selected' : ''}>Dólares (USD)</option>
+            </select>
+        </div>
+    </div>
+    <div class="form-group">
+        <label class="form-label">Saldo Inicial</label>
+        <input type="number" step="any" id="accInitialBalance" class="form-control" value="${defaultBal}">
+        <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px">Saldo con el que arranca esta cuenta antes de registrar movimientos</div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group">
+            <label class="form-label">Ícono (Emoji)</label>
+            <input type="text" id="accIcon" class="form-control" value="${esc(defaultIcon)}" style="text-align:center;font-size:1.3rem">
+        </div>
+        <div class="form-group">
+            <label class="form-label">Color de acento</label>
+            <input type="color" id="accColor" class="form-control" value="${defaultColor}" style="height:42px;padding:2px">
+        </div>
+    </div>`;
+
+    openModal(accId ? 'Editar Cuenta' : 'Nueva Cuenta', bodyHtml);
+    document.getElementById('modalSave').onclick = saveFinanceAccountForm;
+}
+
+async function saveFinanceAccountForm() {
+    const id = document.getElementById('accId').value;
+    const name = document.getElementById('accName').value.trim();
+    const account_type = document.getElementById('accType').value;
+    const currency = document.getElementById('accCurrency').value;
+    const initial_balance = parseFloat(document.getElementById('accInitialBalance').value) || 0;
+    const icon = document.getElementById('accIcon').value.trim() || '💳';
+    const color = document.getElementById('accColor').value;
+
+    if (!name) {
+        showToast('El nombre de la cuenta es obligatorio');
+        return;
+    }
+
+    const payload = { name, account_type, currency, initial_balance, icon, color };
+    let res;
+    if (id) {
+        res = await api(eel.update_finance_account, parseInt(id), payload);
+    } else {
+        res = await api(eel.create_finance_account, payload);
+    }
+
+    if (res && res.ok) {
+        showToast(id ? 'Cuenta actualizada' : 'Cuenta creada');
+        closeModal();
+        navigate('finance');
+    } else {
+        showToast('Error: ' + ((res && res.error) || 'No se pudo guardar'));
+    }
+}
+
+async function showFinanceTransferModal() {
+    const accounts = await api(eel.get_finance_accounts);
+    if (!accounts || accounts.length < 2) {
+        showToast('Necesitas al menos 2 cuentas para realizar una transferencia');
+        return;
+    }
+
+    let srcOptions = accounts.map(a => `<option value="${a.id}">${a.icon || '💳'} ${esc(a.name)} (${fmtARS(a.current_balance)})</option>`).join('');
+    let dstOptions = accounts.map((a, i) => `<option value="${a.id}" ${i === 1 ? 'selected' : ''}>${a.icon || '💳'} ${esc(a.name)} (${fmtARS(a.current_balance)})</option>`).join('');
+
+    const bodyHtml = `
+    <div class="form-group">
+        <label class="form-label">Monto a Transferir ($ ARS) *</label>
+        <input type="number" step="any" id="trfAmount" class="form-control" placeholder="0.00" style="font-size:1.15rem;font-weight:700" required>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group">
+            <label class="form-label">Cuenta Origen (sale dinero) *</label>
+            <select id="trfSource" class="form-control">${srcOptions}</select>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Cuenta Destino (entra dinero) *</label>
+            <select id="trfDest" class="form-control">${dstOptions}</select>
+        </div>
+    </div>
+    <div class="form-group">
+        <label class="form-label">Fecha</label>
+        <input type="date" id="trfDate" class="form-control" value="${todayStr()}">
+    </div>
+    <div class="form-group">
+        <label class="form-label">Detalle / Motivo</label>
+        <input type="text" id="trfDesc" class="form-control" placeholder="Ej: Retiro cajero, recarga tarjeta, transferencia..." value="Transferencia entre cuentas">
+    </div>`;
+
+    openModal('⇆ Transferir entre Cuentas', bodyHtml);
+    document.getElementById('modalSave').onclick = saveFinanceTransferForm;
+}
+
+async function saveFinanceTransferForm() {
+    const amount = parseFloat(document.getElementById('trfAmount').value);
+    const account_id = document.getElementById('trfSource').value;
+    const destination_account_id = document.getElementById('trfDest').value;
+    const date = document.getElementById('trfDate').value;
+    const description = document.getElementById('trfDesc').value;
+
+    if (isNaN(amount) || amount <= 0) {
+        showToast('Ingresa un monto válido mayor a 0');
+        return;
+    }
+    if (account_id === destination_account_id) {
+        showToast('La cuenta origen y destino deben ser distintas');
+        return;
+    }
+
+    const res = await api(eel.create_finance_transaction, {
+        type: 'transfer',
+        amount: amount,
+        account_id: parseInt(account_id),
+        destination_account_id: parseInt(destination_account_id),
+        date: date,
+        description: description,
+        currency: 'ARS'
+    });
+
+    if (res && res.ok) {
+        showToast('Transferencia realizada exitosamente');
+        closeModal();
+        navigate('finance');
+    } else {
+        showToast('Error: ' + ((res && res.error) || 'No se pudo transferir'));
+    }
+}
+
+async function deleteFinanceTransactionPrompt(id) {
+    if (!confirm('¿Deseas eliminar este movimiento financiero?')) return;
+    const res = await api(eel.delete_finance_transaction, id);
+    if (res && res.ok) {
+        showToast('Movimiento eliminado');
+        navigate('finance');
+    } else {
+        showToast('Error al eliminar');
+    }
+}
+
+async function deleteFinanceAccountPrompt(id) {
+    if (!confirm('¿Deseas eliminar esta cuenta? Si tiene movimientos históricos, se desactivará manteniendo el historial.')) return;
+    const res = await api(eel.delete_finance_account, id);
+    if (res && res.ok) {
+        showToast('Cuenta eliminada / archivada');
+        navigate('finance');
+    } else {
+        showToast('Error al eliminar');
+    }
+}
+
+// Global window bindings for Finance
+window.fmtARS = fmtARS;
+window.fmtUSD = fmtUSD;
+window.renderFinance = renderFinance;
+window.switchFinanceTab = switchFinanceTab;
+window.changeFinancePeriod = changeFinancePeriod;
+window.filterFinanceTxType = filterFinanceTxType;
+window.filterFinanceTxAccount = filterFinanceTxAccount;
+window.onSearchFinanceTx = onSearchFinanceTx;
+window.showNewFinanceTransactionModal = showNewFinanceTransactionModal;
+window.setTxModalType = setTxModalType;
+window.onTxAmountChanged = onTxAmountChanged;
+window.onTxGoalUsdChanged = onTxGoalUsdChanged;
+window.saveFinanceTransactionForm = saveFinanceTransactionForm;
+window.showGoalContributionModal = showGoalContributionModal;
+window.onGoalUsdType = onGoalUsdType;
+window.onGoalArsType = onGoalArsType;
+window.saveGoalContributionForm = saveGoalContributionForm;
+window.showGoalConfigModal = showGoalConfigModal;
+window.saveGoalConfigForm = saveGoalConfigForm;
+window.showFinanceAccountModal = showFinanceAccountModal;
+window.saveFinanceAccountForm = saveFinanceAccountForm;
+window.showFinanceTransferModal = showFinanceTransferModal;
+window.saveFinanceTransferForm = saveFinanceTransferForm;
+window.deleteFinanceTransactionPrompt = deleteFinanceTransactionPrompt;
+window.deleteFinanceAccountPrompt = deleteFinanceAccountPrompt;
+
 
 
 

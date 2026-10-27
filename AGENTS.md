@@ -135,8 +135,8 @@ The application runs in two distinct environments using the **exact same fronten
 | **Dashboard** | Unified KPIs, today's tasks, approaching deadlines, interactive calendar | `tasks`, `exams`, `assignments`, `habits` |
 | **Trabajo (Work)** | Pest control & hygiene enterprise operations, SUNAT billing, OCs, quotes, operative staff | `clients`, `client_sites`, `invoices`, `purchase_orders`, `quotes`, `quote_items`, `service_types`, `employees`, `employee_documents`, `service_records`, `daily_control` |
 | **Universidad** | UTN FRA Industrial Engineering (Plan 2023) progress, interactive curriculum mesh, exams | `subjects`, `exams`, `assignments`, `curriculum_status` |
-| **Personal** | Tasks categorized by area, habit streaks, 3D printing orders calculator | `areas`, `tasks`, `habits`, `habit_logs`, `print_orders` |
-| **Salud (Health)** | HRT tracker (estradiol valerate injections + pharmacokinetic projection curve), body measurements, workout tracker | `injections`, `body_measurements`, `transition_journal`, `workout_days`, `workout_exercises`, `workout_sessions`, `workout_set_logs` |
+| **Personal** | Unified Personal & Health: workout routine, habits/tasks progress, HRT injections & body measurements | `tasks`, `habits`, `habit_logs`, `injections`, `body_measurements`, `workout_days`, `workout_exercises`, `workout_sessions`, `workout_set_logs` |
+| **Finanzas (Finance)** | Personal finance tracker (ARS), multi-account balances, categorized cashflow & Surgery Savings Goal (USD) | `finance_accounts`, `finance_categories`, `finance_goals`, `finance_transactions` |
 | **Cosplays** | Cosplay workshop commissions & personal costumes: projects, components, costs, client measurements | `cosplay_projects`, `cosplay_items`, `cosplay_clients` |
 | **Ajustes (Settings)** | App config, detracción accounts, hourly/gram rates, theme toggle, backup download/restore, GitHub sync | `config` |
 

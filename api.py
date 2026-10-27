@@ -3634,3 +3634,590 @@ def get_weather_data(lat=-34.6037, lon=-58.3816):
     except Exception as e:
         return {'ok': False, 'error': str(e)}
 
+
+# ===================== FINANZAS PERSONALES =====================
+
+def _calculate_account_balances(conn):
+    """Calcula el saldo actual en tiempo real de cada cuenta financiera."""
+    accounts = conn.execute("SELECT * FROM finance_accounts WHERE is_active=1 ORDER BY id ASC").fetchall()
+    result = []
+    for acc in accounts:
+        a = dict(acc)
+        aid = a['id']
+        init_bal = float(a.get('initial_balance') or 0.0)
+
+        # Ingresos a la cuenta
+        inc_row = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0) FROM finance_transactions WHERE account_id=? AND type='income'",
+            (aid,)
+        ).fetchone()
+        incomes = float(inc_row[0] if inc_row else 0.0)
+
+        # Gastos y aportes a meta debitados de la cuenta
+        exp_row = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0) FROM finance_transactions WHERE account_id=? AND type IN ('expense', 'goal_contribution')",
+            (aid,)
+        ).fetchone()
+        expenses = float(exp_row[0] if exp_row else 0.0)
+
+        # Transferencias salientes
+        tout_row = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0) FROM finance_transactions WHERE account_id=? AND type='transfer'",
+            (aid,)
+        ).fetchone()
+        transfers_out = float(tout_row[0] if tout_row else 0.0)
+
+        # Transferencias entrantes
+        tin_row = conn.execute(
+            "SELECT COALESCE(SUM(amount), 0) FROM finance_transactions WHERE destination_account_id=? AND type='transfer'",
+            (aid,)
+        ).fetchone()
+        transfers_in = float(tin_row[0] if tin_row else 0.0)
+
+        a['incomes_total'] = incomes
+        a['expenses_total'] = expenses
+        a['transfers_out_total'] = transfers_out
+        a['transfers_in_total'] = transfers_in
+        a['current_balance'] = round(init_bal + incomes - expenses - transfers_out + transfers_in, 2)
+        result.append(a)
+    return result
+
+
+def _get_primary_goal_summary(conn):
+    """Calcula el estado y progreso de la meta de la operación en USD."""
+    goal_row = conn.execute("SELECT * FROM finance_goals WHERE is_active=1 ORDER BY id ASC LIMIT 1").fetchone()
+    if not goal_row:
+        return None
+    goal = dict(goal_row)
+    gid = goal['id']
+    target_usd = float(goal.get('target_amount') or 5000.0)
+    base_usd = float(goal.get('current_amount') or 0.0)
+    rate = float(goal.get('usd_exchange_rate') or 1200.0)
+
+    # Sumar aportes de transacciones asociadas a la meta
+    contrib_row = conn.execute(
+        "SELECT COALESCE(SUM(goal_amount_usd), 0), COUNT(*) FROM finance_transactions WHERE goal_id=? AND type='goal_contribution'",
+        (gid,)
+    ).fetchone()
+    contrib_usd = float(contrib_row[0] if contrib_row else 0.0)
+    contrib_count = int(contrib_row[1] if contrib_row else 0)
+
+    total_saved_usd = round(base_usd + contrib_usd, 2)
+    remaining_usd = max(0.0, round(target_usd - total_saved_usd, 2))
+    progress_percent = min(100.0, round((total_saved_usd / target_usd * 100), 1)) if target_usd > 0 else 0.0
+
+    goal['base_usd'] = base_usd
+    goal['contributed_usd'] = contrib_usd
+    goal['contributions_count'] = contrib_count
+    goal['total_saved_usd'] = total_saved_usd
+    goal['remaining_usd'] = remaining_usd
+    goal['progress_percent'] = progress_percent
+    goal['target_ars_equiv'] = round(target_usd * rate, 2)
+    goal['saved_ars_equiv'] = round(total_saved_usd * rate, 2)
+    goal['remaining_ars_equiv'] = round(remaining_usd * rate, 2)
+    return goal
+
+
+@eel.expose
+def get_finance_summary(month=None, year=None):
+    """
+    Retorna el resumen financiero completo para el dashboard de Finanzas:
+    - Balance neto, ingresos y gastos del mes en ARS
+    - Desglose de gastos por categoría
+    - Desglose de ingresos por categoría
+    - Saldos en tiempo real de cuentas/billeteras
+    - Resumen y progreso de la Meta Operación en USD
+    - Transacciones del mes seleccionado
+    """
+    now = datetime.now(AR_TZ)
+    if year is None or year == '':
+        year = now.year
+    else:
+        year = int(year)
+
+    if month is None or month == '':
+        month = now.month
+    else:
+        month = int(month)
+
+    month_str = f"{year:04d}-{month:02d}"
+
+    conn = get_connection()
+    try:
+        # 1. Totales de ingresos y gastos del mes en ARS
+        inc_row = conn.execute("""
+            SELECT COALESCE(SUM(amount), 0)
+            FROM finance_transactions
+            WHERE type='income' AND strftime('%Y-%m', date) = ?
+        """, (month_str,)).fetchone()
+        total_income = float(inc_row[0] if inc_row else 0.0)
+
+        exp_row = conn.execute("""
+            SELECT COALESCE(SUM(amount), 0)
+            FROM finance_transactions
+            WHERE type IN ('expense', 'goal_contribution') AND strftime('%Y-%m', date) = ?
+        """, (month_str,)).fetchone()
+        total_expense = float(exp_row[0] if exp_row else 0.0)
+
+        # 2. Desglose de gastos por categoría
+        cat_exp_rows = conn.execute("""
+            SELECT c.id, c.name, c.icon, c.color, COALESCE(SUM(t.amount), 0) as total
+            FROM finance_categories c
+            JOIN finance_transactions t ON t.category_id = c.id
+            WHERE t.type IN ('expense', 'goal_contribution') AND strftime('%Y-%m', t.date) = ?
+            GROUP BY c.id, c.name, c.icon, c.color
+            ORDER BY total DESC
+        """, (month_str,)).fetchall()
+
+        expenses_by_category = []
+        for r in cat_exp_rows:
+            tot = float(r['total'])
+            pct = round((tot / total_expense * 100), 1) if total_expense > 0 else 0.0
+            expenses_by_category.append({
+                'id': r['id'],
+                'name': r['name'],
+                'icon': r['icon'] or '🏷️',
+                'color': r['color'] or '#f43f5e',
+                'total': round(tot, 2),
+                'percent': pct
+            })
+
+        # 3. Desglose de ingresos por categoría
+        cat_inc_rows = conn.execute("""
+            SELECT c.id, c.name, c.icon, c.color, COALESCE(SUM(t.amount), 0) as total
+            FROM finance_categories c
+            JOIN finance_transactions t ON t.category_id = c.id
+            WHERE t.type='income' AND strftime('%Y-%m', t.date) = ?
+            GROUP BY c.id, c.name, c.icon, c.color
+            ORDER BY total DESC
+        """, (month_str,)).fetchall()
+
+        incomes_by_category = []
+        for r in cat_inc_rows:
+            tot = float(r['total'])
+            pct = round((tot / total_income * 100), 1) if total_income > 0 else 0.0
+            incomes_by_category.append({
+                'id': r['id'],
+                'name': r['name'],
+                'icon': r['icon'] or '💼',
+                'color': r['color'] or '#10b981',
+                'total': round(tot, 2),
+                'percent': pct
+            })
+
+        # 4. Cuentas con saldo en tiempo real
+        accounts = _calculate_account_balances(conn)
+
+        # 5. Meta Operación USD
+        goal = _get_primary_goal_summary(conn)
+
+        # 6. Transacciones del mes
+        tx_rows = conn.execute("""
+            SELECT t.*,
+                   a.name as account_name, a.icon as account_icon, a.currency as account_currency,
+                   c.name as category_name, c.icon as category_icon, c.color as category_color,
+                   da.name as dest_account_name, da.icon as dest_account_icon
+            FROM finance_transactions t
+            LEFT JOIN finance_accounts a ON t.account_id = a.id
+            LEFT JOIN finance_categories c ON t.category_id = c.id
+            LEFT JOIN finance_accounts da ON t.destination_account_id = da.id
+            WHERE strftime('%Y-%m', t.date) = ?
+            ORDER BY t.date DESC, t.id DESC
+        """, (month_str,)).fetchall()
+        transactions = [dict(r) for r in tx_rows]
+
+        return {
+            'ok': True,
+            'month': month,
+            'year': year,
+            'month_str': month_str,
+            'total_income': round(total_income, 2),
+            'total_expense': round(total_expense, 2),
+            'net_balance': round(total_income - total_expense, 2),
+            'expenses_by_category': expenses_by_category,
+            'incomes_by_category': incomes_by_category,
+            'accounts': accounts,
+            'goal': goal,
+            'transactions': transactions
+        }
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def get_finance_transactions(filters=None):
+    """Obtiene la lista de transacciones con filtros opcionales."""
+    filters = filters or {}
+    conn = get_connection()
+    try:
+        query = """
+            SELECT t.*,
+                   a.name as account_name, a.icon as account_icon, a.currency as account_currency,
+                   c.name as category_name, c.icon as category_icon, c.color as category_color,
+                   da.name as dest_account_name, da.icon as dest_account_icon,
+                   g.title as goal_title
+            FROM finance_transactions t
+            LEFT JOIN finance_accounts a ON t.account_id = a.id
+            LEFT JOIN finance_categories c ON t.category_id = c.id
+            LEFT JOIN finance_accounts da ON t.destination_account_id = da.id
+            LEFT JOIN finance_goals g ON t.goal_id = g.id
+            WHERE 1=1
+        """
+        params = []
+
+        if filters.get('month') and filters.get('year'):
+            m_str = f"{int(filters['year']):04d}-{int(filters['month']):02d}"
+            query += " AND strftime('%Y-%m', t.date) = ?"
+            params.append(m_str)
+
+        if filters.get('account_id'):
+            query += " AND (t.account_id = ? OR t.destination_account_id = ?)"
+            params.extend([int(filters['account_id']), int(filters['account_id'])])
+
+        if filters.get('category_id'):
+            query += " AND t.category_id = ?"
+            params.append(int(filters['category_id']))
+
+        if filters.get('type'):
+            query += " AND t.type = ?"
+            params.append(filters['type'])
+
+        if filters.get('only_goals'):
+            query += " AND t.type = 'goal_contribution'"
+
+        if filters.get('search'):
+            query += " AND (t.description LIKE ? OR c.name LIKE ?)"
+            s = f"%{filters['search']}%"
+            params.extend([s, s])
+
+        query += " ORDER BY t.date DESC, t.id DESC LIMIT 200"
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@eel.expose
+def create_finance_transaction(data):
+    """Crea una nueva transacción (gasto, ingreso, transferencia, o aporte a meta)."""
+    conn = get_connection()
+    try:
+        tx_type = data.get('type', 'expense')
+        amount = float(data.get('amount') or 0.0)
+        account_id = int(data.get('account_id'))
+        category_id = int(data.get('category_id')) if data.get('category_id') else None
+        dest_account_id = int(data.get('destination_account_id')) if data.get('destination_account_id') else None
+        date_val = data.get('date') or today()
+        desc = (data.get('description') or '').strip()
+        goal_id = int(data.get('goal_id')) if data.get('goal_id') else None
+        goal_amount_usd = float(data.get('goal_amount_usd') or 0.0)
+
+        # Si es un aporte a la meta
+        if tx_type == 'goal_contribution' or data.get('is_goal_contribution'):
+            tx_type = 'goal_contribution'
+            if not goal_id:
+                g_row = conn.execute("SELECT id, usd_exchange_rate FROM finance_goals WHERE is_active=1 LIMIT 1").fetchone()
+                if g_row:
+                    goal_id = g_row['id']
+                    rate = float(g_row['usd_exchange_rate'] or 1200.0)
+                    if goal_amount_usd <= 0 and rate > 0:
+                        goal_amount_usd = round(amount / rate, 2)
+            # Asignar categoría de aporte si no vino una
+            if not category_id:
+                c_row = conn.execute("SELECT id FROM finance_categories WHERE name LIKE '%Operación%' OR name LIKE '%Meta%' LIMIT 1").fetchone()
+                if c_row:
+                    category_id = c_row['id']
+
+        cur = conn.execute("""
+            INSERT INTO finance_transactions
+            (account_id, category_id, type, amount, currency, date, description, destination_account_id, goal_id, goal_amount_usd)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            account_id, category_id, tx_type, amount, data.get('currency', 'ARS'),
+            date_val, desc, dest_account_id, goal_id, goal_amount_usd
+        ))
+        conn.commit()
+        return {'ok': True, 'id': cur.lastrowid}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def update_finance_transaction(id, data):
+    """Actualiza una transacción existente."""
+    conn = get_connection()
+    try:
+        tx_type = data.get('type', 'expense')
+        amount = float(data.get('amount') or 0.0)
+        account_id = int(data.get('account_id'))
+        category_id = int(data.get('category_id')) if data.get('category_id') else None
+        dest_account_id = int(data.get('destination_account_id')) if data.get('destination_account_id') else None
+        date_val = data.get('date') or today()
+        desc = (data.get('description') or '').strip()
+        goal_id = int(data.get('goal_id')) if data.get('goal_id') else None
+        goal_amount_usd = float(data.get('goal_amount_usd') or 0.0)
+
+        conn.execute("""
+            UPDATE finance_transactions
+            SET account_id=?, category_id=?, type=?, amount=?, currency=?, date=?,
+                description=?, destination_account_id=?, goal_id=?, goal_amount_usd=?
+            WHERE id=?
+        """, (
+            account_id, category_id, tx_type, amount, data.get('currency', 'ARS'),
+            date_val, desc, dest_account_id, goal_id, goal_amount_usd, id
+        ))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def delete_finance_transaction(id):
+    """Elimina una transacción."""
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM finance_transactions WHERE id=?", (id,))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def get_finance_accounts():
+    """Retorna las cuentas financieras activas con sus saldos."""
+    conn = get_connection()
+    try:
+        return _calculate_account_balances(conn)
+    finally:
+        conn.close()
+
+
+@eel.expose
+def create_finance_account(data):
+    """Crea una nueva cuenta o billetera."""
+    conn = get_connection()
+    try:
+        name = (data.get('name') or '').strip()
+        if not name:
+            return {'ok': False, 'error': 'El nombre de la cuenta es obligatorio'}
+        cur = conn.execute("""
+            INSERT INTO finance_accounts (name, account_type, currency, initial_balance, color, icon)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            name,
+            data.get('account_type', 'wallet'),
+            data.get('currency', 'ARS'),
+            float(data.get('initial_balance') or 0.0),
+            data.get('color', '#8b5cf6'),
+            data.get('icon', '💳')
+        ))
+        conn.commit()
+        return {'ok': True, 'id': cur.lastrowid}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def update_finance_account(id, data):
+    """Actualiza una cuenta financiera."""
+    conn = get_connection()
+    try:
+        conn.execute("""
+            UPDATE finance_accounts
+            SET name=?, account_type=?, currency=?, initial_balance=?, color=?, icon=?
+            WHERE id=?
+        """, (
+            data.get('name'),
+            data.get('account_type', 'wallet'),
+            data.get('currency', 'ARS'),
+            float(data.get('initial_balance') or 0.0),
+            data.get('color', '#8b5cf6'),
+            data.get('icon', '💳'),
+            id
+        ))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def delete_finance_account(id):
+    """Elimina o desactiva una cuenta."""
+    conn = get_connection()
+    try:
+        # Si tiene transacciones, desactivarla para no romper historial
+        count = conn.execute("SELECT COUNT(*) FROM finance_transactions WHERE account_id=? OR destination_account_id=?", (id, id)).fetchone()[0]
+        if count > 0:
+            conn.execute("UPDATE finance_accounts SET is_active=0 WHERE id=?", (id,))
+        else:
+            conn.execute("DELETE FROM finance_accounts WHERE id=?", (id,))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def get_finance_categories():
+    """Retorna las categorías de gastos e ingresos."""
+    conn = get_connection()
+    try:
+        rows = conn.execute("SELECT * FROM finance_categories WHERE is_active=1 ORDER BY type DESC, sort_order ASC, name ASC").fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@eel.expose
+def create_finance_category(data):
+    """Crea una nueva categoría."""
+    conn = get_connection()
+    try:
+        name = (data.get('name') or '').strip()
+        if not name:
+            return {'ok': False, 'error': 'El nombre es obligatorio'}
+        cur = conn.execute("""
+            INSERT INTO finance_categories (name, type, icon, color, sort_order)
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            name,
+            data.get('type', 'expense'),
+            data.get('icon', '🏷️'),
+            data.get('color', '#f43f5e'),
+            int(data.get('sort_order') or 0)
+        ))
+        conn.commit()
+        return {'ok': True, 'id': cur.lastrowid}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def delete_finance_category(id):
+    """Elimina o desactiva una categoría."""
+    conn = get_connection()
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM finance_transactions WHERE category_id=?", (id,)).fetchone()[0]
+        if count > 0:
+            conn.execute("UPDATE finance_categories SET is_active=0 WHERE id=?", (id,))
+        else:
+            conn.execute("DELETE FROM finance_categories WHERE id=?", (id,))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def get_finance_goals():
+    """Retorna las metas de ahorro con su detalle y aportes."""
+    conn = get_connection()
+    try:
+        primary = _get_primary_goal_summary(conn)
+        # Traer todos los aportes detallados de la meta
+        if primary:
+            contributions = conn.execute("""
+                SELECT t.id, t.date, t.amount, t.goal_amount_usd, t.description,
+                       a.name as account_name, a.icon as account_icon
+                FROM finance_transactions t
+                LEFT JOIN finance_accounts a ON t.account_id = a.id
+                WHERE t.goal_id = ? AND t.type = 'goal_contribution'
+                ORDER BY t.date DESC, t.id DESC
+            """, (primary['id'],)).fetchall()
+            primary['contributions'] = [dict(c) for c in contributions]
+        return primary
+    finally:
+        conn.close()
+
+
+@eel.expose
+def update_finance_goal(id, data):
+    """Actualiza los parámetros de la meta de la operación (monto objetivo, saldo inicial, cotización, fecha, notas)."""
+    conn = get_connection()
+    try:
+        conn.execute("""
+            UPDATE finance_goals
+            SET title=?, target_amount=?, current_amount=?, usd_exchange_rate=?, target_date=?, notes=?
+            WHERE id=?
+        """, (
+            data.get('title', 'Mi Operación'),
+            float(data.get('target_amount') or 5000.0),
+            float(data.get('current_amount') or 0.0),
+            float(data.get('usd_exchange_rate') or 1200.0),
+            data.get('target_date') or None,
+            data.get('notes') or '',
+            id
+        ))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def add_goal_contribution(data):
+    """
+    Registra un aporte directo a la Meta Operación.
+    Recibe monto en USD o ARS, cuenta de origen, fecha y nota.
+    """
+    conn = get_connection()
+    try:
+        goal_id = int(data.get('goal_id') or 1)
+        g_row = conn.execute("SELECT * FROM finance_goals WHERE id=?", (goal_id,)).fetchone()
+        if not g_row:
+            return {'ok': False, 'error': 'Meta no encontrada'}
+        rate = float(g_row['usd_exchange_rate'] or 1200.0)
+
+        amount_usd = float(data.get('amount_usd') or 0.0)
+        amount_ars = float(data.get('amount_ars') or 0.0)
+
+        # Si se ingresó solo USD o solo ARS, calcular el otro según la cotización
+        if amount_usd > 0 and amount_ars <= 0:
+            amount_ars = round(amount_usd * rate, 2)
+        elif amount_ars > 0 and amount_usd <= 0:
+            amount_usd = round(amount_ars / rate, 2) if rate > 0 else 0.0
+
+        account_id = int(data.get('account_id'))
+        date_val = data.get('date') or today()
+        notes = (data.get('notes') or 'Aporte a Meta Operación').strip()
+
+        # Categoría
+        c_row = conn.execute("SELECT id FROM finance_categories WHERE name LIKE '%Operación%' OR name LIKE '%Meta%' LIMIT 1").fetchone()
+        cat_id = c_row['id'] if c_row else None
+
+        cur = conn.execute("""
+            INSERT INTO finance_transactions
+            (account_id, category_id, type, amount, currency, date, description, goal_id, goal_amount_usd)
+            VALUES (?, ?, 'goal_contribution', ?, 'ARS', ?, ?, ?, ?)
+        """, (account_id, cat_id, amount_ars, date_val, notes, goal_id, amount_usd))
+        conn.commit()
+        return {'ok': True, 'id': cur.lastrowid}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+

@@ -34,13 +34,13 @@ La navegación se gestiona mediante pestañas superiores en una "píldora" flota
     <div id="view-work" class="view"></div>
     <div id="view-university" class="view"></div>
     <div id="view-personal" class="view"></div>
-    <div id="view-health" class="view"></div>
+    <div id="view-finance" class="view"></div>
     <div id="view-cosplays" class="view"></div>
     <div id="view-settings" class="view"></div>
 </main>
 ```
 
-Solo la vista activa contiene la clase `.active` (`display: block`). Las demás permanecen en `display: none` para optimizar el rendimiento del DOM.
+Solo la vista activa contiene la clase `.active` (`display: block`). Las demás permanecen en `display: none` para optimizar el rendimiento del DOM. La sección **Personal** unifica Entrenamiento (Rutina), Progreso & Hábitos, Inyecciones (TRH) y Medidas Corporales bajo 4 subpestañas fluidas sin alterar sus datos.
 
 ---
 
@@ -50,12 +50,14 @@ Solo la vista activa contiene la clase `.active` (`display: block`). Las demás 
 `app.js` mantiene un único objeto reactivo en memoria que almacena los filtros actuales, subpestañas seleccionadas y datos en caché:
 ```javascript
 const state = {
-    currentView: 'dashboard',
-    workTab: 'facturacion',      // 'clientes', 'facturacion', 'ocs', 'cotizaciones', 'personal', 'asistencia'
+    view: 'dashboard',
+    workTab: 'facturacion',      // 'clientes', 'matrix', 'invoices', 'calculadora', etc.
     uniTab: 'cursada',           // 'cursada', 'malla', 'parciales', 'tps'
-    healthTab: 'inyecciones',    // 'inyecciones', 'medidas', 'entrenamiento'
+    personalTab: 'routine',      // 'routine', 'progress', 'injections', 'measurements'
+    financeTab: 'resumen',       // 'resumen', 'meta', 'cuentas'
+    financeMonth: 10,
+    financeYear: 2026,
     cal: { year: 2026, month: 10 },
-    billingYear: 2026,
     // ...
 };
 ```

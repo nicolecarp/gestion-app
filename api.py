@@ -1874,7 +1874,7 @@ def get_monthly_billing(year=None):
         else:
             year = 2026
 
-        # Get all regular and periodic client sites
+        # Get all regular and periodic client sites (including sites with POs for this year)
         sites = conn.execute("""
             SELECT cs.id, cs.client_id, cs.nombre_cliente, cs.sede_cliente, cs.monthly_fee, cs.servicios,
                    cs.location_code, cs.codigo_cliente_sede, cs.periodicity, cs.is_regular,
@@ -1882,9 +1882,24 @@ def get_monthly_billing(year=None):
             FROM client_sites cs
             LEFT JOIN clients c ON cs.client_id = c.id
             WHERE (cs.is_active=1 OR cs.is_active IS NULL)
-              AND (cs.is_regular=1 OR cs.periodicity IN ('mensual', 'bimensual', 'trimestral'))
+              AND (cs.is_regular=1 OR cs.periodicity IN ('mensual', 'bimensual', 'trimestral', 'eventual')
+                   OR cs.id IN (SELECT DISTINCT client_site_id FROM purchase_orders WHERE year=?))
             ORDER BY COALESCE(c.business_name, cs.nombre_cliente) ASC, cs.nombre_cliente ASC
-        """).fetchall()
+        """, (year,)).fetchall()
+
+        # Distinct clients for company-level grouping
+        clients = conn.execute("""
+            SELECT DISTINCT c.id, c.business_name, c.ruc
+            FROM clients c
+            WHERE c.id IN (
+                SELECT client_id FROM client_sites WHERE (is_active=1 OR is_active IS NULL)
+                UNION
+                SELECT client_id FROM purchase_orders WHERE year=?
+                UNION
+                SELECT client_id FROM invoices WHERE year_billed=?
+            )
+            ORDER BY c.business_name ASC
+        """, (year, year)).fetchall()
 
         # Invoices for this year (vigentes)
         invoices = conn.execute("""
@@ -1917,6 +1932,7 @@ def get_monthly_billing(year=None):
 
         return {
             'year': year,
+            'clients': [dict(r) for r in clients],
             'sites': [dict(r) for r in sites],
             'invoices': [dict(r) for r in invoices],
             'annulled_invoices': [dict(r) for r in annulled_invoices],

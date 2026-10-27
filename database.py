@@ -1227,6 +1227,53 @@ def apply_cleanups_and_seeds(conn):
         except Exception as e:
             print("[seed_sunat_invoices_2026_v1] Error:", e)
 
+    # 11. Seed sites and PO breakdown v3
+    seed_po3 = conn.execute("SELECT value FROM config WHERE key='seed_po_v3'").fetchone()
+    if not seed_po3:
+        try:
+            conn.execute("UPDATE client_sites SET nombre_cliente='ARCA CONTINENTAL LINDLEY - PLANTA SANTA ROSA (MIP / DESINSECTACIÓN)', monthly_fee=8510.0, periodicity='mensual', location_code='5040', servicios='SERV DESINSECTACION, DESINFECCION, DESRATIZACION, MONITOREO' WHERE id=5")
+            sites_to_insert = [
+                (50, 11, 'ARCA CONTINENTAL LINDLEY - PLANTA SANTA ROSA (CONTROL DE AVES)', 'SR-AV', 1, 3280.0, 'SERV CONTROL DE AVES', 'mensual', '5040'),
+                (51, 11, 'ARCA CONTINENTAL LINDLEY - PLANTA SANTA ROSA (MANTENIMIENTO PLANTA)', 'SR-MT', 0, 1400.0, 'SERV MANTENIMIENTO INSTALACIONES PLANTA', 'eventual', '5040'),
+                (52, 15, 'VEND S.A.C. - PIURA (DESRATIZACION)', 'VPIU-DR', 1, 380.0, 'DESRATIZACION', 'bimensual', '7613'),
+                (53, 15, 'VEND S.A.C. - AREQUIPA (CAMIONES)', 'VAQP-CAM', 0, 300.0, 'FUMIGACION DE CAMIONES POR DESINSECTACION', 'eventual', '7606'),
+                (54, 15, 'VEND S.A.C. - PIURA (CAMIONES)', 'VPIU-CAM', 0, 540.0, 'FUMIGACION DE CAMIONES POR DESINSECTACION', 'eventual', '7613'),
+                (55, 15, 'VEND S.A.C. - CHICLAYO (CAMIONES)', 'VCIX-CAM', 0, 360.0, 'FUMIGACION 12 CAMIONES', 'eventual', '7612'),
+                (56, 15, 'VEND S.A.C. - TRUJILLO / CAJAMARCA (CAMIONES)', 'VTRU-CAM', 0, 300.0, 'FUMIGACION TRUJILLO Y CAJAMARCA CAMIONES', 'eventual', '7611'),
+                (57, 15, 'VEND S.A.C. - ICA (CAMIONES)', 'VICA-CAM', 0, 560.0, 'FUMIGACION 08 CAMIONES', 'eventual', '7609'),
+                (58, 15, 'VEND S.A.C. - CUZCO (CAMIONES)', 'VCUZ-CAM', 0, 120.0, 'FUMIGACION DE CAMIONES POR DESINSECTACION', 'eventual', '7610'),
+                (59, 15, 'VEND S.A.C. - CHIMBOTE (CAMIONES)', 'VCHM-CAM', 0, 120.0, 'FUMIGACION DE CHIMBOTE CAMIONES', 'eventual', '7616'),
+            ]
+            for s in sites_to_insert:
+                conn.execute('''
+                    INSERT OR REPLACE INTO client_sites (id, client_id, nombre_cliente, codigo_sede, is_regular, monthly_fee, servicios, periodicity, location_code, is_active)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                ''', s)
+
+            po_updates = [
+                (50, '4501207202'),
+                (51, '4501208817'),
+                (52, '4500084810'),
+                (53, '4500085904'),
+                (54, '4500085897'),
+                (55, '4500085898'),
+                (56, '4500085900'),
+                (57, '4500085902'),
+                (58, '4500085905'),
+                (59, '4500085901'),
+            ]
+            for site_id, oc_num in po_updates:
+                conn.execute("UPDATE purchase_orders SET client_site_id = ? WHERE oc_number = ?", (site_id, oc_num))
+
+            conn.execute("UPDATE purchase_orders SET client_site_id = 19 WHERE oc_number = '4500085548'")
+            conn.execute("UPDATE client_sites SET nombre_cliente='VEND S.A.C. - PIURA (DESINSECTACION Y DESINFECCION)', monthly_fee=800.0 WHERE id=23")
+            conn.execute("UPDATE client_sites SET is_active=0 WHERE id=26")
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('seed_po_v3', '1')")
+            conn.commit()
+            print("[seed_po_v3] Successfully updated sites and PO breakdown.")
+        except Exception as e:
+            print("[seed_po_v3] Error:", e)
+
 
 def seed_default_workouts(conn):
     count = conn.execute("SELECT COUNT(*) FROM workout_days").fetchone()[0]

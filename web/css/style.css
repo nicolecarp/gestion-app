@@ -17,6 +17,7 @@
     --border-light: #F7F0ED;
     --rose: #FFE4E1;
     --sage: #D4E0D4;
+    --accent: #E8998F;
     --shadow-sm: 0 1px 3px rgba(45,35,39,0.04);
     --shadow: 0 4px 20px rgba(45,35,39,0.06);
     --shadow-lg: 0 8px 40px rgba(45,35,39,0.08);
@@ -736,6 +737,82 @@ select.form-control {
     font-weight: 600;
 }
 
+/* FILTER PILLS & SEGMENTED CONTROLS */
+.filter-pills {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    padding: 3px 4px;
+    flex-wrap: wrap;
+    max-width: 100%;
+}
+
+.filter-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-radius: var(--radius-full);
+    font-family: 'Outfit', sans-serif;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    background: var(--card);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: var(--transition);
+    white-space: nowrap;
+    line-height: 1.25;
+    user-select: none;
+}
+
+.filter-pill:hover {
+    color: var(--text);
+    background: var(--border-light);
+    border-color: var(--primary);
+}
+
+.filter-pill.active {
+    background: var(--primary);
+    color: #ffffff;
+    font-weight: 600;
+    border-color: var(--primary);
+    box-shadow: 0 2px 8px rgba(242, 139, 168, 0.28);
+}
+
+/* Inside .filter-pills segmented control container */
+.filter-pills .filter-pill {
+    background: transparent;
+    border: 1px solid transparent;
+    padding: 5px 12px;
+    font-size: 0.78rem;
+}
+
+.filter-pills .filter-pill:hover {
+    background: var(--border-light);
+    color: var(--text);
+    border-color: transparent;
+}
+
+.filter-pills .filter-pill.active {
+    background: var(--primary);
+    color: #ffffff;
+    border-color: var(--primary);
+    box-shadow: 0 2px 6px rgba(242, 139, 168, 0.25);
+}
+
+/* Sticky header for large tables */
+#invoicesTable thead th {
+    position: sticky;
+    top: 0;
+    background: var(--card);
+    z-index: 2;
+    box-shadow: 0 1px 0 var(--border);
+}
+
 /* TABLES */
 .ctrl-input { padding:4px 6px; border:1px solid var(--border); border-radius:6px; font-size:0.85rem; font-family:inherit; background:var(--bg-card); color:var(--text); }
 
@@ -977,6 +1054,7 @@ tr:hover td { background: var(--bg); }
     --rose: #42222B;
     --sage: #273B30;
     --gold: #42351E;
+    --accent: #F28BA8;
     --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.35);
     --shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
     --shadow-lg: 0 12px 44px rgba(0, 0, 0, 0.55);
@@ -1045,6 +1123,48 @@ tr:hover td { background: var(--bg); }
 
 [data-theme="dark"] .group-header td {
     background: rgba(242, 139, 168, 0.07);
+}
+
+[data-theme="dark"] .filter-pills {
+    background: rgba(0, 0, 0, 0.28);
+    border-color: var(--border);
+}
+
+[data-theme="dark"] .filter-pill {
+    background: rgba(255, 255, 255, 0.04);
+    border-color: var(--border);
+    color: var(--text-muted);
+}
+
+[data-theme="dark"] .filter-pill:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: var(--primary);
+    color: var(--text);
+}
+
+[data-theme="dark"] .filter-pill.active {
+    background: var(--primary);
+    color: #1A1116;
+    border-color: var(--primary);
+    font-weight: 600;
+    box-shadow: 0 2px 10px rgba(242, 139, 168, 0.35);
+}
+
+[data-theme="dark"] .filter-pills .filter-pill {
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-muted);
+}
+
+[data-theme="dark"] .filter-pills .filter-pill:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--text);
+}
+
+[data-theme="dark"] .filter-pills .filter-pill.active {
+    background: var(--primary);
+    color: #1A1116;
+    border-color: var(--primary);
 }
 
 /* ===================== WORKOUT / FITNESS UI ===================== */
@@ -1949,6 +2069,83 @@ tr:hover td { background: var(--bg); }
     background: var(--primary-light, rgba(99, 102, 241, 0.1));
     color: var(--accent, #6366f1);
     font-weight: 700;
+}
+
+/* ===================== TREE GROUPING: EMPRESA ROW & ACCORDION ===================== */
+.matrix-empresa-row {
+    background: rgba(99, 102, 241, 0.05);
+    font-weight: 700;
+    cursor: pointer;
+    user-select: none;
+    border-top: 2px solid var(--border-light, #e2e8f0);
+    transition: background 0.15s;
+}
+.matrix-empresa-row:hover {
+    background: rgba(99, 102, 241, 0.12);
+}
+.matrix-empresa-row td {
+    padding: 9px 8px !important;
+}
+.matrix-empresa-row .matrix-sticky-col {
+    background: inherit;
+}
+.matrix-empresa-chevron {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 4px;
+    background: rgba(99, 102, 241, 0.15);
+    color: var(--accent, #6366f1);
+    font-size: 0.72rem;
+    margin-right: 8px;
+    transition: transform 0.2s;
+}
+.matrix-empresa-row.collapsed .matrix-empresa-chevron {
+    transform: rotate(-90deg);
+}
+.matrix-site-row {
+    transition: background 0.15s;
+}
+.matrix-site-row:hover {
+    background: rgba(0, 0, 0, 0.02);
+}
+[data-theme="dark"] .matrix-site-row:hover {
+    background: rgba(255, 255, 255, 0.03);
+}
+.matrix-site-row.hidden {
+    display: none !important;
+}
+.matrix-site-indent {
+    padding-left: 24px !important;
+    position: relative;
+}
+.matrix-site-indent::before {
+    content: "↳";
+    position: absolute;
+    left: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-weight: bold;
+}
+.matrix-cell-both {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    align-items: stretch;
+}
+.matrix-cell-highlight {
+    outline: 2px solid #f59e0b !important;
+    box-shadow: 0 0 10px rgba(245, 158, 11, 0.6) !important;
+    border-radius: 6px;
+    animation: pulse-border 1.5s infinite alternate;
+}
+@keyframes pulse-border {
+    0% { outline-color: #f59e0b; }
+    100% { outline-color: #ef4444; }
 }
 
 

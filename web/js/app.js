@@ -739,6 +739,49 @@ async function buscarRucSunat() {
 
 // ===================== WORK MATRIX (MATRIZ MENSUAL 12 MESES & OC) =====================
 
+function toggleEmpresaExpand(clientId) {
+    if (!state.expandedEmpresas) state.expandedEmpresas = {};
+    const cur = state.expandedEmpresas[clientId] !== false;
+    state.expandedEmpresas[clientId] = !cur;
+    const content = document.getElementById('workContent');
+    if (content) renderWorkMatrix(content);
+}
+
+function expandAllEmpresas(expand) {
+    if (!state.expandedEmpresas) state.expandedEmpresas = {};
+    const clients = state.matrixData?.clients || [];
+    for (const c of clients) {
+        state.expandedEmpresas[c.id] = expand;
+    }
+    const allSites = state.matrixData?.sites || [];
+    for (const s of allSites) {
+        if (s.client_id) state.expandedEmpresas[s.client_id] = expand;
+    }
+    const content = document.getElementById('workContent');
+    if (content) renderWorkMatrix(content);
+}
+
+function onSearchMatrixMain(val) {
+    state.matrixSearch = val;
+    state.matrixOcSearch = val;
+    if (val && val.trim().length > 0) {
+        if (!state.expandedEmpresas) state.expandedEmpresas = {};
+        const clients = state.matrixData?.clients || [];
+        for (const c of clients) {
+            state.expandedEmpresas[c.id] = true;
+        }
+    }
+    const content = document.getElementById('workContent');
+    if (content) renderWorkMatrix(content);
+}
+
+function clearMatrixSearch() {
+    state.matrixSearch = '';
+    state.matrixOcSearch = '';
+    const content = document.getElementById('workContent');
+    if (content) renderWorkMatrix(content);
+}
+
 async function renderWorkMatrix(el) {
     state.matrixYear = state.matrixYear || (new Date().getFullYear() || 2026);
     state.matrixPeriodicityFilter = state.matrixPeriodicityFilter || 'all';
@@ -746,6 +789,8 @@ async function renderWorkMatrix(el) {
     state.matrixOcPeriodicityFilter = state.matrixOcPeriodicityFilter || 'all';
     state.matrixOcMonthFilter = state.matrixOcMonthFilter || 'all';
     state.matrixOcSearch = state.matrixOcSearch || '';
+    state.matrixSearch = state.matrixSearch || '';
+    state.expandedEmpresas = state.expandedEmpresas || {};
 
     const [data, sitesGrouped, clients] = await Promise.all([
         api(eel.get_monthly_billing, state.matrixYear),
@@ -753,7 +798,7 @@ async function renderWorkMatrix(el) {
         api(eel.get_clients)
     ]);
 
-    const resData = data || { year: state.matrixYear, sites: [], invoices: [], orders: [] };
+    const resData = data || { year: state.matrixYear, clients: [], sites: [], invoices: [], orders: [] };
     state.matrixData = resData;
     state.allSites = sitesGrouped || [];
     state.allClients = clients || [];
@@ -762,7 +807,7 @@ async function renderWorkMatrix(el) {
     const invoices = resData.invoices || [];
     const orders = resData.orders || [];
 
-    // Filter sites for Matrix table
+    // Filter sites based on periodicity
     const filteredSites = allSites.filter(s => {
         const per = s.periodicity || 'mensual';
         if (state.matrixPeriodicityFilter === 'mensual') return per === 'mensual';
@@ -789,7 +834,7 @@ async function renderWorkMatrix(el) {
     const pendingOrdersCount = orders.filter(o => o.status === 'pending').length;
     const invoicedOrdersCount = orders.filter(o => o.status === 'invoiced').length;
 
-    // Lookups (by site and by client fallback)
+    // Lookups: array-based so multiple invoices/OCs in same month are never lost
     const invMap = {};
     for (const inv of invoices) {
         if (inv.client_site_id) {
@@ -807,9 +852,14 @@ async function renderWorkMatrix(el) {
     const ocMap = {};
     for (const po of orders) {
         if (po.client_site_id) {
-            ocMap[po.client_site_id + '-' + po.month] = po;
-        } else if (po.client_id) {
-            ocMap['c' + po.client_id + '-' + po.month] = po;
+            const k = po.client_site_id + '-' + po.month;
+            if (!ocMap[k]) ocMap[k] = [];
+            ocMap[k].push(po);
+        }
+        if (po.client_id) {
+            const kc = 'c' + po.client_id + '-' + po.month;
+            if (!ocMap[kc]) ocMap[kc] = [];
+            ocMap[kc].push(po);
         }
     }
 
@@ -817,15 +867,64 @@ async function renderWorkMatrix(el) {
     const curYear = new Date().getFullYear();
     const curMonth = new Date().getMonth() + 1;
     const isCurYear = state.matrixYear === curYear;
+    const searchVal = (state.matrixSearch || '').toLowerCase().trim();
+
+    // Group filtered sites by client (Empresa)
+    const sitesByClient = {};
+    for (const s of filteredSites) {
+        const cid = s.client_id || 0;
+        if (!sitesByClient[cid]) sitesByClient[cid] = [];
+        sitesByClient[cid].push(s);
+    }
+
+    const clientObjMap = {};
+    for (const c of (resData.clients || [])) clientObjMap[c.id] = c;
+    for (const c of (clients || [])) if (!clientObjMap[c.id]) clientObjMap[c.id] = c;
+
+    let companyIds = Object.keys(sitesByClient).map(x => parseInt(x));
+    companyIds.sort((a, b) => {
+        const nameA = (clientObjMap[a]?.business_name || sitesByClient[a]?.[0]?.empresa || '').toUpperCase();
+        const nameB = (clientObjMap[b]?.business_name || sitesByClient[b]?.[0]?.empresa || '').toUpperCase();
+        return nameA.localeCompare(nameB);
+    });
+
+    // If search active, filter companies and auto-expand matching ones
+    if (searchVal) {
+        companyIds = companyIds.filter(cid => {
+            const cName = (clientObjMap[cid]?.business_name || sitesByClient[cid]?.[0]?.empresa || '').toLowerCase();
+            const cRuc = (clientObjMap[cid]?.ruc || '').toLowerCase();
+            if (cName.includes(searchVal) || cRuc.includes(searchVal)) return true;
+
+            const cSites = sitesByClient[cid] || [];
+            for (const s of cSites) {
+                if ((s.nombre_cliente || '').toLowerCase().includes(searchVal)) return true;
+                if ((s.servicios || '').toLowerCase().includes(searchVal)) return true;
+                if ((s.location_code || '').toLowerCase().includes(searchVal)) return true;
+                // Check if any OC matches
+                for (let m = 1; m <= 12; m++) {
+                    const ocs = ocMap[s.id + '-' + m] || [];
+                    if (ocs.some(o => o.oc_number.toLowerCase().includes(searchVal) || (o.notes || '').toLowerCase().includes(searchVal))) return true;
+                    const invs = invMap[s.id + '-' + m] || [];
+                    if (invs.some(i => (i.purchase_order || '').toLowerCase().includes(searchVal) || `${i.series}-${i.number}`.toLowerCase().includes(searchVal))) return true;
+                }
+            }
+            return false;
+        });
+
+        // Auto-expand all matching
+        for (const cid of companyIds) {
+            state.expandedEmpresas[cid] = true;
+        }
+    }
 
     let html = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
         <div>
             <div style="display:flex;align-items:center;gap:10px">
                 <h2 style="margin:0;font-size:1.35rem">📊 Matriz de Facturación Mensual</h2>
-                <span class="tag tag-primary">12 Meses Completos</span>
+                <span class="tag tag-primary">12 Meses · Agrupada por Empresa</span>
             </div>
-            <div style="font-size:0.8rem;color:var(--text-muted)">Clientes regulares, bimensuales y órdenes de compra de servicios de saneamiento y plagas</div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">Haz clic en cualquier empresa para desplegar/desglosar sus sedes y servicios individuales</div>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <div style="display:flex;align-items:center;gap:4px;background:var(--bg-card);padding:4px 8px;border-radius:8px;border:1px solid var(--border-light)">
@@ -865,37 +964,50 @@ async function renderWorkMatrix(el) {
         </div>
     </div>
 
-    <!-- 12-Month Matrix Card -->
+    <!-- 12-Month Matrix Card with Accordion Tool -->
     <div class="card" style="margin-bottom:24px;padding:0;overflow:hidden">
         <div style="padding:14px 18px;border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
             <div>
-                <div style="font-weight:700;font-size:1rem">Control de Facturación y Cuotas · Año ${state.matrixYear}</div>
-                <div style="font-size:0.78rem;color:var(--text-muted)">Haz clic en cualquier celda para ver el comprobante o registrar/emitir la OC correspondiente</div>
+                <div style="font-weight:700;font-size:1rem">Control de Facturación Mensual y Órdenes de Compra · Año ${state.matrixYear}</div>
+                <div style="font-size:0.78rem;color:var(--text-muted)">Haz clic en una empresa para desglosarla. Haz clic en cualquier celda para emitir o ver ítems.</div>
             </div>
             <div style="display:flex;gap:12px;font-size:0.75rem;align-items:center;flex-wrap:wrap">
                 <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:rgba(99,102,241,0.2);border-radius:2px;display:inline-block"></span> Facturada</span>
-                <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:rgba(245,158,11,0.25);border:1px dashed #f59e0b;border-radius:2px;display:inline-block"></span> OC Registrada (Por facturar)</span>
-                <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:var(--border-light);border-radius:2px;display:inline-block"></span> Pendiente (+ OC)</span>
+                <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:rgba(245,158,11,0.25);border:1px dashed #f59e0b;border-radius:2px;display:inline-block"></span> OC Pendiente</span>
+                <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:var(--border-light);border-radius:2px;display:inline-block"></span> + OC (Pendiente)</span>
             </div>
         </div>
 
-        <!-- Periodicity Filter Buttons for Matrix -->
-        <div style="padding:10px 18px;background:var(--bg-card);border-bottom:1px solid var(--border-light);display:flex;gap:8px;flex-wrap:wrap">
-            <button class="filter-pill${state.matrixPeriodicityFilter === 'all' ? ' active' : ''}" onclick="filterMatrixPeriodicity('all')">Todas las sedes (${allSites.length})</button>
-            <button class="filter-pill${state.matrixPeriodicityFilter === 'mensual' ? ' active' : ''}" onclick="filterMatrixPeriodicity('mensual')">🔄 Mensuales (${mensualSitesCount})</button>
-            <button class="filter-pill${state.matrixPeriodicityFilter === 'bimensual' ? ' active' : ''}" onclick="filterMatrixPeriodicity('bimensual')">🔁 Bimensuales (${bimensualSitesCount})</button>
-            <button class="filter-pill${state.matrixPeriodicityFilter === 'trimestral' ? ' active' : ''}" onclick="filterMatrixPeriodicity('trimestral')">🗓️ Trimestral/Semestral (${allSites.filter(s => s.periodicity === 'trimestral' || s.periodicity === 'semestral').length})</button>
-            <button class="filter-pill${state.matrixPeriodicityFilter === 'eventual' ? ' active' : ''}" onclick="filterMatrixPeriodicity('eventual')">⚡ Eventuales (${eventualSitesCount})</button>
+        <!-- Toolbar: Search & Accordion Controls -->
+        <div style="padding:10px 18px;background:var(--bg-card);border-bottom:1px solid var(--border-light);display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+            <div style="flex:1;min-width:260px">
+                <input type="text" class="form-control" style="font-size:0.85rem;padding:6px 12px" placeholder="🔍 Buscar por N° OC (ej: 4500085548), empresa, sede, servicio..." value="${esc(state.matrixSearch)}" oninput="onSearchMatrixMain(this.value)">
+            </div>
+            <div style="display:flex;gap:6px">
+                <button class="btn btn-secondary btn-sm" onclick="expandAllEmpresas(true)" title="Desplegar todas las empresas">⊞ Expandir todas</button>
+                <button class="btn btn-secondary btn-sm" onclick="expandAllEmpresas(false)" title="Colapsar a nivel empresa">⊟ Colapsar todas</button>
+                ${searchVal ? `<button class="btn btn-ghost btn-sm" onclick="clearMatrixSearch()">✕ Limpiar búsqueda</button>` : ''}
+            </div>
+            <div class="filter-pills" style="margin:0">
+                <button class="filter-pill${state.matrixPeriodicityFilter === 'all' ? ' active' : ''}" onclick="filterMatrixPeriodicity('all')">Todas (${allSites.length})</button>
+                <button class="filter-pill${state.matrixPeriodicityFilter === 'mensual' ? ' active' : ''}" onclick="filterMatrixPeriodicity('mensual')">🔄 Mensuales (${mensualSitesCount})</button>
+                <button class="filter-pill${state.matrixPeriodicityFilter === 'bimensual' ? ' active' : ''}" onclick="filterMatrixPeriodicity('bimensual')">🔁 Bimensuales (${bimensualSitesCount})</button>
+                <button class="filter-pill${state.matrixPeriodicityFilter === 'trimestral' ? ' active' : ''}" onclick="filterMatrixPeriodicity('trimestral')">🗓️ Trimestral/Sem (${trimestralSitesCount})</button>
+                <button class="filter-pill${state.matrixPeriodicityFilter === 'eventual' ? ' active' : ''}" onclick="filterMatrixPeriodicity('eventual')">⚡ Eventuales (${eventualSitesCount})</button>
+            </div>
         </div>`;
 
-    if (filteredSites.length === 0) {
-        html += '<div style="padding:30px;text-align:center;color:var(--text-muted)">No hay sedes con el filtro de periodicidad seleccionado</div>';
+    if (companyIds.length === 0) {
+        html += `<div style="padding:35px;text-align:center;color:var(--text-muted)">
+            <p style="font-size:1.1rem;margin-bottom:6px">No se encontraron empresas o sedes con los filtros seleccionados</p>
+            ${searchVal ? `<button class="btn btn-secondary btn-sm" onclick="clearMatrixSearch()">Limpiar búsqueda "${esc(searchVal)}"</button>` : ''}
+        </div>`;
     } else {
         html += `<div class="table-wrap" style="overflow-x:auto;max-height:680px">
             <table class="matrix-table">
                 <thead style="position:sticky;top:0;background:var(--bg-card);z-index:4">
                     <tr>
-                        <th class="matrix-sticky-col">Empresa / Sede</th>
+                        <th class="matrix-sticky-col">Empresa / Sede / Servicio</th>
                         <th style="text-align:center;font-size:0.75rem;padding:6px 6px">Frecuencia</th>
                         <th style="text-align:right;font-size:0.75rem;padding:6px 8px;min-width:90px">Cuota Pactada</th>`;
 
@@ -915,76 +1027,163 @@ async function renderWorkMatrix(el) {
         const monthTotals = new Array(13).fill(0);
         let grandTotalAnnual = 0;
 
-        for (const s of filteredSites) {
-            const empresa = s.empresa || s.nombre_cliente;
-            const fee = parseFloat(s.monthly_fee) || 0;
-            const per = s.periodicity || 'mensual';
-            let siteInvoicedSum = 0;
-            let siteBilledMonths = 0;
+        for (const cid of companyIds) {
+            const clientSites = sitesByClient[cid] || [];
+            const clientObj = clientObjMap[cid] || {};
+            const compName = clientObj.business_name || clientSites[0]?.empresa || 'Cliente';
+            const compRuc = clientObj.ruc || clientSites[0]?.ruc || '';
+            const isExpanded = state.expandedEmpresas[cid] !== false; // default true
 
-            html += `<tr>
+            // Aggregate totals for the company
+            let empTotalCuota = 0;
+            const empMonthTotals = new Array(13).fill(0);
+            const empMonthPendingOcs = new Array(13).fill(0);
+            let empAnnualInvoiced = 0;
+
+            for (const s of clientSites) {
+                empTotalCuota += (parseFloat(s.monthly_fee) || 0);
+                for (let m = 1; m <= 12; m++) {
+                    const invs = invMap[s.id + '-' + m] || [];
+                    const mTot = invs.reduce((sum, x) => sum + (x.total || 0), 0);
+                    empMonthTotals[m] += mTot;
+                    empAnnualInvoiced += mTot;
+                    monthTotals[m] += mTot;
+
+                    const ocs = ocMap[s.id + '-' + m] || [];
+                    const pOcs = ocs.filter(o => o.status === 'pending');
+                    empMonthPendingOcs[m] += pOcs.length;
+                }
+            }
+            grandTotalAnnual += empAnnualInvoiced;
+
+            // Render Empresa Parent Row
+            html += `<tr class="matrix-empresa-row ${isExpanded ? '' : 'collapsed'}" onclick="toggleEmpresaExpand(${cid})">
                 <td class="matrix-sticky-col">
-                    <div style="font-weight:700;font-size:0.83rem">${esc(empresa)}</div>
-                    <div style="font-size:0.73rem;color:var(--text-muted);display:flex;align-items:center;gap:6px">
-                        <span>${esc(s.nombre_cliente)}</span>
-                        ${s.location_code ? `<span class="tag tag-ghost" style="padding:1px 4px;font-size:0.68rem">Loc: ${esc(s.location_code)}</span>` : ''}
+                    <div style="display:flex;align-items:center;justify-content:space-between">
+                        <div style="display:flex;align-items:center">
+                            <span class="matrix-empresa-chevron">${isExpanded ? '▼' : '▶'}</span>
+                            <div>
+                                <span style="font-size:0.88rem;font-weight:700">${esc(compName)}</span>
+                                ${compRuc ? `<span class="tag tag-ghost" style="margin-left:6px;font-size:0.68rem;padding:1px 4px">RUC ${esc(compRuc)}</span>` : ''}
+                            </div>
+                        </div>
+                        <span class="tag tag-primary" style="font-size:0.7rem;padding:2px 6px">${clientSites.length} ${clientSites.length === 1 ? 'servicio' : 'servicios'}</span>
                     </div>
                 </td>
-                <td style="text-align:center;padding:4px 6px">
-                    <span class="tag-periodicity-${per}">${per}</span>
-                </td>
-                <td style="text-align:right;font-family:monospace;font-size:0.8rem;font-weight:600;padding:6px 8px">
-                    ${fee > 0 ? `S/ ${fmtMoney(fee)}` : '—'}
+                <td style="text-align:center;font-size:0.75rem;color:var(--text-muted);font-weight:600">Empresa</td>
+                <td style="text-align:right;font-family:monospace;font-size:0.83rem;font-weight:700;padding:6px 8px">
+                    ${empTotalCuota > 0 ? `S/ ${fmtMoney(empTotalCuota)}` : '—'}
                 </td>`;
 
             for (let m = 1; m <= 12; m++) {
-                const kSite = s.id + '-' + m;
-                const kClient = 'c' + s.client_id + '-' + m;
-                const invs = (s.id && invMap[kSite]) ? invMap[kSite] : (s.client_id && invMap[kClient] ? invMap[kClient] : []);
-                const po = ocMap[kSite] || (s.client_id ? ocMap[kClient] : null);
-
-                if (invs.length > 0) {
-                    const monthTotal = invs.reduce((acc, x) => acc + (x.total || 0), 0);
-                    siteInvoicedSum += monthTotal;
-                    monthTotals[m] += monthTotal;
-                    siteBilledMonths++;
-                    const ocDisplay = po?.oc_number || invs[0].purchase_order;
-
-                    html += `<td style="padding:4px 3px">
-                        <div class="matrix-cell-invoiced" onclick="showInvoiceForm(${invs[0].id})" title="Factura emitida S/ ${fmtMoney(monthTotal)} - Clic para ver">
-                            <div style="font-family:monospace;font-weight:700;font-size:0.78rem;color:var(--accent)">S/ ${fmtMoney(monthTotal)}</div>
-                            ${ocDisplay ? `<div style="font-size:0.65rem;color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">OC: ${esc(ocDisplay)}</div>` : ''}
-                        </div>
-                    </td>`;
-                } else if (po) {
-                    html += `<td style="padding:4px 3px">
-                        <div class="matrix-cell-oc" onclick="handleMatrixCellOc(${s.id}, ${s.client_id}, ${m}, ${state.matrixYear}, ${po.id})" title="OC: ${esc(po.oc_number)} - Por facturar. Clic para emitir o ver desglose">
-                            <div style="font-size:0.73rem;font-weight:700;color:#d97706;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">OC ${esc(po.oc_number)}</div>
-                            <div style="font-size:0.65rem;color:#b45309">⏳ S/ ${fmtMoney(po.amount || 0)}</div>
-                        </div>
-                    </td>`;
-                } else {
-                    html += `<td style="padding:4px 3px">
-                        <div class="matrix-cell-empty" onclick="showPurchaseOrderModal(null, ${s.id}, ${s.client_id}, ${m}, ${state.matrixYear})" title="Registrar OC de ${monthShorts[m-1]}">+ OC</div>
-                    </td>`;
-                }
+                const totM = empMonthTotals[m];
+                const pendOcs = empMonthPendingOcs[m];
+                html += `<td style="text-align:center;padding:4px 3px">
+                    ${totM > 0 ? `<div style="font-family:monospace;font-weight:700;font-size:0.78rem;color:var(--accent)">S/ ${fmtMoney(totM)}</div>` : ''}
+                    ${pendOcs > 0 ? `<div style="font-size:0.65rem;color:#b45309;font-weight:700">⏳ ${pendOcs} OC pend.</div>` : ''}
+                    ${totM === 0 && pendOcs === 0 ? '<span style="color:var(--text-muted);font-size:0.75rem">—</span>' : ''}
+                </td>`;
             }
 
-            grandTotalAnnual += siteInvoicedSum;
-            const expectedSum = fee * (siteBilledMonths || 1);
-            const diff = siteInvoicedSum - expectedSum;
-            const diffCls = diff >= 0 ? 'tag-sage' : 'tag-rose';
-
             html += `
-                <td style="text-align:right;font-family:monospace;font-weight:700;font-size:0.82rem;padding:6px 8px">
-                    S/ ${fmtMoney(siteInvoicedSum)}
+                <td style="text-align:right;font-family:monospace;font-weight:700;font-size:0.85rem;color:var(--accent);padding:6px 8px">
+                    S/ ${fmtMoney(empAnnualInvoiced)}
                 </td>
-                <td style="text-align:center;padding:6px 4px">
-                    <span class="tag ${diffCls}" style="font-size:0.7rem;padding:2px 6px" title="vs cuota de meses facturados">
-                        ${diff >= 0 ? '+' : ''}${fmtMoney(diff)}
-                    </span>
+                <td style="text-align:center;padding:6px 4px;font-size:0.72rem;color:var(--text-muted)">
+                    ${isExpanded ? '▲ Colapsar' : '▼ Desglosar'}
                 </td>
             </tr>`;
+
+            // If expanded, render child rows for each site/service
+            if (isExpanded) {
+                for (const s of clientSites) {
+                    const fee = parseFloat(s.monthly_fee) || 0;
+                    const per = s.periodicity || 'mensual';
+                    let siteInvoicedSum = 0;
+                    let siteBilledMonths = 0;
+
+                    html += `<tr class="matrix-site-row">
+                        <td class="matrix-sticky-col matrix-site-indent">
+                            <div style="font-weight:600;font-size:0.82rem">${esc(s.nombre_cliente)}</div>
+                            <div style="font-size:0.72rem;color:var(--text-muted);display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                                <span>${esc(s.servicios || 'Servicio')}</span>
+                                ${s.location_code ? `<span class="tag tag-ghost" style="padding:0 4px;font-size:0.65rem">Loc: ${esc(s.location_code)}</span>` : ''}
+                            </div>
+                        </td>
+                        <td style="text-align:center;padding:4px 6px">
+                            <span class="tag-periodicity-${per}">${per}</span>
+                        </td>
+                        <td style="text-align:right;font-family:monospace;font-size:0.8rem;font-weight:600;padding:6px 8px">
+                            ${fee > 0 ? `S/ ${fmtMoney(fee)}` : '—'}
+                        </td>`;
+
+                    for (let m = 1; m <= 12; m++) {
+                        const cellInvs = invMap[s.id + '-' + m] || [];
+                        const cellOcs = ocMap[s.id + '-' + m] || [];
+                        const monthTotal = cellInvs.reduce((acc, x) => acc + (x.total || 0), 0);
+
+                        if (cellInvs.length > 0) {
+                            siteInvoicedSum += monthTotal;
+                            siteBilledMonths++;
+                        }
+
+                        // Check if search query matches this cell
+                        const isCellMatched = searchVal && (
+                            cellOcs.some(o => o.oc_number.toLowerCase().includes(searchVal)) ||
+                            cellInvs.some(i => (i.purchase_order || '').toLowerCase().includes(searchVal))
+                        );
+
+                        html += `<td style="padding:4px 3px">`;
+
+                        if (cellInvs.length > 0 && cellOcs.length > 0) {
+                            // Both Invoice and OC exist for this month!
+                            const po = cellOcs[0];
+                            const inv = cellInvs[0];
+                            html += `<div class="matrix-cell-invoiced ${isCellMatched ? 'matrix-cell-highlight' : ''}" onclick="showInvoiceForm(${inv.id})" title="Factura emitida S/ ${fmtMoney(monthTotal)} - OC: ${esc(po.oc_number)}">
+                                <div style="font-family:monospace;font-weight:700;font-size:0.76rem;color:var(--accent)">S/ ${fmtMoney(monthTotal)}</div>
+                                <div style="font-size:0.65rem;color:var(--text-muted)">F: ${esc(inv.series)}-${esc(inv.number)}</div>
+                                <div style="font-size:0.68rem;font-weight:700;color:#d97706;margin-top:2px" onclick="event.stopPropagation(); showOcItemsModal(${po.id})" title="Clic para ver detalle de OC">OC ${esc(po.oc_number)}</div>
+                            </div>`;
+                        } else if (cellOcs.length > 0) {
+                            // Only OC exists (Pending invoicing or standalone)
+                            const po = cellOcs[0];
+                            html += `<div class="matrix-cell-oc ${isCellMatched ? 'matrix-cell-highlight' : ''}" onclick="handleMatrixCellOc(${s.id}, ${s.client_id}, ${m}, ${state.matrixYear}, ${po.id})" title="OC: ${esc(po.oc_number)} - S/ ${fmtMoney(po.amount)}. Clic para emitir o ver ítems">
+                                <div style="font-size:0.73rem;font-weight:700;color:#d97706">OC ${esc(po.oc_number)}</div>
+                                <div style="font-size:0.65rem;color:#b45309">⏳ S/ ${fmtMoney(po.amount || 0)}</div>
+                            </div>`;
+                        } else if (cellInvs.length > 0) {
+                            // Only Invoice exists
+                            const inv = cellInvs[0];
+                            const ocDisp = inv.purchase_order;
+                            html += `<div class="matrix-cell-invoiced ${isCellMatched ? 'matrix-cell-highlight' : ''}" onclick="showInvoiceForm(${inv.id})" title="Factura emitida S/ ${fmtMoney(monthTotal)}">
+                                <div style="font-family:monospace;font-weight:700;font-size:0.76rem;color:var(--accent)">S/ ${fmtMoney(monthTotal)}</div>
+                                <div style="font-size:0.65rem;color:var(--text-muted)">F: ${esc(inv.series)}-${esc(inv.number)}</div>
+                                ${ocDisp ? `<div style="font-size:0.65rem;color:#f59e0b;font-weight:700">OC ${esc(ocDisp)}</div>` : ''}
+                            </div>`;
+                        } else {
+                            // Empty cell: + OC
+                            html += `<div class="matrix-cell-empty" onclick="showPurchaseOrderModal(null, ${s.id}, ${s.client_id}, ${m}, ${state.matrixYear})" title="Registrar OC de ${monthShorts[m-1]}">+ OC</div>`;
+                        }
+
+                        html += `</td>`;
+                    }
+
+                    const expectedSum = fee * (siteBilledMonths || 1);
+                    const diff = siteInvoicedSum - expectedSum;
+                    const diffCls = diff >= 0 ? 'tag-sage' : 'tag-rose';
+
+                    html += `
+                        <td style="text-align:right;font-family:monospace;font-weight:700;font-size:0.82rem;padding:6px 8px">
+                            S/ ${fmtMoney(siteInvoicedSum)}
+                        </td>
+                        <td style="text-align:center;padding:6px 4px">
+                            <span class="tag ${diffCls}" style="font-size:0.7rem;padding:2px 6px" title="vs cuota pactada de meses facturados">
+                                ${diff >= 0 ? '+' : ''}${fmtMoney(diff)}
+                            </span>
+                        </td>
+                    </tr>`;
+                }
+            }
         }
 
         html += `</tbody>
@@ -1095,6 +1294,7 @@ async function renderWorkMatrix(el) {
             const isPending = po.status === 'pending';
             const mName = monthShorts[(po.month || 1) - 1];
             const per = po.periodicity || 'mensual';
+            const isPoMatch = searchVal && po.oc_number.toLowerCase().includes(searchVal);
 
             let itemsCount = 0;
             let itemsPreview = esc(po.notes || '—');
@@ -1109,7 +1309,7 @@ async function renderWorkMatrix(el) {
                 }
             } catch(e) {}
 
-            html += `<tr>
+            html += `<tr class="${isPoMatch ? 'matrix-cell-highlight' : ''}">
                 <td style="font-weight:700;font-size:0.85rem">${mName}</td>
                 <td>
                     <span class="tag tag-primary" style="font-family:monospace;font-size:0.85rem;cursor:pointer" onclick="showOcItemsModal(${po.id})" title="Clic para ver detalle completo">OC ${esc(po.oc_number)}</span>
@@ -1182,6 +1382,7 @@ function filterMatrixOcMonth(month) {
 
 function onSearchMatrixOc(val) {
     state.matrixOcSearch = val;
+    state.matrixSearch = val;
     const content = document.getElementById('workContent');
     if (content) renderWorkMatrix(content);
 }
@@ -1203,6 +1404,8 @@ function handleMatrixCellOc(siteId, clientId, month, year, poId) {
             if (Array.isArray(parsed)) itemsCount = parsed.length;
         }
     } catch(e) {}
+
+    const isPending = po.status === 'pending';
 
     const modalHtml = `
         <div style="padding:10px 0">
@@ -1227,12 +1430,12 @@ function handleMatrixCellOc(siteId, clientId, month, year, poId) {
                 </div>
                 <div class="card" style="flex:1;min-width:140px;padding:10px;text-align:center">
                     <div style="font-size:0.75rem;color:var(--text-muted)">Estado</div>
-                    <div style="margin-top:4px">${po.status === 'pending' ? '<span class="tag tag-amber">⏳ Por facturar</span>' : '<span class="tag tag-sage">✅ Facturada</span>'}</div>
+                    <div style="margin-top:4px">${isPending ? '<span class="tag tag-amber">⏳ Por facturar</span>' : '<span class="tag tag-sage">✅ Facturada</span>'}</div>
                 </div>
             </div>
 
             <div style="display:flex;flex-direction:column;gap:8px">
-                <button class="btn btn-primary" onclick="closeModal(); emitInvoiceFromOc(${po.id})">🧮 Emitir en Calculadora SUNAT</button>
+                ${isPending ? `<button class="btn btn-primary" onclick="closeModal(); emitInvoiceFromOc(${po.id})">🧮 Emitir en Calculadora SUNAT</button>` : ''}
                 ${itemsCount > 0 ? `<button class="btn btn-secondary" onclick="closeModal(); showOcItemsModal(${po.id})">👁️ Ver Desglose de Ítems (${itemsCount} posiciones)</button>` : ''}
                 <button class="btn btn-secondary" onclick="closeModal(); showPurchaseOrderModal(${po.id})">✏️ Modificar Orden de Compra</button>
                 <button class="btn btn-ghost" onclick="closeModal(); deletePurchaseOrder(${po.id})" style="color:#ef4444">🗑️ Eliminar Orden de Compra</button>
@@ -1244,8 +1447,12 @@ function handleMatrixCellOc(siteId, clientId, month, year, poId) {
 
 function showOcItemsModal(poId) {
     const orders = state.matrixData?.orders || [];
+    const invoices = state.matrixData?.invoices || [];
     const po = orders.find(o => o.id === poId);
     if (!po) return;
+
+    // Check if there is an invoice linked to this OC
+    const linkedInvoice = invoices.find(i => i.purchase_order === po.oc_number || (i.client_site_id === po.client_site_id && i.month_billed === po.month));
 
     let items = [];
     try {
@@ -1284,6 +1491,16 @@ function showOcItemsModal(poId) {
                 </div>
                 <span class="tag-periodicity-${po.periodicity || 'mensual'}">${po.periodicity || 'mensual'}</span>
             </div>
+
+            ${linkedInvoice ? `
+            <div class="card" style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.3);padding:10px 14px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+                <div>
+                    <div style="font-weight:700;color:#059669;font-size:0.88rem">✅ Factura SUNAT Emitida: ${esc(linkedInvoice.series)}-${esc(linkedInvoice.number)}</div>
+                    <div style="font-size:0.75rem;color:var(--text-muted)">Total Facturado: S/ ${fmtMoney(linkedInvoice.total)} con IGV · Emisión: ${linkedInvoice.issue_date || ''}</div>
+                </div>
+                <button class="btn btn-secondary btn-sm" onclick="closeModal(); showInvoiceForm(${linkedInvoice.id})">📄 Ver Factura</button>
+            </div>
+            ` : ''}
 
             <div class="table-wrap" style="max-height:380px;overflow-y:auto;margin-bottom:16px">
                 <table class="oc-items-table">
@@ -1678,17 +1895,19 @@ async function renderWorkInvoices(el) {
                 <div style="font-size:0.75rem;color:var(--text-muted)">Registro oficial SIRE RVIE de ventas electrónicas (E001/EB01)</div>
             </div>
             <div style="display:flex;gap:8px;align-items:center">
-                <input type="text" id="invoiceSearchInput" class="form-control" style="width:230px;padding:6px 12px;font-size:0.85rem" placeholder="🔍 Buscar cliente, OC o factura..." oninput="filterInvoicesTable(this.value)">
-                <button class="btn btn-ghost btn-sm" onclick="showInvoiceForm(null)">+ Agregar</button>
+                <input type="text" id="invoiceSearchInput" class="form-control" style="width:240px;padding:6px 14px;font-size:0.85rem;border-radius:var(--radius-full)" placeholder="🔍 Buscar cliente, OC o factura..." oninput="filterInvoicesTable(this.value)">
+                <button class="btn btn-primary btn-sm" onclick="showInvoiceForm(null)">+ Nueva Factura</button>
             </div>
         </div>
         <!-- Status Filter Pills -->
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;padding-bottom:10px;border-bottom:1px solid var(--border-light)">
-            <button class="filter-pill${state.invoiceStatusFilter === 'all' ? ' active' : ''}" onclick="filterInvoiceStatus('all')">Todas (${allInvoices.length})</button>
-            <button class="filter-pill${state.invoiceStatusFilter === 'vigentes' ? ' active' : ''}" onclick="filterInvoiceStatus('vigentes')">✅ Vigentes (${vigentes.length})</button>
-            <button class="filter-pill${state.invoiceStatusFilter === 'issued' ? ' active' : ''}" onclick="filterInvoiceStatus('issued')">⏳ Emitidas (${allInvoices.filter(x => x.status === 'issued').length})</button>
-            <button class="filter-pill${state.invoiceStatusFilter === 'paid' ? ' active' : ''}" onclick="filterInvoiceStatus('paid')">💳 Pagadas (${allInvoices.filter(x => x.status === 'paid').length})</button>
-            <button class="filter-pill${state.invoiceStatusFilter === 'annulled' ? ' active' : ''}" onclick="filterInvoiceStatus('annulled')">🚫 Anuladas (${anuladas.length})</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border-light);align-items:center">
+            <div class="filter-pills" style="margin:0">
+                <button class="filter-pill${state.invoiceStatusFilter === 'all' ? ' active' : ''}" onclick="filterInvoiceStatus('all')">Todas (${allInvoices.length})</button>
+                <button class="filter-pill${state.invoiceStatusFilter === 'vigentes' ? ' active' : ''}" onclick="filterInvoiceStatus('vigentes')">✅ Vigentes (${vigentes.length})</button>
+                <button class="filter-pill${state.invoiceStatusFilter === 'issued' ? ' active' : ''}" onclick="filterInvoiceStatus('issued')">⏳ Emitidas (${allInvoices.filter(x => x.status === 'issued').length})</button>
+                <button class="filter-pill${state.invoiceStatusFilter === 'paid' ? ' active' : ''}" onclick="filterInvoiceStatus('paid')">💳 Pagadas (${allInvoices.filter(x => x.status === 'paid').length})</button>
+                <button class="filter-pill${state.invoiceStatusFilter === 'annulled' ? ' active' : ''}" onclick="filterInvoiceStatus('annulled')">🚫 Anuladas (${anuladas.length})</button>
+            </div>
         </div>`;
 
     if (allInvoices.length === 0) {
@@ -1700,6 +1919,26 @@ async function renderWorkInvoices(el) {
             overdue: {label:'Vencida',cls:'tag-rose'},
             annulled: {label:'Anulada',cls:'tag-rose'}
         };
+
+        html += `<div class="table-wrap" style="max-height:680px;overflow-y:auto">
+            <table id="invoicesTable">
+                <thead style="position:sticky;top:0;background:var(--card);z-index:2">
+                    <tr>
+                        <th style="min-width:130px">Comprobante</th>
+                        <th style="min-width:100px">N° OC</th>
+                        <th style="text-align:center;min-width:70px">Centro</th>
+                        <th style="min-width:200px">Cliente / Sede</th>
+                        <th style="min-width:180px">Servicio</th>
+                        <th style="text-align:right;min-width:95px">Subtotal</th>
+                        <th style="text-align:right;min-width:95px">Total</th>
+                        <th style="text-align:right;min-width:90px">Detracción</th>
+                        <th style="text-align:right;min-width:95px">Neto a Cobrar</th>
+                        <th style="text-align:center;min-width:80px">Período</th>
+                        <th style="text-align:center;min-width:90px">Estado</th>
+                        <th style="text-align:right;min-width:80px">Acciones</th>
+                    </tr>
+                </thead>
+                <tbody>`;
 
         for (const i of allInvoices) {
             const isAnulada = i.status === 'annulled';
@@ -1764,6 +2003,9 @@ async function renderWorkInvoices(el) {
     </div>`;
     
     el.innerHTML = html;
+    if (state.invoiceStatusFilter && state.invoiceStatusFilter !== 'all') {
+        filterInvoicesTable(document.getElementById('invoiceSearchInput')?.value || '');
+    }
 }
 
 function filterInvoiceStatus(status) {
@@ -8080,6 +8322,10 @@ window.changeWorkoutProgressMetric = changeWorkoutProgressMetric;
 window.deleteWorkoutSession = deleteWorkoutSession;
 window.showQuickExerciseLogModal = showQuickExerciseLogModal;
 
+window.toggleEmpresaExpand = toggleEmpresaExpand;
+window.expandAllEmpresas = expandAllEmpresas;
+window.onSearchMatrixMain = onSearchMatrixMain;
+window.clearMatrixSearch = clearMatrixSearch;
 window.filterMatrixPeriodicity = filterMatrixPeriodicity;
 window.filterMatrixOcStatus = filterMatrixOcStatus;
 window.filterMatrixOcPeriodicity = filterMatrixOcPeriodicity;

@@ -3546,3 +3546,28 @@ def get_workout_progress():
     finally:
         conn.close()
 
+# ===================== WEATHER =====================
+
+@eel.expose
+def get_weather_data(lat=-34.6037, lon=-58.3816):
+    """
+    Obtiene el pronóstico actual y extendido desde Open-Meteo para el resumen del dashboard.
+    """
+    import urllib.request
+    import json
+    try:
+        url = (
+            f"https://api.open-meteo.com/v1/forecast"
+            f"?latitude={lat}&longitude={lon}"
+            f"&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m"
+            f"&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+            f"&timezone=America%2FArgentina%2FBuenos_Aires"
+            f"&forecast_days=4"
+        )
+        req = urllib.request.Request(url, headers={'User-Agent': 'NicoleERP/1.0'})
+        with urllib.request.urlopen(req, timeout=7) as response:
+            data = json.loads(response.read().decode('utf-8'))
+            return {'ok': True, 'data': data}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+

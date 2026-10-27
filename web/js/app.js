@@ -14,6 +14,7 @@ console.log('app.js loaded at', new Date().toISOString());
 // ===== STATE =====
 const state = {
     view: 'dashboard',
+    weatherData: null,
     workTab: 'tasks',
     personalTab: 'routine',
     selectedRoutineDayId: null,
@@ -231,6 +232,344 @@ async function navigate(view) {
     }
 }
 
+// ===================== CLIMA / WEATHER =====================
+
+function getWeatherInfoFromWMO(code, isDay = 1) {
+    const c = Number(code);
+    switch (c) {
+        case 0:
+            return { desc: isDay ? 'Despejado' : 'Noche despejada', icon: isDay ? '☀️' : '🌙' };
+        case 1:
+            return { desc: 'Mayormente despejado', icon: isDay ? '🌤️' : '🌙' };
+        case 2:
+            return { desc: 'Parcialmente nublado', icon: '⛅' };
+        case 3:
+            return { desc: 'Nublado', icon: '☁️' };
+        case 45:
+        case 48:
+            return { desc: 'Niebla / Neblina', icon: '🌫️' };
+        case 51:
+        case 53:
+        case 55:
+            return { desc: 'Llovizna', icon: '🌦️' };
+        case 56:
+        case 57:
+            return { desc: 'Llovizna helada', icon: '🌨️' };
+        case 61:
+            return { desc: 'Lluvia leve', icon: '🌧️' };
+        case 63:
+            return { desc: 'Lluvia moderada', icon: '🌧️' };
+        case 65:
+            return { desc: 'Lluvia fuerte', icon: '🌧️' };
+        case 66:
+        case 67:
+            return { desc: 'Lluvia helada', icon: '🌨️' };
+        case 71:
+        case 73:
+        case 75:
+            return { desc: 'Nevada', icon: '❄️' };
+        case 77:
+            return { desc: 'Granizo', icon: '🌨️' };
+        case 80:
+        case 81:
+        case 82:
+            return { desc: 'Chubascos', icon: '🌧️' };
+        case 85:
+        case 86:
+            return { desc: 'Chubascos de nieve', icon: '❄️' };
+        case 95:
+            return { desc: 'Tormenta eléctrica', icon: '⛈️' };
+        case 96:
+        case 99:
+            return { desc: 'Tormenta con granizo', icon: '⛈️' };
+        default:
+            return { desc: 'Templado', icon: '🌤️' };
+    }
+}
+
+async function fetchWeatherData(forceRefresh = false) {
+    const CACHE_KEY = 'nicole_weather_cache';
+    const CACHE_MS = 20 * 60 * 1000; // 20 minutos de caché
+
+    if (!forceRefresh) {
+        if (state.weatherData && (Date.now() - (state.weatherData.timestamp || 0) < CACHE_MS)) {
+            return state.weatherData;
+        }
+        try {
+            const cachedStr = sessionStorage.getItem(CACHE_KEY) || localStorage.getItem(CACHE_KEY);
+            if (cachedStr) {
+                const cached = JSON.parse(cachedStr);
+                if (Date.now() - (cached.timestamp || 0) < CACHE_MS) {
+                    state.weatherData = cached;
+                    return cached;
+                }
+            }
+        } catch (_) {}
+    }
+
+    let lat = -34.6037;
+    let lon = -58.3816;
+    let cityName = 'Buenos Aires';
+
+    try {
+        const savedCoords = localStorage.getItem('nicole_weather_coords');
+        if (savedCoords) {
+            const parsed = JSON.parse(savedCoords);
+            if (parsed.lat && parsed.lon) {
+                lat = parsed.lat;
+                lon = parsed.lon;
+                cityName = parsed.name || 'Mi ubicación';
+            }
+        }
+    } catch (_) {}
+
+    let rawData = null;
+
+    // 1. Intentar vía backend Eel/Flask
+    try {
+        if (window.eel && typeof window.eel.get_weather_data === 'function') {
+            const res = await api(eel.get_weather_data, lat, lon);
+            if (res && res.ok && res.data) {
+                rawData = res.data;
+            }
+        }
+    } catch (_) {}
+
+    // 2. Fallback directo a Open-Meteo
+    if (!rawData) {
+        try {
+            const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=America%2FArgentina%2FBuenos_Aires&forecast_days=4`;
+            const resp = await fetch(url);
+            if (resp.ok) {
+                rawData = await resp.json();
+            }
+        } catch (_) {}
+    }
+
+    if (!rawData) {
+        return state.weatherData || null;
+    }
+
+    const payload = {
+        ...rawData,
+        cityName,
+        lat,
+        lon,
+        timestamp: Date.now()
+    };
+
+    state.weatherData = payload;
+    try {
+        sessionStorage.setItem(CACHE_KEY, JSON.stringify(payload));
+        localStorage.setItem(CACHE_KEY, JSON.stringify(payload));
+    } catch (_) {}
+
+    return payload;
+}
+
+function buildWeatherHeaderPill(weather) {
+    if (!weather || !weather.current) {
+        return `<span class="weather-pill" onclick="document.getElementById('dashboardWeatherCard')?.scrollIntoView({behavior:'smooth'})" title="Ver clima">🌤️ Clima</span>`;
+    }
+    const cur = weather.current;
+    const wInfo = getWeatherInfoFromWMO(cur.weather_code, cur.is_day);
+    const temp = Math.round(cur.temperature_2m);
+    return `<span class="weather-pill" onclick="document.getElementById('dashboardWeatherCard')?.scrollIntoView({behavior:'smooth'})" title="Ver detalle del clima">
+        ${wInfo.icon} ${temp}°C · ${wInfo.desc}
+    </span>`;
+}
+
+function buildWeatherWidgetHtml(weather, isLoading = false) {
+    if (isLoading) {
+        return `<div class="card weather-card" id="dashboardWeatherCard" style="display:flex;align-items:center;justify-content:center;padding:32px 18px;color:var(--text-muted);font-size:0.88rem;gap:10px">
+            <span style="font-size:1.3rem">🌤️</span>
+            <span>Cargando pronóstico del clima...</span>
+        </div>`;
+    }
+
+    if (!weather || !weather.current) {
+        return `<div class="card weather-card" id="dashboardWeatherCard">
+            <div class="weather-header">
+                <div class="weather-location-wrap">
+                    <span>🌤️ Clima</span>
+                </div>
+                <div class="weather-actions">
+                    <button class="btn btn-ghost btn-xs" onclick="refreshDashboardWeather(true)" title="Reintentar">🔄 Reintentar</button>
+                </div>
+            </div>
+            <div style="font-size:0.85rem;color:var(--text-muted);padding:8px 0">
+                Pronóstico del clima listo para sincronizar al conectar.
+            </div>
+        </div>`;
+    }
+
+    const cur = weather.current;
+    const daily = weather.daily || {};
+    const wInfo = getWeatherInfoFromWMO(cur.weather_code, cur.is_day);
+    const curTemp = Math.round(cur.temperature_2m);
+    const stTemp = Math.round(cur.apparent_temperature != null ? cur.apparent_temperature : cur.temperature_2m);
+    const humidity = cur.relative_humidity_2m != null ? cur.relative_humidity_2m : '--';
+    const wind = cur.wind_speed_10m != null ? Math.round(cur.wind_speed_10m) : '--';
+    const rainProb = (daily.precipitation_probability_max && daily.precipitation_probability_max[0] != null)
+        ? daily.precipitation_probability_max[0]
+        : 0;
+
+    const minToday = (daily.temperature_2m_min && daily.temperature_2m_min[0] != null) ? Math.round(daily.temperature_2m_min[0]) : curTemp;
+    const maxToday = (daily.temperature_2m_max && daily.temperature_2m_max[0] != null) ? Math.round(daily.temperature_2m_max[0]) : curTemp;
+
+    // Próximos 3 días
+    let forecastHtml = '';
+    const dayNames = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+    if (daily.time && daily.time.length > 1) {
+        for (let i = 1; i <= Math.min(3, daily.time.length - 1); i++) {
+            const dateStr = daily.time[i];
+            const p = dateStr.split('-').map(Number);
+            const dObj = new Date(p[0], p[1] - 1, p[2]);
+            const dLabel = (i === 1) ? 'Mañana' : dayNames[dObj.getDay()];
+            const fCode = daily.weather_code ? daily.weather_code[i] : 0;
+            const fInfo = getWeatherInfoFromWMO(fCode, 1);
+            const fMin = (daily.temperature_2m_min && daily.temperature_2m_min[i] != null) ? Math.round(daily.temperature_2m_min[i]) : '--';
+            const fMax = (daily.temperature_2m_max && daily.temperature_2m_max[i] != null) ? Math.round(daily.temperature_2m_max[i]) : '--';
+            const fRain = (daily.precipitation_probability_max && daily.precipitation_probability_max[i] != null) ? daily.precipitation_probability_max[i] : 0;
+
+            forecastHtml += `
+                <div class="weather-forecast-day">
+                    <span class="forecast-day-name">${dLabel}</span>
+                    <span class="forecast-day-icon" title="${esc(fInfo.desc)}">${fInfo.icon}</span>
+                    <span class="forecast-day-temps">${fMin}° / ${fMax}°</span>
+                    <span class="forecast-day-rain">🌧️ ${fRain}%</span>
+                </div>
+            `;
+        }
+    }
+
+    return `
+        <div class="card weather-card" id="dashboardWeatherCard">
+            <div class="weather-header">
+                <div class="weather-location-wrap">
+                    <span style="font-size:1rem">📍</span>
+                    <span id="weatherCityName">${esc(weather.cityName || 'Buenos Aires')}</span>
+                    <span class="weather-badge">Hoy</span>
+                </div>
+                <div class="weather-actions">
+                    <button class="btn btn-ghost btn-xs" onclick="refreshDashboardWeather(true)" title="Actualizar clima">🔄</button>
+                    <button class="btn btn-ghost btn-xs" onclick="detectUserLocationWeather()" title="Usar mi ubicación GPS">📍</button>
+                </div>
+            </div>
+
+            <div class="weather-main-row">
+                <div class="weather-temp-block">
+                    <div class="weather-icon-big">${wInfo.icon}</div>
+                    <div>
+                        <div class="weather-temp">${curTemp}°<span class="weather-unit">C</span></div>
+                        <div class="weather-desc">${esc(wInfo.desc)}</div>
+                    </div>
+                </div>
+                <div class="weather-st-block">
+                    <div class="weather-st-label">Sensación térmica</div>
+                    <div class="weather-st-val">${stTemp}°C</div>
+                    <div class="weather-range">↓ ${minToday}° · ↑ ${maxToday}°</div>
+                </div>
+            </div>
+
+            <div class="weather-stats-grid">
+                <div class="weather-stat-chip">
+                    <span class="chip-label">💧 Humedad</span>
+                    <span class="chip-value">${humidity}%</span>
+                </div>
+                <div class="weather-stat-chip">
+                    <span class="chip-label">🌧️ Lluvia</span>
+                    <span class="chip-value">${rainProb}%</span>
+                </div>
+                <div class="weather-stat-chip">
+                    <span class="chip-label">💨 Viento</span>
+                    <span class="chip-value">${wind} km/h</span>
+                </div>
+            </div>
+
+            ${forecastHtml ? `<div class="weather-forecast-row">${forecastHtml}</div>` : ''}
+        </div>
+    `;
+}
+
+async function renderDashboardWeatherAsync() {
+    const weather = await fetchWeatherData(false);
+    const mount = document.getElementById('dashWeatherMount');
+    if (mount) {
+        mount.innerHTML = buildWeatherWidgetHtml(weather);
+    }
+    const headerPill = document.getElementById('dashWeatherHeaderPill');
+    if (headerPill) {
+        headerPill.innerHTML = buildWeatherHeaderPill(weather);
+    }
+}
+
+async function refreshDashboardWeather(userTriggered = false) {
+    if (userTriggered) {
+        const mount = document.getElementById('dashWeatherMount');
+        if (mount) mount.innerHTML = buildWeatherWidgetHtml(null, true);
+    }
+    const weather = await fetchWeatherData(true);
+    const mount = document.getElementById('dashWeatherMount');
+    if (mount) {
+        mount.innerHTML = buildWeatherWidgetHtml(weather);
+    }
+    const headerPill = document.getElementById('dashWeatherHeaderPill');
+    if (headerPill) {
+        headerPill.innerHTML = buildWeatherHeaderPill(weather);
+    }
+    if (userTriggered) {
+        showToast('🌤️ Clima actualizado');
+    }
+}
+window.refreshDashboardWeather = refreshDashboardWeather;
+
+function detectUserLocationWeather() {
+    if (!('geolocation' in navigator)) {
+        showToast('Tu navegador o dispositivo no soporta geolocalización');
+        return;
+    }
+    showToast('📍 Detectando tu ubicación...');
+    navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+            const lat = parseFloat(pos.coords.latitude.toFixed(4));
+            const lon = parseFloat(pos.coords.longitude.toFixed(4));
+            localStorage.setItem('nicole_weather_coords', JSON.stringify({
+                lat,
+                lon,
+                name: 'Mi ubicación'
+            }));
+            await refreshDashboardWeather(true);
+            showToast('📍 Clima configurado con tu ubicación');
+        },
+        (err) => {
+            showToast('No se pudo obtener ubicación: ' + (err.message || 'Permiso denegado'));
+        },
+        { timeout: 10000, enableHighAccuracy: false }
+    );
+}
+window.detectUserLocationWeather = detectUserLocationWeather;
+
+async function getQuickWeatherNotificationText() {
+    try {
+        const weather = await fetchWeatherData(false);
+        if (!weather || !weather.current) return null;
+        const cur = weather.current;
+        const wInfo = getWeatherInfoFromWMO(cur.weather_code, cur.is_day);
+        const temp = Math.round(cur.temperature_2m);
+        const city = weather.cityName || 'Bs As';
+        let minMax = '';
+        if (weather.daily && weather.daily.temperature_2m_min && weather.daily.temperature_2m_max) {
+            const min = Math.round(weather.daily.temperature_2m_min[0]);
+            const max = Math.round(weather.daily.temperature_2m_max[0]);
+            minMax = ` (${min}° / ${max}°)`;
+        }
+        return `${wInfo.icon} Clima ${city}: ${temp}°C · ${wInfo.desc}${minMax}`;
+    } catch (_) {
+        return null;
+    }
+}
+
 // ===================== DASHBOARD =====================
 async function renderDashboard(el) {
     const [stats, events, tasks, habits] = await Promise.all([
@@ -262,7 +601,10 @@ async function renderDashboard(el) {
         <div class="page-header" style="margin-bottom:14px">
             <div>
                 <h1>${greeting}, Nicole ✨</h1>
-                <div class="subtitle">${fechaStr}</div>
+                <div class="subtitle" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <span>${fechaStr}</span>
+                    <span id="dashWeatherHeaderPill">${buildWeatherHeaderPill(state.weatherData)}</span>
+                </div>
             </div>
             <div class="page-actions" style="display:flex;gap:8px;flex-wrap:wrap">
                 <button class="btn btn-primary btn-sm" onclick="state.personalTab='routine';navigate('personal')">🏋️‍♀️ Entrenar</button>
@@ -303,12 +645,16 @@ async function renderDashboard(el) {
                 ${buildCalendar(events)}
             </div>
             <div style="display:flex;flex-direction:column;gap:14px">
+                <div id="dashWeatherMount">
+                    ${buildWeatherWidgetHtml(state.weatherData)}
+                </div>
                 ${buildDashboardHabits(habits || [])}
                 ${buildUpcomingTasks(tasks, stats)}
             </div>
         </div>
     `;
     el.innerHTML = html;
+    renderDashboardWeatherAsync();
 }
 
 function buildDashboardHabits(habitList) {
@@ -4951,12 +5297,42 @@ function initAudioAndNotifications() {
         }).catch(() => {});
     }
 
-    // Keep workout timer & rest countdown synced when returning from background/lockscreen
+    // Keep workout timer & rest countdown synced when returning from background/lockscreen, and check morning notification
     document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible' && state.activeWorkout) {
-            syncActiveWorkoutTimers();
+        if (document.visibilityState === 'visible') {
+            if (state.activeWorkout) syncActiveWorkoutTimers();
+            checkSmartDailyNotifications();
         }
     });
+
+    scheduleDailyNotificationTimer();
+    setInterval(() => checkSmartDailyNotifications(), 60000);
+}
+
+function scheduleDailyNotificationTimer() {
+    if (window.__dailyNotifTimer) {
+        clearTimeout(window.__dailyNotifTimer);
+        window.__dailyNotifTimer = null;
+    }
+    const notifTime = localStorage.getItem('nicole_daily_notif_time') || '09:00';
+    const parts = notifTime.split(':').map(Number);
+    const targetH = isNaN(parts[0]) ? 9 : parts[0];
+    const targetM = isNaN(parts[1]) ? 0 : parts[1];
+    const now = new Date();
+    const todayTarget = new Date(now.getFullYear(), now.getMonth(), now.getDate(), targetH, targetM, 0, 0);
+
+    let nextTarget = todayTarget;
+    const lastCheck = localStorage.getItem('nicole_last_notif_date');
+    const today = todayStr();
+
+    if (now.getTime() >= todayTarget.getTime() || lastCheck === today) {
+        nextTarget = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, targetH, targetM, 0, 0);
+    }
+
+    const msUntil = Math.max(1000, nextTarget.getTime() - now.getTime());
+    window.__dailyNotifTimer = setTimeout(() => {
+        checkSmartDailyNotifications();
+    }, msUntil);
 }
 
 function unlockAudioOnUserTap() {
@@ -5161,22 +5537,56 @@ function toggleNotifPref(key, checked) {
 }
 window.toggleNotifPref = toggleNotifPref;
 
+function changeDailyNotifTime(val) {
+    if (!val) return;
+    localStorage.setItem('nicole_daily_notif_time', val);
+    if (typeof eel !== 'undefined' && eel.set_config) {
+        api(eel.set_config, 'daily_notif_time', val).catch(() => {});
+    }
+    scheduleDailyNotificationTimer();
+    showToast(`⏰ Resumen diario programado para las ${val}`);
+}
+window.changeDailyNotifTime = changeDailyNotifTime;
+
 async function checkSmartDailyNotifications(force = false) {
     if (!('Notification' in window) || Notification.permission !== 'granted') return;
     const today = todayStr();
     const lastCheck = localStorage.getItem('nicole_last_notif_date');
-    if (!force && lastCheck === today) return;
+    if (!force && lastCheck === today) {
+        scheduleDailyNotificationTimer();
+        return;
+    }
+
+    const notifTime = localStorage.getItem('nicole_daily_notif_time') || '09:00';
+    const parts = notifTime.split(':').map(Number);
+    const targetH = isNaN(parts[0]) ? 9 : parts[0];
+    const targetM = isNaN(parts[1]) ? 0 : parts[1];
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const targetMinutes = targetH * 60 + targetM;
+
+    if (!force && currentMinutes < targetMinutes) {
+        // Aún no es la hora fijada (09:00 AM). Programar timer.
+        scheduleDailyNotificationTimer();
+        return;
+    }
 
     try {
-        const [proj, deadlines, stockRaw, labDate, cosplays] = await Promise.all([
+        const [proj, deadlines, stockRaw, labDate, cosplays, weatherSummary] = await Promise.all([
             api(eel.get_estradiol_projection).catch(() => null),
             api(eel.get_soon_deadlines).catch(() => []),
             api(eel.get_config, 'estradiol_stock').catch(() => null),
             api(eel.get_config, 'next_lab_date').catch(() => null),
             api(eel.get_cosplay_projects).catch(() => []),
+            (localStorage.getItem('nicole_notif_weather') !== '0') ? getQuickWeatherNotificationText().catch(() => null) : Promise.resolve(null),
         ]);
 
         const alerts = [];
+
+        // 0. Clima de la mañana
+        if (weatherSummary) {
+            alerts.push(weatherSummary);
+        }
 
         // 1. Health alerts (Estradiol injection, lab, stock)
         if (localStorage.getItem('nicole_notif_health') !== '0') {
@@ -5227,15 +5637,19 @@ async function checkSmartDailyNotifications(force = false) {
             }
         }
 
-        if (alerts.length > 0) {
-            await sendLocalNotification(
-                '🌸 Resumen de hoy · Nicole',
-                alerts.join(' · '),
-                'nicole-daily-' + today
-            );
-            localStorage.setItem('nicole_last_notif_date', today);
-        } else if (force) {
-            showToast('No hay nada pendiente para avisar hoy ✨');
+        if (alerts.length === 0) {
+            alerts.push('✨ ¡Buen día Nicole! Todo al día y en orden por acá');
+        }
+
+        await sendLocalNotification(
+            '🌸 Resumen de hoy · Nicole',
+            alerts.join(' · '),
+            'nicole-daily-' + today
+        );
+        localStorage.setItem('nicole_last_notif_date', today);
+        scheduleDailyNotificationTimer();
+        if (force) {
+            showToast('🔔 Resumen diario enviado');
         }
     } catch (_) {}
 }
@@ -8141,6 +8555,8 @@ async function renderSettings(el) {
     const prefRest = localStorage.getItem('nicole_notif_rest') !== '0';
     const prefHealth = localStorage.getItem('nicole_notif_health') !== '0';
     const prefTasks = localStorage.getItem('nicole_notif_tasks') !== '0';
+    const prefWeather = localStorage.getItem('nicole_notif_weather') !== '0';
+    const dailyNotifTime = localStorage.getItem('nicole_daily_notif_time') || '09:00';
 
     let statusBadge = '';
     if (perm === 'granted') {
@@ -8175,7 +8591,20 @@ async function renderSettings(el) {
                 <button type="button" class="btn btn-secondary btn-sm" onclick="testSoundAndNotification()">🔊 Probar sonido, vibración y alerta</button>
                 ${perm === 'granted' ? `<button type="button" class="btn btn-ghost btn-sm" onclick="checkSmartDailyNotifications(true)">🌸 Enviar resumen de hoy</button>` : ''}
             </div>
-            <div style="display:flex;flex-direction:column;gap:10px;padding-top:12px;border-top:1px solid var(--border-light);font-size:0.86rem">
+            <div style="display:flex;flex-direction:column;gap:12px;padding-top:14px;border-top:1px solid var(--border-light);font-size:0.86rem">
+                <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding-bottom:10px;border-bottom:1px solid var(--border-light)">
+                    <div>
+                        <div style="font-weight:600">⏰ Horario del resumen diario</div>
+                        <div style="font-size:0.78rem;color:var(--text-muted)">Configurado a las 09:00 AM. Nicole enviará el resumen del día a esta hora.</div>
+                    </div>
+                    <div>
+                        <input type="time" value="${dailyNotifTime}" onchange="changeDailyNotifTime(this.value)" class="form-control" style="width:115px;padding:4px 8px;font-size:0.9rem;border-radius:8px">
+                    </div>
+                </div>
+                <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+                    <input type="checkbox" ${prefWeather ? 'checked' : ''} onchange="toggleNotifPref('nicole_notif_weather', this.checked)">
+                    <span>🌤️ Incluir resumen del clima en la notificación matutina</span>
+                </label>
                 <label style="display:flex;align-items:center;gap:10px;cursor:pointer">
                     <input type="checkbox" ${prefRest ? 'checked' : ''} onchange="toggleNotifPref('nicole_notif_rest', this.checked)">
                     <span>⏰ Avisar al terminar el descanso entre series (Mi Rutina)</span>

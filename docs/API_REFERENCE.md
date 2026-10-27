@@ -215,6 +215,7 @@ Todas las funciones listadas en este documento están implementadas en `api.py` 
 | Función | Parámetros | Retorno | Descripción |
 | :--- | :--- | :--- | :--- |
 | `get_dashboard_stats()` | Ninguno | `{'tasks_pending': int, 'exams_near': int, 'habits_done': int, 'invoices_summary': {...}}` | Métricas consolidadas para la pantalla de inicio |
+| `get_weather_data(lat, lon)` | `lat` (float, opcional), `lon` (float, opcional) | `{'ok': True, 'data': {...}}` | Consulta el pronóstico en tiempo real y extendido de Open-Meteo para el dashboard |
 | `get_calendar_events(year, month)` | `year` (int), `month` (int) | `[dict]` | Consolida en una sola lista tareas, exámenes, inyecciones, sesiones de gimnasio y entregas del mes |
 | `get_today_tasks()` | Ninguno | `[dict]` | Tareas con vencimiento para el día actual |
 | `get_soon_deadlines()` | Ninguno | `[dict]` | Tareas y exámenes que vencen en los próximos 7 días |

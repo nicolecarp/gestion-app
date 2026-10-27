@@ -209,6 +209,8 @@ def init_db():
             key TEXT PRIMARY KEY,
             value TEXT
         );
+        INSERT OR IGNORE INTO config (key, value) VALUES ('daily_notif_time', '09:00');
+        INSERT OR IGNORE INTO config (key, value) VALUES ('weather_city', 'Buenos Aires');
 
         CREATE TABLE IF NOT EXISTS print_orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -469,6 +471,8 @@ def init_db():
         "ALTER TABLE body_measurements ADD COLUMN bideltoid_cm REAL",
         "ALTER TABLE body_measurements ADD COLUMN underbust_cm REAL",
         "ALTER TABLE body_measurements ADD COLUMN iliac_crest_cm REAL",
+        "INSERT OR IGNORE INTO config (key, value) VALUES ('daily_notif_time', '09:00')",
+        "INSERT OR IGNORE INTO config (key, value) VALUES ('weather_city', 'Buenos Aires')",
         """CREATE TABLE IF NOT EXISTS cosplay_projects (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             character_name TEXT NOT NULL,

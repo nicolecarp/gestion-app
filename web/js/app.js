@@ -1186,6 +1186,11 @@ function onSearchMatrixOc(val) {
     if (content) renderWorkMatrix(content);
 }
 
+function filterMatrixOc() {
+    const content = document.getElementById('workContent');
+    if (content) renderWorkMatrix(content);
+}
+
 function handleMatrixCellOc(siteId, clientId, month, year, poId) {
     const orders = state.matrixData?.orders || [];
     const po = orders.find(o => o.id === poId);

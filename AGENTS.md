@@ -113,6 +113,14 @@ The application runs in two distinct environments using the **exact same fronten
    - `APP_PASSWORD` environment variable controls access on cloud deployments.
    - If `APP_PASSWORD` is set, requests require session cookie authentication. `/api/*` returns 401 JSON if unauthenticated.
    - Never commit passwords or production keys to Git.
+7. **Mandatory Git Push & Cloud Deployment on Every Task (CRITICAL - NEVER SKIP)**:
+   - At the conclusion of ANY request where code, assets, or docs are modified, the assistant **MUST ALWAYS**:
+     1. Stage all changes: `git add .`
+     2. Commit with a descriptive semantic message: `git commit -m "feat/fix: ..."`
+     3. Push directly to GitHub: `git push origin master`
+     4. Trigger the PythonAnywhere webhook so production syncs immediately:
+        `python -c "import urllib.request; urllib.request.urlopen(urllib.request.Request('https://nicolecarp.pythonanywhere.com/webhook/github', method='POST'))"`
+   - NEVER finish a task or answer saying changes are complete without having committed, pushed to GitHub, and updated the cloud deployment.
 
 ---
 

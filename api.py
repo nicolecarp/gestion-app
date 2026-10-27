@@ -51,12 +51,6 @@ def create_task(data):
               data.get('description'), data.get('due_date'), data.get('priority', 'medium'),
               data.get('reminder_days', 1)))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -127,12 +121,6 @@ def create_client(data):
               data.get('phone'), data.get('email'), data.get('address'), data.get('notes'),
               1 if data.get('is_regular') else 0, data.get('monthly_fee'), data.get('servicios')))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -221,12 +209,6 @@ def create_invoice(data):
               data.get('purchase_order'), detraccion, credito,
               data.get('location_code'), data.get('items_json'), data.get('status', 'issued')))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -309,12 +291,6 @@ def create_employee(data):
         """, (data['full_name'], data.get('document_number'), data.get('phone'),
               data.get('email'), data.get('position'), data.get('sede_operativa'), data.get('responsable')))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -397,12 +373,6 @@ def create_employee_document(data):
         """, (data['employee_id'], data['doc_type'], data.get('doc_number'),
               data.get('issue_date'), data.get('expiry_date'), data.get('notes')))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -498,12 +468,6 @@ def create_service_type(data):
             VALUES (?, ?, ?, ?)
         """, (data['name'], data.get('description'), data.get('default_price'), data.get('category')))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -597,12 +561,6 @@ def create_reimbursement(data):
             VALUES (?, ?, ?, ?)
         """, (data['employee_id'], data.get('date', today()), data.get('concept'), data['amount']))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -662,12 +620,6 @@ def create_overtime(data):
             VALUES (?, ?, ?, ?)
         """, (data['employee_id'], data.get('date', today()), data['days'], data.get('reason')))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -724,12 +676,6 @@ def create_lindley_contact(data):
         """, (data['plant'], data.get('contact_name'), data.get('email'),
               data.get('phone'), data.get('notes')))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -784,12 +730,6 @@ def create_lindley_form(data):
         """, (data['month'], data['year'], data.get('completed_date', today()),
               data.get('notes'), data.get('status', 'completed')))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -853,12 +793,6 @@ def create_subject(data):
               data.get('subject_code'), data.get('current_status_note'), data.get('day_of_week'),
               data.get('start_time'), data.get('end_time'), data.get('shift')))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -974,12 +908,6 @@ def create_exam(data):
               data.get('time'), data.get('topic'), data.get('grade'),
               data.get('status', 'pending')))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -1047,12 +975,6 @@ def create_assignment(data):
               data.get('due_date'), data.get('grade'), data.get('group_name'),
               data.get('status', 'pending')))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -1118,12 +1040,6 @@ def create_habit(data):
             VALUES (?, ?)
         """, (data['name'], data.get('frequency', 'daily')))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -1568,12 +1484,6 @@ def add_cosplay_item(data):
             data.get('item_type', 'Material'), float(data.get('cost') or 0)
         ))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -1717,12 +1627,6 @@ def create_injection(data):
             new_stock = max(0, int(stock_row['value']) - 1)
             conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('estradiol_stock', ?)", (str(new_stock),))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -1812,12 +1716,6 @@ def create_body_measurement(data):
             data.get('hips_cm'), data.get('thigh_cm'), data.get('arm_cm'), data.get('notes')
         ))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -1924,12 +1822,6 @@ def create_client_site(data):
               1 if data.get('is_regular') else 0, data.get('monthly_fee'), data.get('servicios'),
               data.get('contract_start'), data.get('contract_end'), data.get('location_code')))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -1982,13 +1874,15 @@ def get_monthly_billing(year=None):
         else:
             year = 2026
 
-        # Get all regular client sites
+        # Get all regular and periodic client sites
         sites = conn.execute("""
             SELECT cs.id, cs.client_id, cs.nombre_cliente, cs.sede_cliente, cs.monthly_fee, cs.servicios,
-                   cs.location_code, cs.codigo_cliente_sede, c.business_name as empresa, c.ruc
+                   cs.location_code, cs.codigo_cliente_sede, cs.periodicity, cs.is_regular,
+                   c.business_name as empresa, c.ruc
             FROM client_sites cs
             LEFT JOIN clients c ON cs.client_id = c.id
-            WHERE cs.is_regular=1 AND (cs.is_active=1 OR cs.is_active IS NULL)
+            WHERE (cs.is_active=1 OR cs.is_active IS NULL)
+              AND (cs.is_regular=1 OR cs.periodicity IN ('mensual', 'bimensual', 'trimestral'))
             ORDER BY COALESCE(c.business_name, cs.nombre_cliente) ASC, cs.nombre_cliente ASC
         """).fetchall()
 
@@ -1998,7 +1892,7 @@ def get_monthly_billing(year=None):
             FROM invoices i
             JOIN client_sites cs ON i.client_site_id = cs.id
             JOIN clients c ON i.client_id = c.id
-            WHERE cs.is_regular=1 AND i.year_billed = ?
+            WHERE i.year_billed = ?
             ORDER BY i.month_billed ASC, i.id ASC
         """, (year,)).fetchall()
 
@@ -2009,7 +1903,7 @@ def get_monthly_billing(year=None):
             JOIN clients c ON po.client_id = c.id
             LEFT JOIN client_sites cs ON po.client_site_id = cs.id
             WHERE po.year = ?
-            ORDER BY po.month ASC, po.id ASC
+            ORDER BY po.month ASC, po.issue_date DESC, po.id ASC
         """, (year,)).fetchall()
 
         return {
@@ -2024,8 +1918,8 @@ def get_monthly_billing(year=None):
 # ===================== PURCHASE ORDERS (ORDENES DE COMPRA) =====================
 
 @eel.expose
-def get_purchase_orders(year=None, month=None, client_id=None):
-    """Obtiene órdenes de compra registradas."""
+def get_purchase_orders(year=None, month=None, client_id=None, periodicity=None, status=None, search=None):
+    """Obtiene órdenes de compra registradas con filtros avanzados."""
     conn = get_connection()
     try:
         query = """
@@ -2046,7 +1940,24 @@ def get_purchase_orders(year=None, month=None, client_id=None):
         if client_id is not None and str(client_id).strip():
             query += " AND po.client_id = ?"
             params.append(int(client_id))
-        query += " ORDER BY po.year DESC, po.month DESC, po.id DESC"
+        if periodicity is not None and str(periodicity).strip() and periodicity != 'all':
+            query += " AND po.periodicity = ?"
+            params.append(str(periodicity).strip())
+        if status is not None and str(status).strip() and status != 'all':
+            query += " AND po.status = ?"
+            params.append(str(status).strip())
+        if search is not None and str(search).strip():
+            term = f"%{str(search).strip()}%"
+            query += """ AND (
+                po.oc_number LIKE ? OR
+                c.business_name LIKE ? OR
+                cs.nombre_cliente LIKE ? OR
+                po.centro_logistico LIKE ? OR
+                po.notes LIKE ?
+            )"""
+            params.extend([term, term, term, term, term])
+
+        query += " ORDER BY po.year DESC, po.month DESC, po.issue_date DESC, po.id DESC"
         rows = conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -2055,6 +1966,7 @@ def get_purchase_orders(year=None, month=None, client_id=None):
 @eel.expose
 def save_purchase_order(data):
     """Crea o actualiza una orden de compra mensual."""
+    import json
     conn = get_connection()
     try:
         po_id = data.get('id')
@@ -2066,6 +1978,15 @@ def save_purchase_order(data):
         amount = float(data.get('amount') or 0)
         status = data.get('status', 'pending')
         notes = str(data.get('notes', '')).strip()
+        periodicity = str(data.get('periodicity') or 'mensual').strip()
+        issue_date = str(data.get('issue_date') or '').strip()
+        centro_logistico = str(data.get('centro_logistico') or '').strip()
+        id_centro_logistico = str(data.get('id_centro_logistico') or '').strip()
+        sociedad_code = str(data.get('sociedad_code') or '').strip()
+        sociedad_name = str(data.get('sociedad_name') or '').strip()
+        items_json = data.get('items_json')
+        if isinstance(items_json, (list, dict)):
+            items_json = json.dumps(items_json)
 
         if not client_id:
             return {'ok': False, 'error': 'El cliente es obligatorio'}
@@ -2075,14 +1996,20 @@ def save_purchase_order(data):
         if po_id:
             conn.execute("""
                 UPDATE purchase_orders
-                SET client_id=?, client_site_id=?, year=?, month=?, oc_number=?, amount=?, status=?, notes=?
+                SET client_id=?, client_site_id=?, year=?, month=?, oc_number=?, amount=?, status=?, notes=?,
+                    periodicity=?, issue_date=?, centro_logistico=?, id_centro_logistico=?, sociedad_code=?, sociedad_name=?, items_json=?
                 WHERE id=?
-            """, (client_id, client_site_id, year, month, oc_number, amount, status, notes, po_id))
+            """, (client_id, client_site_id, year, month, oc_number, amount, status, notes,
+                  periodicity, issue_date, centro_logistico, id_centro_logistico, sociedad_code, sociedad_name, items_json, po_id))
         else:
             conn.execute("""
-                INSERT INTO purchase_orders (client_id, client_site_id, year, month, oc_number, amount, status, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (client_id, client_site_id, year, month, oc_number, amount, status, notes))
+                INSERT INTO purchase_orders (
+                    client_id, client_site_id, year, month, oc_number, amount, status, notes,
+                    periodicity, issue_date, centro_logistico, id_centro_logistico, sociedad_code, sociedad_name, items_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (client_id, client_site_id, year, month, oc_number, amount, status, notes,
+                  periodicity, issue_date, centro_logistico, id_centro_logistico, sociedad_code, sociedad_name, items_json))
 
         # Check if an existing invoice exists for this site/month/year to sync OC or update status
         if client_site_id:
@@ -2123,6 +2050,7 @@ def delete_purchase_order(id):
         conn.close()
 
 # ===================== SERVICE RECORDS =====================
+
 
 
 def _calc_hours(hi, hs, traslado):
@@ -2217,12 +2145,6 @@ def create_service_record(data):
         """, (data['fecha'], data['employee_id'], data.get('client_site_id'),
               data.get('hora_ingreso'), data.get('traslado_min', 0), int(w), int(y)))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -2277,12 +2199,6 @@ def clock_in(data):
         """, (data['fecha'], data['employee_id'], data.get('client_site_id'),
               data.get('hora_ingreso'), int(w), int(y)))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -2536,12 +2452,6 @@ def create_service_description(data):
         """, (data['service_type_id'], data['name'], data['description_text'],
               data.get('productos'), data.get('equipos')))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -2713,12 +2623,6 @@ def add_quote_item(quote_id, data):
               data.get('description_text'), data.get('productos_text'), data.get('equipos_text'),
               data.get('quantity', 1), data.get('unit_price', 0), total, max_sort))
         new_id = cur.lastrowid
-        if data.get('client_site_id') and mb and yb:
-            conn.execute("""
-                UPDATE purchase_orders
-                SET status = 'invoiced'
-                WHERE client_site_id = ? AND month = ? AND year = ?
-            """, (data.get('client_site_id'), mb, yb))
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:

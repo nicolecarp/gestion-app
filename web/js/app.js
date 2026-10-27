@@ -741,7 +741,11 @@ async function buscarRucSunat() {
 
 async function renderWorkMatrix(el) {
     state.matrixYear = state.matrixYear || (new Date().getFullYear() || 2026);
-    state.matrixOcFilter = state.matrixOcFilter || 'all';
+    state.matrixPeriodicityFilter = state.matrixPeriodicityFilter || 'all';
+    state.matrixOcStatusFilter = state.matrixOcStatusFilter || 'all';
+    state.matrixOcPeriodicityFilter = state.matrixOcPeriodicityFilter || 'all';
+    state.matrixOcMonthFilter = state.matrixOcMonthFilter || 'all';
+    state.matrixOcSearch = state.matrixOcSearch || '';
 
     const [data, sitesGrouped, clients] = await Promise.all([
         api(eel.get_monthly_billing, state.matrixYear),
@@ -754,9 +758,22 @@ async function renderWorkMatrix(el) {
     state.allSites = sitesGrouped || [];
     state.allClients = clients || [];
 
-    const sites = resData.sites || [];
+    const allSites = resData.sites || [];
     const invoices = resData.invoices || [];
     const orders = resData.orders || [];
+
+    // Filter sites for Matrix table
+    const filteredSites = allSites.filter(s => {
+        const per = s.periodicity || 'mensual';
+        if (state.matrixPeriodicityFilter === 'mensual') return per === 'mensual';
+        if (state.matrixPeriodicityFilter === 'bimensual') return per === 'bimensual' || per === 'trimestral';
+        if (state.matrixPeriodicityFilter === 'eventual') return per === 'eventual' || !s.is_regular;
+        return true;
+    });
+
+    const mensualSitesCount = allSites.filter(s => (s.periodicity || 'mensual') === 'mensual').length;
+    const bimensualSitesCount = allSites.filter(s => (s.periodicity === 'bimensual' || s.periodicity === 'trimestral')).length;
+    const eventualSitesCount = allSites.filter(s => (s.periodicity === 'eventual' || !s.is_regular)).length;
 
     // Calculate KPI totals for the selected year
     let totSinIgv = 0, totFacturado = 0, totDetr = 0, totCredito = 0;
@@ -768,6 +785,7 @@ async function renderWorkMatrix(el) {
     });
 
     const pendingOrdersCount = orders.filter(o => o.status === 'pending').length;
+    const invoicedOrdersCount = orders.filter(o => o.status === 'invoiced').length;
 
     // Lookups
     const invMap = {};
@@ -798,7 +816,7 @@ async function renderWorkMatrix(el) {
                 <h2 style="margin:0;font-size:1.35rem">📊 Matriz de Facturación Mensual</h2>
                 <span class="tag tag-primary">12 Meses Completos</span>
             </div>
-            <div style="font-size:0.8rem;color:var(--text-muted)">Clientes regulares: Comparativa anual de cuotas pactadas vs facturación emitida y órdenes de compra</div>
+            <div style="font-size:0.8rem;color:var(--text-muted)">Clientes regulares, bimensuales y órdenes de compra de servicios de saneamiento y plagas</div>
         </div>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <div style="display:flex;align-items:center;gap:4px;background:var(--bg-card);padding:4px 8px;border-radius:8px;border:1px solid var(--border-light)">
@@ -840,26 +858,35 @@ async function renderWorkMatrix(el) {
 
     <!-- 12-Month Matrix Card -->
     <div class="card" style="margin-bottom:24px;padding:0;overflow:hidden">
-        <div style="padding:14px 18px;border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <div style="padding:14px 18px;border-bottom:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
             <div>
-                <div style="font-weight:700;font-size:1rem">Control de Cuotas Mensuales · Año ${state.matrixYear}</div>
-                <div style="font-size:0.78rem;color:var(--text-muted)">Haz clic en cualquier celda para ver el comprobante o registrar la OC correspondiente</div>
+                <div style="font-weight:700;font-size:1rem">Control de Facturación y Cuotas · Año ${state.matrixYear}</div>
+                <div style="font-size:0.78rem;color:var(--text-muted)">Haz clic en cualquier celda para ver el comprobante o registrar/emitir la OC correspondiente</div>
             </div>
             <div style="display:flex;gap:12px;font-size:0.75rem;align-items:center;flex-wrap:wrap">
                 <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:rgba(99,102,241,0.2);border-radius:2px;display:inline-block"></span> Facturada</span>
                 <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:rgba(245,158,11,0.25);border:1px dashed #f59e0b;border-radius:2px;display:inline-block"></span> OC Registrada (Por facturar)</span>
                 <span style="display:flex;align-items:center;gap:4px"><span style="width:10px;height:10px;background:var(--border-light);border-radius:2px;display:inline-block"></span> Pendiente (+ OC)</span>
             </div>
+        </div>
+
+        <!-- Periodicity Filter Buttons for Matrix -->
+        <div style="padding:10px 18px;background:var(--bg-card);border-bottom:1px solid var(--border-light);display:flex;gap:8px;flex-wrap:wrap">
+            <button class="filter-pill${state.matrixPeriodicityFilter === 'all' ? ' active' : ''}" onclick="filterMatrixPeriodicity('all')">Todas las sedes (${allSites.length})</button>
+            <button class="filter-pill${state.matrixPeriodicityFilter === 'mensual' ? ' active' : ''}" onclick="filterMatrixPeriodicity('mensual')">🔄 Mensuales (${mensualSitesCount})</button>
+            <button class="filter-pill${state.matrixPeriodicityFilter === 'bimensual' ? ' active' : ''}" onclick="filterMatrixPeriodicity('bimensual')">🔁 Bimensuales (${bimensualSitesCount})</button>
+            <button class="filter-pill${state.matrixPeriodicityFilter === 'eventual' ? ' active' : ''}" onclick="filterMatrixPeriodicity('eventual')">⚡ Eventuales (${eventualSitesCount})</button>
         </div>`;
 
-    if (sites.length === 0) {
-        html += '<div style="padding:30px;text-align:center;color:var(--text-muted)">No hay sedes con condición de cliente regular configuradas</div>';
+    if (filteredSites.length === 0) {
+        html += '<div style="padding:30px;text-align:center;color:var(--text-muted)">No hay sedes con el filtro de periodicidad seleccionado</div>';
     } else {
         html += `<div class="table-wrap" style="overflow-x:auto;max-height:680px">
             <table class="matrix-table">
                 <thead style="position:sticky;top:0;background:var(--bg-card);z-index:4">
                     <tr>
                         <th class="matrix-sticky-col">Empresa / Sede</th>
+                        <th style="text-align:center;font-size:0.75rem;padding:6px 6px">Frecuencia</th>
                         <th style="text-align:right;font-size:0.75rem;padding:6px 8px;min-width:90px">Cuota Pactada</th>`;
 
         for (let m = 1; m <= 12; m++) {
@@ -878,9 +905,10 @@ async function renderWorkMatrix(el) {
         const monthTotals = new Array(13).fill(0);
         let grandTotalAnnual = 0;
 
-        for (const s of sites) {
+        for (const s of filteredSites) {
             const empresa = s.empresa || s.nombre_cliente;
             const fee = parseFloat(s.monthly_fee) || 0;
+            const per = s.periodicity || 'mensual';
             let siteInvoicedSum = 0;
             let siteBilledMonths = 0;
 
@@ -892,8 +920,11 @@ async function renderWorkMatrix(el) {
                         ${s.location_code ? `<span class="tag tag-ghost" style="padding:1px 4px;font-size:0.68rem">Loc: ${esc(s.location_code)}</span>` : ''}
                     </div>
                 </td>
+                <td style="text-align:center;padding:4px 6px">
+                    <span class="tag-periodicity-${per}">${per}</span>
+                </td>
                 <td style="text-align:right;font-family:monospace;font-size:0.8rem;font-weight:600;padding:6px 8px">
-                    S/ ${fmtMoney(fee)}
+                    ${fee > 0 ? `S/ ${fmtMoney(fee)}` : '—'}
                 </td>`;
 
             for (let m = 1; m <= 12; m++) {
@@ -917,9 +948,9 @@ async function renderWorkMatrix(el) {
                     </td>`;
                 } else if (po) {
                     html += `<td style="padding:4px 3px">
-                        <div class="matrix-cell-oc" onclick="handleMatrixCellOc(${s.id}, ${s.client_id}, ${m}, ${state.matrixYear}, ${po.id})" title="OC: ${esc(po.oc_number)} - Por facturar. Clic para emitir o editar">
+                        <div class="matrix-cell-oc" onclick="handleMatrixCellOc(${s.id}, ${s.client_id}, ${m}, ${state.matrixYear}, ${po.id})" title="OC: ${esc(po.oc_number)} - Por facturar. Clic para emitir o ver desglose">
                             <div style="font-size:0.73rem;font-weight:700;color:#d97706;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">OC ${esc(po.oc_number)}</div>
-                            <div style="font-size:0.65rem;color:#b45309">⏳ Por facturar</div>
+                            <div style="font-size:0.65rem;color:#b45309">⏳ S/ ${fmtMoney(po.amount || 0)}</div>
                         </div>
                     </td>`;
                 } else {
@@ -950,6 +981,7 @@ async function renderWorkMatrix(el) {
                 <tfoot style="position:sticky;bottom:0;background:var(--bg-card);font-weight:700;z-index:3;border-top:2px solid var(--border-light)">
                     <tr>
                         <td class="matrix-sticky-col" style="font-weight:700;font-size:0.82rem">Totales Mensuales</td>
+                        <td style="text-align:center">-</td>
                         <td style="text-align:right;font-family:monospace;font-size:0.8rem">-</td>`;
 
         for (let m = 1; m <= 12; m++) {
@@ -972,8 +1004,21 @@ async function renderWorkMatrix(el) {
 
     // Section 2: Purchase Orders Table for the Selected Year
     const filteredOrders = orders.filter(o => {
-        if (state.matrixOcFilter === 'pending') return o.status === 'pending';
-        if (state.matrixOcFilter === 'invoiced') return o.status === 'invoiced';
+        // Status filter
+        if (state.matrixOcStatusFilter === 'pending' && o.status !== 'pending') return false;
+        if (state.matrixOcStatusFilter === 'invoiced' && o.status !== 'invoiced') return false;
+        // Periodicity filter
+        if (state.matrixOcPeriodicityFilter === 'mensual' && (o.periodicity || 'mensual') !== 'mensual') return false;
+        if (state.matrixOcPeriodicityFilter === 'bimensual' && o.periodicity !== 'bimensual') return false;
+        if (state.matrixOcPeriodicityFilter === 'eventual' && o.periodicity !== 'eventual') return false;
+        // Month filter
+        if (state.matrixOcMonthFilter !== 'all' && String(o.month) !== String(state.matrixOcMonthFilter)) return false;
+        // Search term
+        if (state.matrixOcSearch) {
+            const q = state.matrixOcSearch.toLowerCase().trim();
+            const str = `${o.oc_number} ${o.empresa || ''} ${o.site_name || ''} ${o.centro_logistico || ''} ${o.notes || ''}`.toLowerCase();
+            if (!str.includes(q)) return false;
+        }
         return true;
     });
 
@@ -985,31 +1030,53 @@ async function renderWorkMatrix(el) {
                     📋 Órdenes de Compra (OC) Registradas — Año ${state.matrixYear}
                     <span class="tag tag-ghost">${orders.length} total</span>
                 </div>
-                <div style="font-size:0.78rem;color:var(--text-muted)">Registra las órdenes antes de ejecutar el servicio y emite la factura con 1 solo clic</div>
+                <div style="font-size:0.78rem;color:var(--text-muted)">Desglose de posiciones, frecuencias y enlace directo a la calculadora SUNAT</div>
             </div>
-            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                <div class="filter-pills" style="margin:0">
-                    <button class="filter-pill${state.matrixOcFilter === 'all' ? ' active' : ''}" onclick="filterMatrixOc('all')">Todas (${orders.length})</button>
-                    <button class="filter-pill${state.matrixOcFilter === 'pending' ? ' active' : ''}" onclick="filterMatrixOc('pending')">⏳ Por facturar (${pendingOrdersCount})</button>
-                    <button class="filter-pill${state.matrixOcFilter === 'invoiced' ? ' active' : ''}" onclick="filterMatrixOc('invoiced')">✅ Facturadas (${orders.length - pendingOrdersCount})</button>
-                </div>
-                <button class="btn btn-primary btn-sm" onclick="showPurchaseOrderModal()">+ Nueva OC</button>
+            <button class="btn btn-primary btn-sm" onclick="showPurchaseOrderModal()">+ Nueva OC</button>
+        </div>
+
+        <!-- Filter and Search Toolbar -->
+        <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap;align-items:center">
+            <div style="flex:1;min-width:240px">
+                <input type="text" class="form-control" style="font-size:0.85rem;padding:6px 12px" placeholder="🔍 Buscar por N° OC, cliente, sede, centro..." value="${esc(state.matrixOcSearch)}" oninput="onSearchMatrixOc(this.value)">
+            </div>
+            <div class="filter-pills" style="margin:0">
+                <button class="filter-pill${state.matrixOcStatusFilter === 'all' ? ' active' : ''}" onclick="filterMatrixOcStatus('all')">Todas (${orders.length})</button>
+                <button class="filter-pill${state.matrixOcStatusFilter === 'pending' ? ' active' : ''}" onclick="filterMatrixOcStatus('pending')">⏳ Por facturar (${pendingOrdersCount})</button>
+                <button class="filter-pill${state.matrixOcStatusFilter === 'invoiced' ? ' active' : ''}" onclick="filterMatrixOcStatus('invoiced')">✅ Facturadas (${invoicedOrdersCount})</button>
+            </div>
+            <div class="filter-pills" style="margin:0">
+                <button class="filter-pill${state.matrixOcPeriodicityFilter === 'all' ? ' active' : ''}" onclick="filterMatrixOcPeriodicity('all')">Frecuencia: Todas</button>
+                <button class="filter-pill${state.matrixOcPeriodicityFilter === 'mensual' ? ' active' : ''}" onclick="filterMatrixOcPeriodicity('mensual')">🔄 Mensual</button>
+                <button class="filter-pill${state.matrixOcPeriodicityFilter === 'bimensual' ? ' active' : ''}" onclick="filterMatrixOcPeriodicity('bimensual')">🔁 Bimensual</button>
+                <button class="filter-pill${state.matrixOcPeriodicityFilter === 'eventual' ? ' active' : ''}" onclick="filterMatrixOcPeriodicity('eventual')">⚡ Eventual</button>
+            </div>
+            <div>
+                <select class="form-control" style="font-size:0.85rem;padding:5px 8px;width:120px" onchange="filterMatrixOcMonth(this.value)">
+                    <option value="all"${state.matrixOcMonthFilter === 'all' ? ' selected' : ''}>Todos los meses</option>
+                    <option value="8"${state.matrixOcMonthFilter === '8' ? ' selected' : ''}>Agosto</option>
+                    <option value="9"${state.matrixOcMonthFilter === '9' ? ' selected' : ''}>Septiembre</option>
+                    <option value="10"${state.matrixOcMonthFilter === '10' ? ' selected' : ''}>Octubre</option>
+                </select>
             </div>
         </div>`;
 
     if (filteredOrders.length === 0) {
-        html += `<div class="empty-state" style="padding:25px"><p>No hay órdenes de compra registradas con el filtro seleccionado</p></div>`;
+        html += `<div class="empty-state" style="padding:25px"><p>No hay órdenes de compra registradas con los filtros seleccionados</p></div>`;
     } else {
         html += `<div class="table-wrap"><table>
             <thead>
                 <tr>
-                    <th style="width:70px">Mes</th>
-                    <th>Empresa / Sede</th>
-                    <th>N° de Orden (OC)</th>
-                    <th style="text-align:right">Monto Pactado Sin IGV</th>
-                    <th style="text-align:center">Estado</th>
-                    <th>Notas</th>
-                    <th style="text-align:right;width:160px">Acciones</th>
+                    <th style="width:55px">Mes</th>
+                    <th style="width:110px">N° de Orden (OC)</th>
+                    <th style="width:95px">Fecha Conf.</th>
+                    <th>Empresa / Sociedad</th>
+                    <th>Sede / Centro Logístico</th>
+                    <th style="text-align:center;width:95px">Frecuencia</th>
+                    <th style="text-align:right;width:110px">Monto Sin IGV</th>
+                    <th>Detalle / Ítems</th>
+                    <th style="text-align:center;width:105px">Estado</th>
+                    <th style="text-align:right;width:170px">Acciones</th>
                 </tr>
             </thead>
             <tbody>`;
@@ -1017,24 +1084,51 @@ async function renderWorkMatrix(el) {
         for (const po of filteredOrders) {
             const isPending = po.status === 'pending';
             const mName = monthShorts[(po.month || 1) - 1];
+            const per = po.periodicity || 'mensual';
+
+            let itemsCount = 0;
+            let itemsPreview = esc(po.notes || '—');
+            try {
+                if (po.items_json) {
+                    const parsed = JSON.parse(po.items_json);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        itemsCount = parsed.length;
+                        itemsPreview = parsed.map(x => x.desc).slice(0, 2).join(', ');
+                        if (parsed.length > 2) itemsPreview += ` (+${parsed.length - 2})`;
+                    }
+                }
+            } catch(e) {}
+
             html += `<tr>
                 <td style="font-weight:700;font-size:0.85rem">${mName}</td>
                 <td>
-                    <strong>${esc(po.empresa || '')}</strong>
-                    <div style="font-size:0.75rem;color:var(--text-muted)">${esc(po.site_name || 'Todas las sedes')} ${po.location_code ? `· Loc: ${esc(po.location_code)}` : ''}</div>
+                    <span class="tag tag-primary" style="font-family:monospace;font-size:0.85rem;cursor:pointer" onclick="showOcItemsModal(${po.id})" title="Clic para ver detalle completo">OC ${esc(po.oc_number)}</span>
+                </td>
+                <td style="font-size:0.8rem;color:var(--text-muted);white-space:nowrap">${po.issue_date || '—'}</td>
+                <td>
+                    <strong>${esc(po.sociedad_name || po.empresa || '')}</strong>
+                    ${po.sociedad_code ? `<span class="tag tag-ghost" style="font-size:0.68rem;padding:1px 4px;margin-left:4px">${esc(po.sociedad_code)}</span>` : ''}
                 </td>
                 <td>
-                    <span class="tag tag-primary" style="font-family:monospace;font-size:0.85rem">OC ${esc(po.oc_number)}</span>
-                </td>
-                <td style="text-align:right;font-family:monospace;font-weight:700">
-                    ${po.amount ? `S/ ${fmtMoney(po.amount)}` : '—'}
+                    <div style="font-weight:600;font-size:0.83rem">${esc(po.centro_logistico || po.site_name || 'Toda la empresa')}</div>
+                    <div style="font-size:0.73rem;color:var(--text-muted)">${esc(po.site_name || '')} ${po.location_code ? `· Loc: ${esc(po.location_code)}` : ''}</div>
                 </td>
                 <td style="text-align:center">
-                    ${isPending ? '<span class="tag tag-amber">⏳ Por facturar</span>' : '<span class="tag tag-sage">✅ Facturada</span>'}
+                    <span class="tag-periodicity-${per}">${per}</span>
                 </td>
-                <td style="font-size:0.8rem;color:var(--text-muted);max-width:200px">${esc(po.notes || '—')}</td>
+                <td style="text-align:right;font-family:monospace;font-weight:700;font-size:0.85rem">
+                    ${po.amount ? `S/ ${fmtMoney(po.amount)}` : '—'}
+                </td>
+                <td style="font-size:0.78rem;max-width:210px">
+                    ${itemsCount > 0 ? `<span class="oc-item-badge" onclick="showOcItemsModal(${po.id})" style="cursor:pointer;margin-right:4px" title="Ver desglose">${itemsCount} pos. 👁️</span>` : ''}
+                    <span style="color:var(--text-muted)">${esc(itemsPreview)}</span>
+                </td>
+                <td style="text-align:center">
+                    ${isPending ? '<span class="tag tag-amber" style="font-size:0.75rem">⏳ Por facturar</span>' : '<span class="tag tag-sage" style="font-size:0.75rem">✅ Facturada</span>'}
+                </td>
                 <td style="text-align:right;white-space:nowrap">
-                    ${isPending ? `<button class="btn btn-primary btn-sm" onclick="emitInvoiceFromOc(${po.id})" style="padding:4px 8px;font-size:0.75rem" title="Cargar a Calculadora SUNAT">🧮 Emitir</button>` : ''}
+                    ${isPending ? `<button class="btn btn-primary btn-sm" onclick="emitInvoiceFromOc(${po.id})" style="padding:3px 7px;font-size:0.75rem" title="Cargar todo a la Calculadora SUNAT">🧮 Emitir</button>` : ''}
+                    <button class="btn btn-secondary btn-sm" onclick="showOcItemsModal(${po.id})" style="padding:3px 7px;font-size:0.75rem" title="Ver desglose de ítems">👁️</button>
                     <button class="btn btn-ghost btn-sm" onclick="showPurchaseOrderModal(${po.id})" title="Editar">✏️</button>
                     <button class="btn btn-ghost btn-sm" onclick="deletePurchaseOrder(${po.id})" title="Eliminar" style="color:#ef4444">🗑️</button>
                 </td>
@@ -1052,8 +1146,32 @@ function changeMatrixYear(year) {
     navigate('work');
 }
 
-function filterMatrixOc(flt) {
-    state.matrixOcFilter = flt;
+function filterMatrixPeriodicity(per) {
+    state.matrixPeriodicityFilter = per;
+    const content = document.getElementById('workContent');
+    if (content) renderWorkMatrix(content);
+}
+
+function filterMatrixOcStatus(status) {
+    state.matrixOcStatusFilter = status;
+    const content = document.getElementById('workContent');
+    if (content) renderWorkMatrix(content);
+}
+
+function filterMatrixOcPeriodicity(per) {
+    state.matrixOcPeriodicityFilter = per;
+    const content = document.getElementById('workContent');
+    if (content) renderWorkMatrix(content);
+}
+
+function filterMatrixOcMonth(month) {
+    state.matrixOcMonthFilter = month;
+    const content = document.getElementById('workContent');
+    if (content) renderWorkMatrix(content);
+}
+
+function onSearchMatrixOc(val) {
+    state.matrixOcSearch = val;
     const content = document.getElementById('workContent');
     if (content) renderWorkMatrix(content);
 }
@@ -1063,30 +1181,125 @@ function handleMatrixCellOc(siteId, clientId, month, year, poId) {
     const po = orders.find(o => o.id === poId);
     if (!po) return;
 
+    let itemsCount = 0;
+    try {
+        if (po.items_json) {
+            const parsed = JSON.parse(po.items_json);
+            if (Array.isArray(parsed)) itemsCount = parsed.length;
+        }
+    } catch(e) {}
+
     const modalHtml = `
         <div style="padding:10px 0">
-            <div style="font-size:1.1rem;font-weight:700;margin-bottom:6px">Orden de Compra: OC ${esc(po.oc_number)}</div>
-            <div style="font-size:0.85rem;color:var(--text-muted);margin-bottom:14px">
-                ${esc(po.empresa)} · ${esc(po.site_name || '')} · Mes ${po.month}/${po.year}
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+                <div>
+                    <div style="font-size:1.15rem;font-weight:700">Orden de Compra: OC ${esc(po.oc_number)}</div>
+                    <div style="font-size:0.85rem;color:var(--text-muted);margin-top:2px">
+                        ${esc(po.sociedad_name || po.empresa)} · ${esc(po.centro_logistico || po.site_name || '')}
+                    </div>
+                </div>
+                <span class="tag-periodicity-${po.periodicity || 'mensual'}">${po.periodicity || 'mensual'}</span>
             </div>
-            <div style="display:flex;gap:10px;margin-bottom:14px">
-                <div class="card" style="flex:1;padding:10px;text-align:center">
-                    <div style="font-size:0.75rem;color:var(--text-muted)">Monto Pactado Sin IGV</div>
+
+            <div style="display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap">
+                <div class="card" style="flex:1;min-width:140px;padding:10px;text-align:center">
+                    <div style="font-size:0.75rem;color:var(--text-muted)">Monto Sin IGV</div>
                     <div style="font-size:1.1rem;font-weight:700;font-family:monospace">S/ ${fmtMoney(po.amount || 0)}</div>
                 </div>
-                <div class="card" style="flex:1;padding:10px;text-align:center">
+                <div class="card" style="flex:1;min-width:140px;padding:10px;text-align:center">
+                    <div style="font-size:0.75rem;color:var(--text-muted)">Fecha Emisión</div>
+                    <div style="font-size:0.95rem;font-weight:600;margin-top:4px">${po.issue_date || '—'}</div>
+                </div>
+                <div class="card" style="flex:1;min-width:140px;padding:10px;text-align:center">
                     <div style="font-size:0.75rem;color:var(--text-muted)">Estado</div>
                     <div style="margin-top:4px">${po.status === 'pending' ? '<span class="tag tag-amber">⏳ Por facturar</span>' : '<span class="tag tag-sage">✅ Facturada</span>'}</div>
                 </div>
             </div>
+
             <div style="display:flex;flex-direction:column;gap:8px">
                 <button class="btn btn-primary" onclick="closeModal(); emitInvoiceFromOc(${po.id})">🧮 Emitir en Calculadora SUNAT</button>
+                ${itemsCount > 0 ? `<button class="btn btn-secondary" onclick="closeModal(); showOcItemsModal(${po.id})">👁️ Ver Desglose de Ítems (${itemsCount} posiciones)</button>` : ''}
                 <button class="btn btn-secondary" onclick="closeModal(); showPurchaseOrderModal(${po.id})">✏️ Modificar Orden de Compra</button>
                 <button class="btn btn-ghost" onclick="closeModal(); deletePurchaseOrder(${po.id})" style="color:#ef4444">🗑️ Eliminar Orden de Compra</button>
             </div>
         </div>
     `;
     openModal('Detalles de Orden de Compra', modalHtml);
+}
+
+function showOcItemsModal(poId) {
+    const orders = state.matrixData?.orders || [];
+    const po = orders.find(o => o.id === poId);
+    if (!po) return;
+
+    let items = [];
+    try {
+        if (po.items_json) {
+            items = JSON.parse(po.items_json);
+        }
+    } catch(e) {}
+
+    let rowsHtml = '';
+    let totalCalc = 0;
+    if (items.length === 0) {
+        rowsHtml = `<tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:20px">No se registraron posiciones individuales para esta OC</td></tr>`;
+    } else {
+        items.forEach(it => {
+            const sub = (it.cant * it.pu) || 0;
+            totalCalc += sub;
+            rowsHtml += `<tr>
+                <td style="font-family:monospace;font-weight:700">${esc(it.pos || '10')}</td>
+                <td><strong>${esc(it.desc)}</strong></td>
+                <td style="text-align:center">${it.cant}</td>
+                <td style="text-align:center;color:var(--text-muted)">${esc(it.un || 'UN')}</td>
+                <td style="text-align:right;font-family:monospace">S/ ${fmtMoney(it.pu)}</td>
+                <td style="text-align:right;font-family:monospace;font-weight:700">S/ ${fmtMoney(sub)}</td>
+            </tr>`;
+        });
+    }
+
+    const modalHtml = `
+        <div style="padding:10px 0">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+                <div>
+                    <h3 style="margin:0;font-size:1.15rem">Orden de Compra: OC ${esc(po.oc_number)}</h3>
+                    <div style="font-size:0.8rem;color:var(--text-muted);margin-top:2px">
+                        ${esc(po.sociedad_name || po.empresa)} · ${esc(po.centro_logistico || po.site_name || '')} (${po.issue_date || ''})
+                    </div>
+                </div>
+                <span class="tag-periodicity-${po.periodicity || 'mensual'}">${po.periodicity || 'mensual'}</span>
+            </div>
+
+            <div class="table-wrap" style="max-height:380px;overflow-y:auto;margin-bottom:16px">
+                <table class="oc-items-table">
+                    <thead>
+                        <tr>
+                            <th style="width:40px">Pos</th>
+                            <th>Descripción del Servicio</th>
+                            <th style="text-align:center;width:60px">Cant</th>
+                            <th style="text-align:center;width:50px">Und</th>
+                            <th style="text-align:right;width:120px">P. Unitario</th>
+                            <th style="text-align:right;width:120px">Subtotal</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rowsHtml}</tbody>
+                    <tfoot>
+                        <tr style="font-weight:700;border-top:2px solid var(--border-light)">
+                            <td colspan="5" style="text-align:right">Total Sin IGV:</td>
+                            <td style="text-align:right;font-family:monospace;font-size:1rem;color:var(--accent)">S/ ${fmtMoney(po.amount || totalCalc)}</td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+
+            <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap">
+                <button class="btn btn-secondary" onclick="closeModal()">Cerrar</button>
+                <button class="btn btn-primary" onclick="closeModal(); emitInvoiceFromOc(${po.id})">🧮 Cargar todo a Calculadora SUNAT</button>
+            </div>
+        </div>
+    `;
+
+    openModal(`Desglose de Ítems · OC ${po.oc_number}`, modalHtml);
 }
 
 function emitInvoiceFromOc(poId) {
@@ -1096,6 +1309,37 @@ function emitInvoiceFromOc(poId) {
 
     const sites = state.allSites || [];
     const site = sites.find(s => s.id === po.client_site_id);
+
+    // Parse items if available
+    let calcItems = [];
+    try {
+        if (po.items_json) {
+            const parsed = JSON.parse(po.items_json);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+                calcItems = parsed.map(it => ({
+                    desc: it.desc,
+                    cant: it.cant,
+                    pu: it.pu
+                }));
+            }
+        }
+    } catch(e) {}
+
+    if (calcItems.length === 0) {
+        calcItems = [
+            {
+                desc: site?.servicios || po.notes || 'SERV CONTROL DE PLAGAS',
+                cant: 1,
+                pu: po.amount || site?.monthly_fee || 0
+            }
+        ];
+    }
+
+    // Determine Banco de la Nación account based on client/business
+    let bnAcc = '00046317769';
+    if (po.client_id === 11 || po.client_id === 13 || po.client_id === 14 || po.client_id === 15 || po.client_id === 16) {
+        bnAcc = '00771005578';
+    }
 
     window.calcState = {
         clientId: po.client_id,
@@ -1112,18 +1356,12 @@ function emitInvoiceFromOc(poId) {
         yearBilled: po.year,
         igvRate: 0.18,
         detrRate: 0.12,
-        bnAccount: (po.client_id === 9 || po.client_id === 10) ? '00046317769' : '00771005578',
-        items: [
-            {
-                desc: site?.servicios || po.notes || 'SERV CONTROL DE PLAGAS',
-                cant: 1,
-                pu: po.amount || site?.monthly_fee || 0
-            }
-        ]
+        bnAccount: bnAcc,
+        items: calcItems
     };
 
     switchWorkTab('calculadora');
-    showToast(`Datos de OC ${po.oc_number} cargados en Calculadora SUNAT`);
+    showToast(`Datos de OC ${po.oc_number} (${calcItems.length} ítems) cargados en Calculadora SUNAT`);
 }
 
 async function showPurchaseOrderModal(poId, defaultSiteId, defaultClientId, defaultMonth, defaultYear) {
@@ -1147,6 +1385,9 @@ async function showPurchaseOrderModal(poId, defaultSiteId, defaultClientId, defa
     const defFee = po ? po.amount : '';
     const notes = po ? po.notes : '';
     const status = po ? po.status : 'pending';
+    const periodicity = po ? (po.periodicity || 'mensual') : 'mensual';
+    const issueDate = po ? (po.issue_date || todayStr()) : todayStr();
+    const centroLogistico = po ? (po.centro_logistico || '') : '';
 
     const clientOpts = clients.map(c => `<option value="${c.id}" ${c.id === selClient ? 'selected' : ''}>${esc(c.business_name)} (${esc(c.ruc)})</option>`).join('');
 
@@ -1196,6 +1437,15 @@ async function showPurchaseOrderModal(poId, defaultSiteId, defaultClientId, defa
                 </select>
             </div>
             <div class="form-group">
+                <label>Frecuencia / Periodicidad</label>
+                <select class="form-control" id="poPeriodicity">
+                    <option value="mensual" ${periodicity === 'mensual' ? 'selected' : ''}>🔄 Mensual</option>
+                    <option value="bimensual" ${periodicity === 'bimensual' ? 'selected' : ''}>🔁 Bimensual</option>
+                    <option value="trimestral" ${periodicity === 'trimestral' ? 'selected' : ''}>🔁 Trimestral</option>
+                    <option value="eventual" ${periodicity === 'eventual' ? 'selected' : ''}>⚡ Eventual / Ad-hoc</option>
+                </select>
+            </div>
+            <div class="form-group">
                 <label>Estado</label>
                 <select class="form-control" id="poStatus">
                     <option value="pending" ${status === 'pending' ? 'selected' : ''}>⏳ Por facturar</option>
@@ -1207,7 +1457,11 @@ async function showPurchaseOrderModal(poId, defaultSiteId, defaultClientId, defa
         <div class="form-row">
             <div class="form-group" style="flex:2">
                 <label>Número de Orden de Compra (OC) *</label>
-                <input type="text" class="form-control" id="poOcNumber" value="${esc(ocNum)}" placeholder="Ej. 8600033006" required style="font-family:monospace;font-weight:700">
+                <input type="text" class="form-control" id="poOcNumber" value="${esc(ocNum)}" placeholder="Ej. 4501209368" required style="font-family:monospace;font-weight:700">
+            </div>
+            <div class="form-group" style="flex:1">
+                <label>Fecha Emisión OC</label>
+                <input type="date" class="form-control" id="poIssueDate" value="${issueDate}">
             </div>
             <div class="form-group" style="flex:1">
                 <label>Monto Sin IGV (S/)</label>
@@ -1215,9 +1469,15 @@ async function showPurchaseOrderModal(poId, defaultSiteId, defaultClientId, defa
             </div>
         </div>
 
-        <div class="form-group">
-            <label>Notas / Descripción del Servicio</label>
-            <input type="text" class="form-control" id="poNotes" value="${esc(notes)}" placeholder="Ej. Control Aviar mensual, Orden aprobada para ejecución">
+        <div class="form-row">
+            <div class="form-group" style="flex:2">
+                <label>Centro Logístico / Planta / CEDI</label>
+                <input type="text" class="form-control" id="poCentroLogistico" value="${esc(centroLogistico)}" placeholder="Ej. CEDI SUR - AC LOGISTICA (4803)">
+            </div>
+            <div class="form-group" style="flex:2">
+                <label>Notas / Descripción del Servicio</label>
+                <input type="text" class="form-control" id="poNotes" value="${esc(notes)}" placeholder="Ej. Control de Aves mensual, Desinsectación almacenes">
+            </div>
         </div>
     </form>
     `;
@@ -1269,9 +1529,12 @@ async function savePurchaseOrderForm(e, poId) {
     const year = parseInt(document.getElementById('poYear').value);
     const month = parseInt(document.getElementById('poMonth').value);
     const ocNumber = document.getElementById('poOcNumber').value.trim();
+    const issueDate = document.getElementById('poIssueDate').value;
     const amountVal = document.getElementById('poAmount').value;
     const amount = amountVal ? parseFloat(amountVal) : 0;
+    const periodicity = document.getElementById('poPeriodicity').value;
     const status = document.getElementById('poStatus').value;
+    const centroLogistico = document.getElementById('poCentroLogistico').value.trim();
     const notes = document.getElementById('poNotes').value.trim();
 
     if (!clientId) { showToast('Selecciona un cliente'); return; }
@@ -1284,8 +1547,11 @@ async function savePurchaseOrderForm(e, poId) {
         year,
         month,
         oc_number: ocNumber,
+        issue_date: issueDate,
         amount,
+        periodicity,
         status,
+        centro_logistico: centroLogistico,
         notes
     };
 
@@ -7741,6 +8007,12 @@ window.changeWorkoutProgressMetric = changeWorkoutProgressMetric;
 window.deleteWorkoutSession = deleteWorkoutSession;
 window.showQuickExerciseLogModal = showQuickExerciseLogModal;
 
+window.filterMatrixPeriodicity = filterMatrixPeriodicity;
+window.filterMatrixOcStatus = filterMatrixOcStatus;
+window.filterMatrixOcPeriodicity = filterMatrixOcPeriodicity;
+window.filterMatrixOcMonth = filterMatrixOcMonth;
+window.onSearchMatrixOc = onSearchMatrixOc;
+window.showOcItemsModal = showOcItemsModal;
 window.renderWorkMatrix = renderWorkMatrix;
 window.changeMatrixYear = changeMatrixYear;
 window.filterMatrixOc = filterMatrixOc;

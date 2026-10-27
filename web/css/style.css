@@ -1950,3 +1950,45 @@ tr:hover td { background: var(--bg); }
     color: var(--accent, #6366f1);
     font-weight: 700;
 }
+
+
+/* ===================== OC PERIODICITY & DETAILS MODAL ===================== */
+.tag-periodicity-mensual {
+    background: rgba(16, 185, 129, 0.12);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+.tag-periodicity-bimensual {
+    background: rgba(139, 92, 246, 0.12);
+    color: #8b5cf6;
+    border: 1px solid rgba(139, 92, 246, 0.3);
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+.tag-periodicity-eventual {
+    background: rgba(245, 158, 11, 0.12);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+.oc-item-badge {
+    display: inline-block;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    background: var(--bg-hover, #f3f4f6);
+    color: var(--text-muted);
+    font-family: monospace;
+}

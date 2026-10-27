@@ -558,6 +558,78 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_finance_tx_account ON finance_transactions(account_id)",
         "CREATE INDEX IF NOT EXISTS idx_finance_tx_category ON finance_transactions(category_id)",
         "CREATE INDEX IF NOT EXISTS idx_finance_tx_goal ON finance_transactions(goal_id)",
+        """CREATE TABLE IF NOT EXISTS finance_debts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            creditor TEXT,
+            total_amount REAL NOT NULL,
+            initial_paid REAL DEFAULT 0.0,
+            currency TEXT DEFAULT 'ARS',
+            due_date TEXT,
+            installments_total INTEGER DEFAULT 1,
+            installments_paid INTEGER DEFAULT 0,
+            status TEXT DEFAULT 'active',
+            notes TEXT,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        )""",
+        """CREATE TABLE IF NOT EXISTS finance_debt_payments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            debt_id INTEGER NOT NULL REFERENCES finance_debts(id) ON DELETE CASCADE,
+            transaction_id INTEGER REFERENCES finance_transactions(id) ON DELETE SET NULL,
+            account_id INTEGER REFERENCES finance_accounts(id) ON DELETE SET NULL,
+            amount REAL NOT NULL,
+            date TEXT NOT NULL,
+            installment_number INTEGER,
+            notes TEXT,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        )""",
+        """CREATE TABLE IF NOT EXISTS finance_recurring_expenses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            category_id INTEGER REFERENCES finance_categories(id) ON DELETE SET NULL,
+            account_id INTEGER REFERENCES finance_accounts(id) ON DELETE SET NULL,
+            amount REAL NOT NULL,
+            currency TEXT DEFAULT 'ARS',
+            due_day INTEGER DEFAULT 10,
+            auto_debit INTEGER DEFAULT 0,
+            is_active INTEGER DEFAULT 1,
+            notes TEXT,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        )""",
+        """CREATE TABLE IF NOT EXISTS finance_recurring_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            recurring_id INTEGER NOT NULL REFERENCES finance_recurring_expenses(id) ON DELETE CASCADE,
+            month INTEGER NOT NULL,
+            year INTEGER NOT NULL,
+            paid_amount REAL NOT NULL,
+            paid_date TEXT NOT NULL,
+            transaction_id INTEGER REFERENCES finance_transactions(id) ON DELETE SET NULL,
+            is_paid INTEGER DEFAULT 1,
+            notes TEXT,
+            created_at TEXT DEFAULT (datetime('now','localtime')),
+            UNIQUE(recurring_id, month, year)
+        )""",
+        """CREATE TABLE IF NOT EXISTS finance_salaries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            month INTEGER NOT NULL,
+            year INTEGER NOT NULL,
+            expected_amount REAL NOT NULL,
+            received_amount REAL DEFAULT 0.0,
+            currency TEXT DEFAULT 'ARS',
+            payment_date TEXT,
+            account_id INTEGER REFERENCES finance_accounts(id) ON DELETE SET NULL,
+            status TEXT DEFAULT 'pending',
+            notes TEXT,
+            transaction_id INTEGER REFERENCES finance_transactions(id) ON DELETE SET NULL,
+            created_at TEXT DEFAULT (datetime('now','localtime')),
+            UNIQUE(month, year)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_finance_debts_status ON finance_debts(status)",
+        "CREATE INDEX IF NOT EXISTS idx_finance_debt_payments_debt ON finance_debt_payments(debt_id)",
+        "CREATE INDEX IF NOT EXISTS idx_finance_recurring_due ON finance_recurring_expenses(due_day)",
+        "CREATE INDEX IF NOT EXISTS idx_finance_salaries_my ON finance_salaries(month, year)",
+        "ALTER TABLE employee_documents ADD COLUMN external_url TEXT",
+        "ALTER TABLE employees ADD COLUMN onedrive_folder_url TEXT",
     ]:
         try:
             conn.execute(stmt)
@@ -1473,6 +1545,34 @@ def seed_default_finance(conn):
             1200.0,
             "Fondo de ahorro para la intervención quirúrgica"
         ))
+
+    # Seed debt category if missing
+    debt_cat = conn.execute("SELECT id FROM finance_categories WHERE name LIKE '%Deuda%'").fetchone()
+    if not debt_cat:
+        conn.execute("""
+            INSERT INTO finance_categories (name, type, icon, color, sort_order)
+            VALUES (?, 'expense', '💳', '#DC2626', 14)
+        """, ('Pago de Deuda / Tarjeta',))
+
+    # Seed default recurring expenses if empty
+    rec_count = conn.execute("SELECT COUNT(*) FROM finance_recurring_expenses").fetchone()[0]
+    if rec_count == 0:
+        default_recurring = [
+            ("Alquiler y Expensas", 0.0, 10),
+            ("Servicios (Luz / Gas / Agua)", 0.0, 15),
+            ("Internet / Wi-Fi", 0.0, 12),
+            ("Telefonía Celular", 0.0, 20),
+            ("Gimnasio", 0.0, 5),
+            ("Suscripciones (Streaming/Música)", 0.0, 8),
+        ]
+        for name, amt, dday in default_recurring:
+            c_row = conn.execute("SELECT id FROM finance_categories WHERE name LIKE ? LIMIT 1", (f"%{name[:4]}%",)).fetchone()
+            cid = c_row['id'] if c_row else None
+            conn.execute("""
+                INSERT INTO finance_recurring_expenses (name, amount, due_day, category_id)
+                VALUES (?, ?, ?, ?)
+            """, (name, amt, dday, cid))
+
     conn.commit()
 
 

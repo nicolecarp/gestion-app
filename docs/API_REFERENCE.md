@@ -307,3 +307,14 @@ Todas las funciones listadas en este documento están implementadas en `api.py` 
 | `update_finance_goal(id, data)` | `id` (int), `data` (dict) | `{'ok': True}` | Actualiza objetivo USD, ahorro base inicial, cotización de referencia y fecha |
 | `add_goal_contribution(data)` | `data` (dict) | `{'ok': True, 'id': int}` | Registra un aporte directo a la Meta Operación convirtiendo USD/ARS al vuelo |
 
+---
+
+## 19. Atajos de Siri & Integración Apple
+
+| Función | Parámetros | Retorno | Descripción |
+| :--- | :--- | :--- | :--- |
+| `get_shortcut_info()` | Ninguno | `{'ok': True, 'token': str, 'shortcut_endpoint': str, 'actions': list}` | Retorna el token actual y endpoints para configurar Atajos de Siri |
+| `regenerate_shortcut_token()` | Ninguno | `{'ok': True, 'token': str}` | Genera un nuevo token seguro invalidando el anterior |
+| `handle_shortcut_action(action, payload)` | `action` (str), `payload` (dict) | `{'ok': True, 'message': str, ...}` | Ejecuta la acción solicitada desde Apple Shortcuts con respuesta redactada para voz de Siri |
+
+

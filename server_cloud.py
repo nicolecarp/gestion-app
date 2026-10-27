@@ -299,6 +299,67 @@ window.eel = new Proxy({
     return Response(js, mimetype="application/javascript")
 
 
+def _validate_shortcut_token():
+    auth_header = request.headers.get("Authorization", "")
+    token = ""
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+    elif "X-Shortcut-Token" in request.headers:
+        token = request.headers.get("X-Shortcut-Token", "").strip()
+    else:
+        token = request.args.get("token", "").strip()
+        if not token and request.is_json:
+            token = (request.get_json(silent=True) or {}).get("token", "").strip()
+
+    if not token:
+        return False
+
+    valid_token = api_module.get_or_create_shortcut_token()
+    return hmac.compare_digest(token, valid_token)
+
+
+@app.route("/api/shortcut/<action>", methods=["GET", "POST"])
+@app.route("/api/shortcut", methods=["GET", "POST"])
+def shortcut_endpoint(action=None):
+    """
+    Endpoint dedicado para Atajos de Siri (Apple Shortcuts).
+    Permite autenticación por token Bearer, X-Shortcut-Token o ?token= sin requerir cookies ni CSRF.
+    """
+    if not _validate_shortcut_token():
+        return jsonify({
+            "ok": False,
+            "error": "No autorizado: token de atajo inválido o ausente",
+            "message": "Token de Atajo de Nicole incorrecto o no configurado."
+        }), 401
+
+    if request.is_json:
+        payload = request.get_json(silent=True) or {}
+    elif request.form:
+        payload = request.form.to_dict()
+    else:
+        payload = request.args.to_dict()
+
+    target_action = action or payload.get("action")
+    if not target_action:
+        return jsonify({
+            "ok": False,
+            "error": "Falta especificar la acción",
+            "message": "Debes especificar la acción a realizar."
+        }), 400
+
+    try:
+        result = api_module.handle_shortcut_action(target_action, payload)
+        status_code = 200 if result.get("ok") else 400
+        return jsonify(result), status_code
+    except Exception as e:
+        log.exception("Error en /api/shortcut/%s", target_action)
+        return jsonify({
+            "ok": False,
+            "error": str(e),
+            "message": f"Ocurrió un error en Nicole: {str(e)}"
+        }), 500
+
+
 @app.route("/api/<func_name>", methods=["POST"])
 @login_required
 def call_api(func_name):

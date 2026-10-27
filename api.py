@@ -368,10 +368,10 @@ def create_employee_document(data):
     conn = get_connection()
     try:
         cur = conn.execute("""
-            INSERT INTO employee_documents (employee_id, doc_type, doc_number, issue_date, expiry_date, notes)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO employee_documents (employee_id, doc_type, doc_number, issue_date, expiry_date, notes, external_url)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (data['employee_id'], data['doc_type'], data.get('doc_number'),
-              data.get('issue_date'), data.get('expiry_date'), data.get('notes')))
+              data.get('issue_date'), data.get('expiry_date'), data.get('notes'), data.get('external_url')))
         new_id = cur.lastrowid
         conn.commit()
         return {'ok': True, 'id': new_id}
@@ -385,10 +385,10 @@ def update_employee_document(id, data):
     conn = get_connection()
     try:
         conn.execute("""
-            UPDATE employee_documents SET doc_type=?, doc_number=?, issue_date=?, expiry_date=?, notes=?
+            UPDATE employee_documents SET doc_type=?, doc_number=?, issue_date=?, expiry_date=?, notes=?, external_url=?
             WHERE id=?
         """, (data['doc_type'], data.get('doc_number'), data.get('issue_date'),
-              data.get('expiry_date'), data.get('notes'), id))
+              data.get('expiry_date'), data.get('notes'), data.get('external_url'), id))
         conn.commit()
         return {'ok': True}
     except Exception as e:
@@ -3718,6 +3718,101 @@ def _get_primary_goal_summary(conn):
     return goal
 
 
+def _get_debts_summary_helper(conn):
+    """Calcula el estado consolidado de deudas y avance de pagos."""
+    debts = conn.execute("SELECT * FROM finance_debts ORDER BY id ASC").fetchall()
+    total_orig = 0.0
+    total_paid = 0.0
+    active_cnt = 0
+    paid_cnt = 0
+
+    for d in debts:
+        orig = float(d['total_amount'] or 0.0)
+        init_p = float(d['initial_paid'] or 0.0)
+        pay_row = conn.execute("SELECT COALESCE(SUM(amount), 0) FROM finance_debt_payments WHERE debt_id=?", (d['id'],)).fetchone()
+        sum_p = float(pay_row[0] if pay_row else 0.0)
+        paid = init_p + sum_p
+
+        total_orig += orig
+        total_paid += paid
+        if paid >= orig and orig > 0:
+            paid_cnt += 1
+        else:
+            active_cnt += 1
+
+    remaining = max(0.0, round(total_orig - total_paid, 2))
+    pct = min(100.0, round((total_paid / total_orig * 100), 1)) if total_orig > 0 else 0.0
+    return {
+        'total_original': round(total_orig, 2),
+        'total_paid': round(total_paid, 2),
+        'total_remaining': remaining,
+        'progress_percent': pct,
+        'active_count': active_cnt,
+        'paid_count': paid_cnt,
+        'has_debts': len(debts) > 0
+    }
+
+
+def _get_recurring_summary_helper(conn, month, year):
+    """Calcula el estado de gastos fijos para el mes seleccionado."""
+    recs = conn.execute("SELECT * FROM finance_recurring_expenses WHERE is_active=1 ORDER BY due_day ASC").fetchall()
+    total_expected = sum(float(r['amount'] or 0.0) for r in recs)
+
+    logs = conn.execute("""
+        SELECT recurring_id, paid_amount
+        FROM finance_recurring_logs
+        WHERE month=? AND year=? AND is_paid=1
+    """, (month, year)).fetchall()
+
+    paid_map = {l['recurring_id']: float(l['paid_amount'] or 0.0) for l in logs}
+    total_paid = sum(paid_map.values())
+    pending_cnt = sum(1 for r in recs if r['id'] not in paid_map)
+
+    return {
+        'total_expected': round(total_expected, 2),
+        'total_paid': round(total_paid, 2),
+        'total_pending': max(0.0, round(total_expected - total_paid, 2)),
+        'total_items': len(recs),
+        'paid_count': len(logs),
+        'pending_count': pending_cnt,
+        'is_all_paid': (len(recs) > 0 and pending_cnt == 0)
+    }
+
+
+def _get_salary_summary_helper(conn, month, year):
+    """Obtiene el sueldo esperado vs cobrado para el mes seleccionado."""
+    row = conn.execute("SELECT * FROM finance_salaries WHERE month=? AND year=?", (month, year)).fetchone()
+    if not row:
+        return {
+            'has_record': False,
+            'expected_amount': 0.0,
+            'received_amount': 0.0,
+            'difference': 0.0,
+            'difference_abs': 0.0,
+            'status': 'pending',
+            'is_fully_paid': False,
+            'is_underpaid': False
+        }
+    sal = dict(row)
+    exp = float(sal.get('expected_amount') or 0.0)
+    rec = float(sal.get('received_amount') or 0.0)
+    diff = round(rec - exp, 2)
+    return {
+        'has_record': True,
+        'id': sal['id'],
+        'expected_amount': exp,
+        'received_amount': rec,
+        'difference': diff,
+        'difference_abs': abs(diff),
+        'payment_date': sal.get('payment_date'),
+        'account_id': sal.get('account_id'),
+        'status': sal.get('status', 'pending'),
+        'notes': sal.get('notes'),
+        'is_fully_paid': (rec >= exp and exp > 0),
+        'is_underpaid': (rec < exp)
+    }
+
+
 @eel.expose
 def get_finance_summary(month=None, year=None):
     """
@@ -3826,6 +3921,15 @@ def get_finance_summary(month=None, year=None):
         """, (month_str,)).fetchall()
         transactions = [dict(r) for r in tx_rows]
 
+        # 7. Resumen de Deudas
+        debts_res = _get_debts_summary_helper(conn)
+
+        # 8. Resumen de Gastos Fijos para el mes
+        recurring_res = _get_recurring_summary_helper(conn, month, year)
+
+        # 9. Sueldo para el mes
+        salary_res = _get_salary_summary_helper(conn, month, year)
+
         return {
             'ok': True,
             'month': month,
@@ -3838,7 +3942,10 @@ def get_finance_summary(month=None, year=None):
             'incomes_by_category': incomes_by_category,
             'accounts': accounts,
             'goal': goal,
-            'transactions': transactions
+            'transactions': transactions,
+            'debts_summary': debts_res,
+            'recurring_summary': recurring_res,
+            'salary_summary': salary_res
         }
     except Exception as e:
         return {'ok': False, 'error': str(e)}
@@ -4217,6 +4324,1076 @@ def add_goal_contribution(data):
         return {'ok': True, 'id': cur.lastrowid}
     except Exception as e:
         return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+# ===================== DEUDAS & AVANCE DE PAGOS =====================
+
+@eel.expose
+def get_finance_debts():
+    """Retorna todas las deudas, el desglose de pagos y el resumen de avance."""
+    conn = get_connection()
+    try:
+        debts = conn.execute("SELECT * FROM finance_debts ORDER BY CASE status WHEN 'active' THEN 1 ELSE 2 END, id DESC").fetchall()
+        result_debts = []
+        total_orig = 0.0
+        total_paid = 0.0
+        active_cnt = 0
+        paid_cnt = 0
+
+        for d_row in debts:
+            d = dict(d_row)
+            did = d['id']
+            orig = float(d.get('total_amount') or 0.0)
+            init_p = float(d.get('initial_paid') or 0.0)
+
+            # Pagos realizados
+            pay_rows = conn.execute("""
+                SELECT p.*, a.name as account_name, a.icon as account_icon
+                FROM finance_debt_payments p
+                LEFT JOIN finance_accounts a ON p.account_id = a.id
+                WHERE p.debt_id = ?
+                ORDER BY p.date DESC, p.id DESC
+            """, (did,)).fetchall()
+            payments = [dict(p) for p in pay_rows]
+            sum_p = sum(float(p['amount'] or 0.0) for p in payments)
+            paid = round(init_p + sum_p, 2)
+            rem = max(0.0, round(orig - paid, 2))
+            pct = min(100.0, round((paid / orig * 100), 1)) if orig > 0 else 100.0
+
+            d['payments'] = payments
+            d['payments_count'] = len(payments)
+            d['total_paid'] = paid
+            d['remaining_amount'] = rem
+            d['progress_percent'] = pct
+            d['is_paid'] = (paid >= orig and orig > 0) or (d.get('status') == 'paid')
+
+            total_orig += orig
+            total_paid += paid
+            if d['is_paid']:
+                paid_cnt += 1
+            else:
+                active_cnt += 1
+
+            result_debts.append(d)
+
+        overall_rem = max(0.0, round(total_orig - total_paid, 2))
+        overall_pct = min(100.0, round((total_paid / total_orig * 100), 1)) if total_orig > 0 else 0.0
+
+        summary = {
+            'total_original': round(total_orig, 2),
+            'total_paid': round(total_paid, 2),
+            'total_remaining': overall_rem,
+            'progress_percent': overall_pct,
+            'active_count': active_cnt,
+            'paid_count': paid_cnt,
+            'total_count': len(debts)
+        }
+        return {'ok': True, 'debts': result_debts, 'summary': summary}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def create_finance_debt(data):
+    """Crea una nueva deuda o compromiso financiero."""
+    conn = get_connection()
+    try:
+        title = (data.get('title') or '').strip()
+        if not title:
+            return {'ok': False, 'error': 'El título o concepto de la deuda es obligatorio'}
+        total_amt = float(data.get('total_amount') or 0.0)
+        if total_amt <= 0:
+            return {'ok': False, 'error': 'El monto total debe ser mayor a 0'}
+
+        cur = conn.execute("""
+            INSERT INTO finance_debts
+            (title, creditor, total_amount, initial_paid, currency, due_date, installments_total, installments_paid, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            title,
+            data.get('creditor') or '',
+            total_amt,
+            float(data.get('initial_paid') or 0.0),
+            data.get('currency', 'ARS'),
+            data.get('due_date') or None,
+            int(data.get('installments_total') or 1),
+            int(data.get('installments_paid') or 0),
+            data.get('notes') or ''
+        ))
+        conn.commit()
+        return {'ok': True, 'id': cur.lastrowid}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def update_finance_debt(id, data):
+    """Actualiza una deuda existente."""
+    conn = get_connection()
+    try:
+        title = (data.get('title') or '').strip()
+        total_amt = float(data.get('total_amount') or 0.0)
+        init_paid = float(data.get('initial_paid') or 0.0)
+
+        conn.execute("""
+            UPDATE finance_debts
+            SET title=?, creditor=?, total_amount=?, initial_paid=?, currency=?,
+                due_date=?, installments_total=?, installments_paid=?, status=?, notes=?
+            WHERE id=?
+        """, (
+            title,
+            data.get('creditor') or '',
+            total_amt,
+            init_paid,
+            data.get('currency', 'ARS'),
+            data.get('due_date') or None,
+            int(data.get('installments_total') or 1),
+            int(data.get('installments_paid') or 0),
+            data.get('status', 'active'),
+            data.get('notes') or '',
+            id
+        ))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def delete_finance_debt(id):
+    """Elimina una deuda y sus pagos asociados."""
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM finance_debts WHERE id=?", (id,))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def pay_finance_debt(data):
+    """
+    Registra un pago / cuota hacia una deuda:
+    - Inserta en finance_debt_payments
+    - Genera transacción de gasto en finance_transactions impactando la cuenta elegida
+    - Actualiza el estado de la deuda si se cancela en su totalidad
+    """
+    conn = get_connection()
+    try:
+        debt_id = int(data.get('debt_id'))
+        amount = float(data.get('amount') or 0.0)
+        if amount <= 0:
+            return {'ok': False, 'error': 'El monto del pago debe ser mayor a 0'}
+
+        account_id = int(data.get('account_id')) if data.get('account_id') else None
+        date_val = data.get('date') or today()
+        inst_num = int(data.get('installment_number')) if data.get('installment_number') else None
+        notes = (data.get('notes') or '').strip()
+
+        d_row = conn.execute("SELECT * FROM finance_debts WHERE id=?", (debt_id,)).fetchone()
+        if not d_row:
+            return {'ok': False, 'error': 'Deuda no encontrada'}
+
+        # Categoría para pago de deuda
+        c_row = conn.execute("SELECT id FROM finance_categories WHERE name LIKE '%Deuda%' LIMIT 1").fetchone()
+        cat_id = c_row['id'] if c_row else None
+
+        # Si se seleccionó una cuenta, crear movimiento de gasto
+        tx_id = None
+        if account_id:
+            desc_parts = [f"Pago deuda: {d_row['title']}"]
+            if inst_num:
+                desc_parts.append(f"(Cuota {inst_num})")
+            if notes:
+                desc_parts.append(f"- {notes}")
+            tx_desc = " ".join(desc_parts)
+
+            cur_tx = conn.execute("""
+                INSERT INTO finance_transactions
+                (account_id, category_id, type, amount, currency, date, description)
+                VALUES (?, ?, 'expense', ?, 'ARS', ?, ?)
+            """, (account_id, cat_id, amount, date_val, tx_desc))
+            tx_id = cur_tx.lastrowid
+
+        # Insertar registro de pago
+        conn.execute("""
+            INSERT INTO finance_debt_payments
+            (debt_id, transaction_id, account_id, amount, date, installment_number, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (debt_id, tx_id, account_id, amount, date_val, inst_num, notes))
+
+        # Actualizar cuotas pagadas si vino número de cuota
+        if inst_num:
+            conn.execute("""
+                UPDATE finance_debts
+                SET installments_paid = MAX(installments_paid, ?)
+                WHERE id = ?
+            """, (inst_num, debt_id))
+
+        # Verificar si la deuda quedó saldada
+        sum_p = conn.execute("SELECT COALESCE(SUM(amount), 0) FROM finance_debt_payments WHERE debt_id=?", (debt_id,)).fetchone()[0]
+        total_p = float(d_row['initial_paid'] or 0.0) + float(sum_p)
+        if total_p >= float(d_row['total_amount'] or 0.0):
+            conn.execute("UPDATE finance_debts SET status='paid' WHERE id=?", (debt_id,))
+
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def delete_debt_payment(payment_id):
+    """Elimina un pago de deuda y su transacción vinculada."""
+    conn = get_connection()
+    try:
+        p_row = conn.execute("SELECT debt_id, transaction_id FROM finance_debt_payments WHERE id=?", (payment_id,)).fetchone()
+        if p_row:
+            if p_row['transaction_id']:
+                conn.execute("DELETE FROM finance_transactions WHERE id=?", (p_row['transaction_id'],))
+            conn.execute("DELETE FROM finance_debt_payments WHERE id=?", (payment_id,))
+
+            # Reactivar deuda si estaba en paid
+            debt_id = p_row['debt_id']
+            d_row = conn.execute("SELECT total_amount, initial_paid FROM finance_debts WHERE id=?", (debt_id,)).fetchone()
+            if d_row:
+                sum_p = conn.execute("SELECT COALESCE(SUM(amount), 0) FROM finance_debt_payments WHERE debt_id=?", (debt_id,)).fetchone()[0]
+                if float(d_row['initial_paid'] or 0.0) + float(sum_p) < float(d_row['total_amount'] or 0.0):
+                    conn.execute("UPDATE finance_debts SET status='active' WHERE id=?", (debt_id,))
+
+            conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+# ===================== GASTOS FIJOS MENSUALES =====================
+
+@eel.expose
+def get_finance_recurring(month=None, year=None):
+    """
+    Retorna los gastos fijos mensuales y su estado de pago (Pagado/Pendiente) para el mes/año indicado.
+    """
+    now = datetime.now(AR_TZ)
+    if year is None or year == '':
+        year = now.year
+    else:
+        year = int(year)
+
+    if month is None or month == '':
+        month = now.month
+    else:
+        month = int(month)
+
+    conn = get_connection()
+    try:
+        recs = conn.execute("""
+            SELECT r.*,
+                   c.name as category_name, c.icon as category_icon, c.color as category_color,
+                   a.name as default_account_name, a.icon as default_account_icon
+            FROM finance_recurring_expenses r
+            LEFT JOIN finance_categories c ON r.category_id = c.id
+            LEFT JOIN finance_accounts a ON r.account_id = a.id
+            WHERE r.is_active = 1
+            ORDER BY r.due_day ASC, r.id ASC
+        """).fetchall()
+
+        logs = conn.execute("""
+            SELECT l.*, a.name as paid_account_name
+            FROM finance_recurring_logs l
+            LEFT JOIN finance_transactions t ON l.transaction_id = t.id
+            LEFT JOIN finance_accounts a ON t.account_id = a.id
+            WHERE l.month = ? AND l.year = ? AND l.is_paid = 1
+        """, (month, year)).fetchall()
+
+        logs_by_rec = {l['recurring_id']: dict(l) for l in logs}
+
+        result_recs = []
+        total_exp = 0.0
+        total_paid = 0.0
+        paid_cnt = 0
+        pending_cnt = 0
+
+        current_day = now.day if (now.year == year and now.month == month) else None
+
+        for r_row in recs:
+            r = dict(r_row)
+            rid = r['id']
+            amt = float(r.get('amount') or 0.0)
+            total_exp += amt
+
+            log = logs_by_rec.get(rid)
+            if log:
+                r['is_paid'] = True
+                r['paid_amount'] = float(log.get('paid_amount') or amt)
+                r['paid_date'] = log.get('paid_date')
+                r['log_id'] = log.get('id')
+                r['paid_account_name'] = log.get('paid_account_name')
+                total_paid += r['paid_amount']
+                paid_cnt += 1
+            else:
+                r['is_paid'] = False
+                r['paid_amount'] = 0.0
+                r['paid_date'] = None
+                r['log_id'] = None
+                pending_cnt += 1
+
+            # Chequear si está vencido en el mes actual
+            dday = int(r.get('due_day') or 10)
+            r['is_overdue'] = bool(not r['is_paid'] and current_day and current_day > dday)
+
+            result_recs.append(r)
+
+        summary = {
+            'month': month,
+            'year': year,
+            'total_expected': round(total_exp, 2),
+            'total_paid': round(total_paid, 2),
+            'total_pending': max(0.0, round(total_exp - total_paid, 2)),
+            'total_count': len(recs),
+            'paid_count': paid_cnt,
+            'pending_count': pending_cnt,
+            'is_all_paid': (len(recs) > 0 and pending_cnt == 0)
+        }
+        return {'ok': True, 'recurring': result_recs, 'summary': summary}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def create_finance_recurring(data):
+    """Crea un nuevo gasto fijo mensual."""
+    conn = get_connection()
+    try:
+        name = (data.get('name') or '').strip()
+        if not name:
+            return {'ok': False, 'error': 'El nombre del gasto fijo es obligatorio'}
+        amt = float(data.get('amount') or 0.0)
+
+        cur = conn.execute("""
+            INSERT INTO finance_recurring_expenses
+            (name, category_id, account_id, amount, currency, due_day, auto_debit, notes)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            name,
+            int(data['category_id']) if data.get('category_id') else None,
+            int(data['account_id']) if data.get('account_id') else None,
+            amt,
+            data.get('currency', 'ARS'),
+            int(data.get('due_day') or 10),
+            1 if data.get('auto_debit') else 0,
+            data.get('notes') or ''
+        ))
+        conn.commit()
+        return {'ok': True, 'id': cur.lastrowid}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def update_finance_recurring(id, data):
+    """Actualiza un gasto fijo."""
+    conn = get_connection()
+    try:
+        conn.execute("""
+            UPDATE finance_recurring_expenses
+            SET name=?, category_id=?, account_id=?, amount=?, currency=?, due_day=?, auto_debit=?, notes=?
+            WHERE id=?
+        """, (
+            data.get('name'),
+            int(data['category_id']) if data.get('category_id') else None,
+            int(data['account_id']) if data.get('account_id') else None,
+            float(data.get('amount') or 0.0),
+            data.get('currency', 'ARS'),
+            int(data.get('due_day') or 10),
+            1 if data.get('auto_debit') else 0,
+            data.get('notes') or '',
+            id
+        ))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def delete_finance_recurring(id):
+    """Elimina un gasto fijo."""
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM finance_recurring_expenses WHERE id=?", (id,))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def mark_recurring_paid(data):
+    """
+    Marca un gasto fijo como pagado para el mes especificado:
+    - Opcionalmente genera la transacción en finance_transactions
+    - Guarda en finance_recurring_logs
+    """
+    conn = get_connection()
+    try:
+        recurring_id = int(data.get('recurring_id'))
+        month = int(data.get('month'))
+        year = int(data.get('year'))
+        paid_amount = float(data.get('paid_amount') or 0.0)
+        paid_date = data.get('paid_date') or today()
+        account_id = int(data.get('account_id')) if data.get('account_id') else None
+        create_tx = bool(data.get('create_transaction', True))
+
+        rec = conn.execute("SELECT * FROM finance_recurring_expenses WHERE id=?", (recurring_id,)).fetchone()
+        if not rec:
+            return {'ok': False, 'error': 'Gasto fijo no encontrado'}
+
+        tx_id = None
+        if create_tx and account_id and paid_amount > 0:
+            cur_tx = conn.execute("""
+                INSERT INTO finance_transactions
+                (account_id, category_id, type, amount, currency, date, description)
+                VALUES (?, ?, 'expense', ?, 'ARS', ?, ?)
+            """, (account_id, rec['category_id'], paid_amount, paid_date, f"Gasto fijo: {rec['name']} ({month:02d}/{year})"))
+            tx_id = cur_tx.lastrowid
+
+        conn.execute("""
+            INSERT INTO finance_recurring_logs
+            (recurring_id, month, year, paid_amount, paid_date, transaction_id, is_paid, notes)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?)
+            ON CONFLICT(recurring_id, month, year) DO UPDATE SET
+                paid_amount=excluded.paid_amount,
+                paid_date=excluded.paid_date,
+                transaction_id=COALESCE(excluded.transaction_id, finance_recurring_logs.transaction_id),
+                is_paid=1
+        """, (recurring_id, month, year, paid_amount, paid_date, tx_id, data.get('notes') or ''))
+
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def unmark_recurring_paid(log_id):
+    """Desmarca un gasto fijo como pagado y elimina la transacción vinculada si existe."""
+    conn = get_connection()
+    try:
+        log = conn.execute("SELECT transaction_id FROM finance_recurring_logs WHERE id=?", (log_id,)).fetchone()
+        if log:
+            if log['transaction_id']:
+                conn.execute("DELETE FROM finance_transactions WHERE id=?", (log['transaction_id'],))
+            conn.execute("DELETE FROM finance_recurring_logs WHERE id=?", (log_id,))
+            conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+# ===================== REGISTRO Y COMPARACIÓN DE SUELDOS =====================
+
+@eel.expose
+def get_finance_salaries(year=None):
+    """
+    Retorna la lista de los 12 meses del año con sueldos pactados/esperados vs cobrados,
+    calculando diferencias, faltantes y estado de pago.
+    """
+    now = datetime.now(AR_TZ)
+    if year is None or year == '':
+        year = now.year
+    else:
+        year = int(year)
+
+    conn = get_connection()
+    try:
+        rows = conn.execute("""
+            SELECT s.*, a.name as account_name, a.icon as account_icon
+            FROM finance_salaries s
+            LEFT JOIN finance_accounts a ON s.account_id = a.id
+            WHERE s.year = ?
+            ORDER BY s.month ASC
+        """, (year,)).fetchall()
+
+        by_month = {r['month']: dict(r) for r in rows}
+        month_names = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre']
+
+        months_list = []
+        tot_expected = 0.0
+        tot_received = 0.0
+        pending_cnt = 0
+
+        for m in range(1, 13):
+            sal = by_month.get(m)
+            exp = float(sal['expected_amount']) if sal else 0.0
+            rec = float(sal['received_amount']) if sal else 0.0
+            diff = round(rec - exp, 2)
+
+            is_fully = (rec >= exp and exp > 0)
+            is_under = (rec < exp and exp > 0)
+            if is_under or (exp > 0 and rec == 0):
+                pending_cnt += 1
+
+            tot_expected += exp
+            tot_received += rec
+
+            item = {
+                'month': m,
+                'month_name': month_names[m - 1],
+                'year': year,
+                'has_record': bool(sal),
+                'id': sal['id'] if sal else None,
+                'expected_amount': exp,
+                'received_amount': rec,
+                'difference': diff,
+                'difference_abs': abs(diff),
+                'is_fully_paid': is_fully,
+                'is_underpaid': is_under,
+                'payment_date': sal.get('payment_date') if sal else None,
+                'account_id': sal.get('account_id') if sal else None,
+                'account_name': sal.get('account_name') if sal else None,
+                'account_icon': sal.get('account_icon') if sal else None,
+                'status': sal.get('status', 'pending') if sal else ('paid_full' if is_fully else 'pending'),
+                'notes': sal.get('notes') if sal else '',
+                'transaction_id': sal.get('transaction_id') if sal else None
+            }
+            months_list.append(item)
+
+        tot_diff = round(tot_received - tot_expected, 2)
+        summary = {
+            'year': year,
+            'total_expected': round(tot_expected, 2),
+            'total_received': round(tot_received, 2),
+            'total_difference': tot_diff,
+            'total_difference_abs': abs(tot_diff),
+            'pending_months_count': pending_cnt,
+            'has_salaries': (tot_expected > 0 or tot_received > 0)
+        }
+        return {'ok': True, 'months': months_list, 'summary': summary}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def save_finance_salary(data):
+    """
+    Registra o actualiza el sueldo de un mes (monto que debería haber cobrado vs cobrado real).
+    Sincroniza opcionalmente el ingreso en finance_transactions impactando la cuenta bancaria.
+    """
+    conn = get_connection()
+    try:
+        month = int(data.get('month'))
+        year = int(data.get('year'))
+        expected = float(data.get('expected_amount') or 0.0)
+        received = float(data.get('received_amount') or 0.0)
+        pay_date = data.get('payment_date') or today()
+        account_id = int(data.get('account_id')) if data.get('account_id') else None
+        notes = (data.get('notes') or '').strip()
+        sync_tx = bool(data.get('sync_transaction', True))
+
+        # Determinar status
+        if received >= expected and expected > 0:
+            status = 'paid_full'
+        elif received > 0:
+            status = 'paid_partial'
+        else:
+            status = 'pending'
+
+        existing = conn.execute("SELECT * FROM finance_salaries WHERE month=? AND year=?", (month, year)).fetchone()
+        tx_id = existing['transaction_id'] if existing else None
+
+        # Sincronizar con movimiento de ingreso si se cobró dinero
+        if sync_tx and received > 0 and account_id:
+            c_row = conn.execute("SELECT id FROM finance_categories WHERE name LIKE '%Sueldo%' OR name LIKE '%Trabajo%' LIMIT 1").fetchone()
+            cat_id = c_row['id'] if c_row else None
+            month_names = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic']
+            desc = f"Sueldo {month_names[month - 1]} {year}" + (f" - {notes}" if notes else "")
+
+            if tx_id:
+                conn.execute("""
+                    UPDATE finance_transactions
+                    SET account_id=?, amount=?, date=?, description=?, category_id=?
+                    WHERE id=?
+                """, (account_id, received, pay_date, desc, cat_id, tx_id))
+            else:
+                cur_tx = conn.execute("""
+                    INSERT INTO finance_transactions
+                    (account_id, category_id, type, amount, currency, date, description)
+                    VALUES (?, ?, 'income', ?, 'ARS', ?, ?)
+                """, (account_id, cat_id, received, pay_date, desc))
+                tx_id = cur_tx.lastrowid
+        elif received == 0 and tx_id:
+            # Si se puso en 0, eliminar transacción previa
+            conn.execute("DELETE FROM finance_transactions WHERE id=?", (tx_id,))
+            tx_id = None
+
+        if existing:
+            conn.execute("""
+                UPDATE finance_salaries
+                SET expected_amount=?, received_amount=?, payment_date=?, account_id=?, status=?, notes=?, transaction_id=?
+                WHERE id=?
+            """, (expected, received, pay_date, account_id, status, notes, tx_id, existing['id']))
+        else:
+            conn.execute("""
+                INSERT INTO finance_salaries
+                (month, year, expected_amount, received_amount, payment_date, account_id, status, notes, transaction_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (month, year, expected, received, pay_date, account_id, status, notes, tx_id))
+
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def delete_finance_salary(id):
+    """Elimina un registro de sueldo."""
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT transaction_id FROM finance_salaries WHERE id=?", (id,)).fetchone()
+        if row and row['transaction_id']:
+            conn.execute("DELETE FROM finance_transactions WHERE id=?", (row['transaction_id'],))
+        conn.execute("DELETE FROM finance_salaries WHERE id=?", (id,))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+
+# ===================== SIRI SHORTCUTS & APPLE INTEGRATION =====================
+
+def get_or_create_shortcut_token():
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT value FROM config WHERE key='shortcut_token'").fetchone()
+        if row and row['value'] and len(row['value'].strip()) >= 16:
+            return row['value'].strip()
+        import secrets
+        token = secrets.token_hex(16)
+        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('shortcut_token', ?)", (token,))
+        conn.commit()
+        return token
+    finally:
+        conn.close()
+
+@eel.expose
+def get_shortcut_info():
+    """Retorna el token actual y los datos de conexión para Atajos de Siri."""
+    token = get_or_create_shortcut_token()
+    cloud_url = "https://nicolecarp.pythonanywhere.com"
+    return {
+        "ok": True,
+        "token": token,
+        "cloud_url": cloud_url,
+        "shortcut_endpoint": f"{cloud_url}/api/shortcut",
+        "actions": [
+            {
+                "id": "log_injection",
+                "name": "💉 Registrar Inyección TRH",
+                "desc": "Registra una dosis de Valerato de Estradiol y calcula la próxima fecha.",
+                "fields": ["dose_mg (opcional, ej: 4.0)", "notes (opcional)"]
+            },
+            {
+                "id": "create_task",
+                "name": "📌 Nueva Tarea Rápida",
+                "desc": "Crea una tarea pendiente en Nicole con área y prioridad.",
+                "fields": ["title (obligatorio)", "area ('personal'|'trabajo'|'universidad')", "priority ('low'|'medium'|'high')"]
+            },
+            {
+                "id": "log_weight",
+                "name": "⚖️ Registrar Peso Corporal",
+                "desc": "Registra el peso de hoy en el historial de mediciones de salud.",
+                "fields": ["weight (obligatorio, ej: 62.5)", "notes (opcional)"]
+            },
+            {
+                "id": "log_workout_set",
+                "name": "🏋️ Registrar Serie de Gimnasio",
+                "desc": "Anota una serie en el entrenamiento de hoy manos libres.",
+                "fields": ["exercise_name (obligatorio, ej: 'Sentadilla')", "weight (kilos)", "reps (repeticiones)"]
+            },
+            {
+                "id": "daily_summary",
+                "name": "☀️ Resumen del Día",
+                "desc": "Genera un texto listo para que Siri lo lea en voz alta con tareas, salud y facu.",
+                "fields": []
+            },
+            {
+                "id": "create_reimbursement",
+                "name": "💵 Registrar Viático de Campo",
+                "desc": "Anota un gasto de transporte o comida en campo.",
+                "fields": ["amount (obligatorio, soles)", "concept (obligatorio, ej: 'Taxi a Huachipa')"]
+            }
+        ]
+    }
+
+@eel.expose
+def regenerate_shortcut_token():
+    """Genera un nuevo token seguro para Atajos de Siri."""
+    import secrets
+    new_token = secrets.token_hex(16)
+    conn = get_connection()
+    try:
+        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('shortcut_token', ?)", (new_token,))
+        conn.commit()
+        return {"ok": True, "token": new_token}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    finally:
+        conn.close()
+
+@eel.expose
+def handle_shortcut_action(action, payload=None):
+    """
+    Enrutador central de acciones ejecutadas desde Apple Shortcuts / Siri.
+    Devuelve siempre un campo 'message' amigable redactado para lectura por voz de Siri.
+    """
+    if payload is None:
+        payload = {}
+    elif not isinstance(payload, dict):
+        payload = {}
+
+    act = (action or "").strip().lower()
+
+    if act in ("log_injection", "injection", "inyeccion"):
+        return _shortcut_log_injection(payload)
+    elif act in ("create_task", "task", "tarea"):
+        return _shortcut_create_task(payload)
+    elif act in ("log_weight", "weight", "peso"):
+        return _shortcut_log_weight(payload)
+    elif act in ("log_workout_set", "workout_set", "serie", "gym"):
+        return _shortcut_log_workout_set(payload)
+    elif act in ("daily_summary", "summary", "resumen", "briefing"):
+        return _shortcut_daily_summary(payload)
+    elif act in ("create_reimbursement", "reimbursement", "viatico", "gasto"):
+        return _shortcut_create_reimbursement(payload)
+    else:
+        return {
+            "ok": False,
+            "error": f"Acción desconocida: '{action}'",
+            "message": f"Acción no reconocida en Nicole: {action}."
+        }
+
+
+def _shortcut_log_injection(payload):
+    dose_raw = payload.get("dose_mg") or payload.get("dosis")
+    try:
+        dose_mg = float(str(dose_raw).replace(",", ".")) if dose_raw else 4.0
+    except ValueError:
+        dose_mg = 4.0
+
+    inj_date = payload.get("date") or today()
+    site = payload.get("injection_site") or payload.get("sitio") or "Glúteo"
+    notes = payload.get("notes") or "Registrado vía Atajo de Siri"
+
+    res = create_injection({
+        "date": inj_date,
+        "dose_mg": dose_mg,
+        "injection_site": site,
+        "notes": notes
+    })
+    if not res.get("ok"):
+        return {"ok": False, "message": f"No se pudo registrar la inyección: {res.get('error')}"}
+
+    try:
+        d_obj = date.fromisoformat(inj_date)
+        next_date = d_obj + timedelta(days=7)
+        dias_semana = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+        dia_nom = dias_semana[next_date.weekday()]
+        next_str = f"Próxima dosis recomendada: {dia_nom} {next_date.strftime('%d/%m')}."
+    except Exception:
+        next_str = ""
+
+    msg = f"Inyección de {dose_mg:.1f} miligramos registrada exitosamente. {next_str}".strip()
+    return {
+        "ok": True,
+        "message": msg,
+        "id": res.get("id"),
+        "dose_mg": dose_mg,
+        "date": inj_date
+    }
+
+
+def _shortcut_create_task(payload):
+    title = (payload.get("title") or payload.get("titulo") or "").strip()
+    if not title:
+        return {"ok": False, "message": "Falta indicar el título de la tarea."}
+
+    area_raw = str(payload.get("area") or payload.get("area_id") or "").lower()
+    area_id = 3
+    if any(k in area_raw for k in ("trabaj", "lab", "empresa", "pest", "1")):
+        area_id = 1
+    elif any(k in area_raw for k in ("uni", "facu", "estud", "utn", "2")):
+        area_id = 2
+
+    priority = str(payload.get("priority") or payload.get("prioridad") or "medium").lower()
+    if priority not in ("low", "medium", "high"):
+        priority = "medium"
+
+    due_date = payload.get("due_date") or payload.get("fecha") or None
+
+    res = create_task({
+        "title": title,
+        "area_id": area_id,
+        "priority": priority,
+        "due_date": due_date,
+        "category": "Atajo Siri"
+    })
+    if not res.get("ok"):
+        return {"ok": False, "message": f"Error al guardar la tarea: {res.get('error')}"}
+
+    nombres_areas = {1: "Trabajo", 2: "Universidad", 3: "Personal"}
+    area_nom = nombres_areas.get(area_id, "Personal")
+    msg = f"Tarea anotada: '{title}' en el área {area_nom}."
+    return {
+        "ok": True,
+        "message": msg,
+        "id": res.get("id"),
+        "title": title,
+        "area": area_nom
+    }
+
+
+def _shortcut_log_weight(payload):
+    w_raw = payload.get("weight") or payload.get("peso")
+    if not w_raw:
+        return {"ok": False, "message": "Falta indicar el peso en kilogramos."}
+    try:
+        w = float(str(w_raw).replace(",", "."))
+    except ValueError:
+        return {"ok": False, "message": "El valor del peso no es un número válido."}
+
+    m_date = payload.get("date") or today()
+    notes = payload.get("notes") or "Registrado vía Atajo de Siri"
+
+    res = create_body_measurement({
+        "date": m_date,
+        "weight": w,
+        "notes": notes
+    })
+    if not res.get("ok"):
+        return {"ok": False, "message": f"Error al registrar peso: {res.get('error')}"}
+
+    msg = f"Peso registrado: {w:.1f} kilos en tu historial de salud."
+    return {
+        "ok": True,
+        "message": msg,
+        "weight": w,
+        "date": m_date
+    }
+
+
+def _shortcut_log_workout_set(payload):
+    ex_name = (payload.get("exercise_name") or payload.get("ejercicio") or payload.get("name") or "").strip()
+    if not ex_name:
+        return {"ok": False, "message": "Falta indicar el nombre del ejercicio."}
+
+    w_raw = payload.get("weight") or payload.get("peso") or 0
+    r_raw = payload.get("reps") or payload.get("repeticiones") or 0
+    try:
+        weight = float(str(w_raw).replace(",", "."))
+        reps = int(r_raw)
+    except ValueError:
+        return {"ok": False, "message": "Peso o repeticiones con formato inválido."}
+
+    t_date = payload.get("date") or today()
+    conn = get_connection()
+    try:
+        sess = conn.execute("SELECT id FROM workout_sessions WHERE date=? ORDER BY id DESC LIMIT 1", (t_date,)).fetchone()
+        if sess:
+            session_id = sess["id"]
+        else:
+            cur = conn.execute("""
+                INSERT INTO workout_sessions (day_name, date, duration_minutes, notes)
+                VALUES ('Sesión Rápida (Siri)', ?, 0, 'Iniciada por Atajo de Siri')
+            """, (t_date,))
+            session_id = cur.lastrowid
+
+        prev_count = conn.execute("""
+            SELECT COUNT(*) as c FROM workout_set_logs WHERE session_id=? AND exercise_name=?
+        """, (session_id, ex_name)).fetchone()["c"]
+        set_num = prev_count + 1
+
+        conn.execute("""
+            INSERT INTO workout_set_logs (session_id, exercise_name, set_number, weight_kg, reps, duration_sec, completed, date)
+            VALUES (?, ?, ?, ?, ?, 0, 1, ?)
+        """, (session_id, ex_name, set_num, weight, reps, t_date))
+
+        if weight > 0:
+            conn.execute("UPDATE workout_exercises SET default_weight_kg=? WHERE name=?", (weight, ex_name))
+
+        _sync_exercise_habits_for_date(conn, t_date)
+        conn.commit()
+
+        msg = f"Serie {set_num} de {ex_name} anotada: {weight:.1f} kilos por {reps} repeticiones."
+        return {
+            "ok": True,
+            "message": msg,
+            "session_id": session_id,
+            "exercise": ex_name,
+            "set_number": set_num,
+            "weight": weight,
+            "reps": reps
+        }
+    except Exception as e:
+        return {"ok": False, "message": f"Error al guardar la serie: {str(e)}"}
+    finally:
+        conn.close()
+
+
+def _shortcut_daily_summary(payload=None):
+    conn = get_connection()
+    try:
+        t_date = today()
+
+        # 1. Tareas pendientes
+        tasks = conn.execute("""
+            SELECT title FROM tasks 
+            WHERE status!='completed' AND (due_date<=? OR due_date IS NULL)
+            ORDER BY priority DESC, due_date ASC LIMIT 5
+        """, (t_date,)).fetchall()
+        t_count = len(tasks)
+
+        # 2. Inyección TRH
+        last_inj = conn.execute("SELECT date, dose_mg FROM injections ORDER BY date DESC LIMIT 1").fetchone()
+        inj_text = ""
+        if last_inj:
+            last_d = date.fromisoformat(last_inj["date"])
+            diff = (date.fromisoformat(t_date) - last_d).days
+            if diff >= 7:
+                inj_text = f"¡Atención con tu salud! Hoy o ya te toca inyección de estradiol, pasaron {diff} días desde la última."
+            else:
+                dias_rest = 7 - diff
+                dias_semana = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+                proximo_dia = dias_semana[(last_d + timedelta(days=7)).weekday()]
+                inj_text = f"Tu última inyección fue hace {diff} días, la próxima toca el {proximo_dia}."
+
+        # 3. Examen UTN FRA
+        next_exam = conn.execute("""
+            SELECT e.date, e.type, s.name as subject_name
+            FROM exams e JOIN subjects s ON e.subject_id=s.id
+            WHERE e.date>=? AND e.status='pending'
+            ORDER BY e.date ASC LIMIT 1
+        """, (t_date,)).fetchone()
+        exam_text = ""
+        if next_exam:
+            ex_d = date.fromisoformat(next_exam["date"])
+            days_to_ex = (ex_d - date.fromisoformat(t_date)).days
+            if days_to_ex == 0:
+                exam_text = f"¡Hoy tienes examen de {next_exam['subject_name']}!"
+            elif days_to_ex == 1:
+                exam_text = f"Mañana tienes examen de {next_exam['subject_name']}."
+            else:
+                exam_text = f"Tu próximo examen de la facu es {next_exam['subject_name']} en {days_to_ex} días."
+
+        # 4. Documentos de trabajo por vencer en 15 días
+        exp_docs = conn.execute("""
+            SELECT ed.doc_type, e.full_name
+            FROM employee_documents ed JOIN employees e ON ed.employee_id=e.id
+            WHERE ed.expiry_date>=? AND ed.expiry_date<=date(?,'+15 days')
+            ORDER BY ed.expiry_date ASC LIMIT 2
+        """, (t_date, t_date)).fetchall()
+        doc_text = ""
+        if exp_docs:
+            items = [f"{d['doc_type']} de {d['full_name']}" for d in exp_docs]
+            doc_text = f"En operaciones vencen pronto: {', '.join(items)}."
+
+        parts = []
+        if t_count == 0:
+            parts.append("No tienes tareas pendientes urgentes para hoy.")
+        elif t_count == 1:
+            parts.append("Tienes 1 tarea pendiente para hoy.")
+        else:
+            parts.append(f"Tienes {t_count} tareas pendientes para hoy.")
+
+        if inj_text:
+            parts.append(inj_text)
+        if exam_text:
+            parts.append(exam_text)
+        if doc_text:
+            parts.append(doc_text)
+
+        spoken = " ".join(parts)
+        return {
+            "ok": True,
+            "message": spoken,
+            "task_count": t_count,
+            "date": t_date
+        }
+    except Exception as e:
+        return {"ok": False, "message": f"Error al generar resumen: {str(e)}"}
+    finally:
+        conn.close()
+
+
+def _shortcut_create_reimbursement(payload):
+    amt_raw = payload.get("amount") or payload.get("monto")
+    if not amt_raw:
+        return {"ok": False, "message": "Falta indicar el monto del viático."}
+    try:
+        amount = float(str(amt_raw).replace(",", "."))
+    except ValueError:
+        return {"ok": False, "message": "Monto inválido."}
+
+    concept = (payload.get("concept") or payload.get("concepto") or "Gasto en campo (Siri)").strip()
+    conn = get_connection()
+    try:
+        emp_id = payload.get("employee_id")
+        if not emp_id:
+            emp = conn.execute("SELECT id FROM employees WHERE is_active=1 ORDER BY id ASC LIMIT 1").fetchone()
+            if not emp:
+                emp = conn.execute("SELECT id FROM employees ORDER BY id ASC LIMIT 1").fetchone()
+            if not emp:
+                cur_emp = conn.execute("INSERT INTO employees (full_name, position, is_active) VALUES ('Personal Principal', 'Operador', 1)")
+                emp_id = cur_emp.lastrowid
+            else:
+                emp_id = emp["id"]
+        else:
+            emp_id = int(emp_id)
+
+        cur = conn.execute("""
+            INSERT INTO reimbursements (employee_id, date, concept, amount, status)
+            VALUES (?, ?, ?, ?, 'pending')
+        """, (emp_id, today(), concept, amount))
+        conn.commit()
+        msg = f"Viático de S/ {amount:.2f} registrado para '{concept}'."
+        return {"ok": True, "message": msg, "id": cur.lastrowid, "amount": amount}
+    except Exception as e:
+        return {"ok": False, "message": f"Error al guardar el viático: {str(e)}"}
     finally:
         conn.close()
 

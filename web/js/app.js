@@ -4222,7 +4222,12 @@ async function renderWorkDocuments(el) {
             const du = daysUntil(d.expiry_date);
             const cls = du !== null && du < 0 ? 'tag-rose' : du !== null && du <= 30 ? 'tag-gold' : 'tag-sage';
             const label = du !== null && du < 0 ? 'Vencido' : du !== null ? `${du}d` : '-';
-            const fileIcon = d.file_name ? '<span style="cursor:pointer" onclick="downloadDocFile('+d.id+')" title="'+esc(d.file_name)+'">📎</span>' : '-';
+            let fileIcon = '-';
+            if (d.external_url) {
+                fileIcon = `<a href="${esc(d.external_url)}" target="_blank" rel="noopener noreferrer" class="tag tag-primary" style="text-decoration:none;display:inline-flex;align-items:center;gap:3px;font-size:0.75rem" title="Abrir en OneDrive / Nube">☁️ OneDrive ↗</a>`;
+            } else if (d.file_name) {
+                fileIcon = '<span style="cursor:pointer" onclick="downloadDocFile('+d.id+')" title="'+esc(d.file_name)+'">📎</span>';
+            }
             html += `<tr><td><strong>${esc(d.full_name)}</strong></td><td>${esc(d.doc_type)}</td>
                 <td>${esc(d.doc_number || '-')}</td><td>${fmtDate(d.expiry_date)}</td>
                 <td><span class="tag ${cls}">${label}</span></td>
@@ -4237,7 +4242,7 @@ async function renderWorkDocuments(el) {
     el.innerHTML = html;
 }
 
-const DOC_TYPES = ['MATPEL','EMO','Inducción','Licencia','Certificado','Otro'];
+const DOC_TYPES = ['SCTR','MATPEL','EMO','Inducción','Licencia','Certificado','Otro'];
 
 function showDocForm(id) {
     if (id) {
@@ -4270,7 +4275,11 @@ function showDocModal(doc, employees) {
         <div class="form-group"><label>N° Documento</label><input class="form-control" name="doc_number" value="${esc(doc ? doc.doc_number : '')}"></div>
         <div class="form-row"><div class="form-group"><label>Emisión</label><input type="date" class="form-control" name="issue_date" value="${doc ? doc.issue_date : ''}"></div>
         <div class="form-group"><label>Vencimiento *</label><input type="date" class="form-control" name="expiry_date" value="${doc ? doc.expiry_date : ''}"></div></div>
-        <div class="form-group"><label>Archivo</label>
+        <div class="form-group"><label>Enlace OneDrive / Nube</label>
+            <input type="url" class="form-control" name="external_url" placeholder="https://1drv.ms/... (vínculo compartido de OneDrive)" value="${esc(doc ? doc.external_url || '' : '')}">
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-top:3px">💡 Pega el enlace de OneDrive para abrir el PDF original sin ocupar espacio en la base de datos.</div>
+        </div>
+        <div class="form-group"><label>Archivo Local (opcional)</label>
             <input type="file" class="form-control" name="file_input" id="docFileInput" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
             ${hasFile ? '<div style="margin-top:4px;font-size:0.8rem;color:#888">Archivo actual: '+esc(doc.file_name)+'</div>' : ''}
         </div>
@@ -4279,9 +4288,10 @@ function showDocModal(doc, employees) {
     openModal(doc ? 'Editar documento' : 'Nuevo documento', html);
     document.getElementById('modalSave').onclick = async () => {
         const f = new FormData(document.getElementById('modalForm'));
+        const extUrl = f.get('external_url') ? f.get('external_url').trim() : null;
         const data = { employee_id: parseInt(f.get('employee_id')), doc_type: f.get('doc_type'),
             doc_number: f.get('doc_number'), issue_date: f.get('issue_date'),
-            expiry_date: f.get('expiry_date'), notes: f.get('notes') };
+            expiry_date: f.get('expiry_date'), notes: f.get('notes'), external_url: extUrl };
         if (!data.employee_id || !data.doc_type) { showToast('Completa los campos obligatorios'); return; }
         let res = doc ? await api(eel.update_employee_document, doc.id, data) : await api(eel.create_employee_document, data);
         if (!res || !res.ok) { showToast('Error'); return; }
@@ -9261,6 +9271,7 @@ async function deleteCosplayItemFromModal(projectId, itemId) {
 async function renderSettings(el) {
     const cloudUrl = 'https://nicolecarp.pythonanywhere.com';
     const qrSrc = `https://api.qrserver.com/v1/create-qr-code/?size=160x160&margin=8&data=${encodeURIComponent(cloudUrl)}`;
+    const sInfo = await api(eel.get_shortcut_info) || { token: '', shortcut_endpoint: `${cloudUrl}/api/shortcut` };
 
     const hasNotifApi = ('Notification' in window);
     const perm = hasNotifApi ? Notification.permission : 'unsupported';
@@ -9352,7 +9363,205 @@ async function renderSettings(el) {
                 </div>
             </div>
         </div>
+
+        <div class="card" style="margin-top:18px">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+                <div>
+                    <div style="font-size:1rem;font-weight:700">🍏 Atajos de Siri & Apple Shortcuts</div>
+                    <div style="font-size:0.8rem;color:var(--text-muted);margin-top:2px">Comandos de voz con Siri, Botón de Acción o widgets en iPhone y Apple Watch</div>
+                </div>
+                <span class="tag tag-sage">Listo para usar ⚡</span>
+            </div>
+
+            <div style="padding:12px 14px;border-radius:12px;background:rgba(255,255,255,0.03);border:1px solid var(--border-light);margin-bottom:16px">
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+                    <span style="font-size:0.84rem;font-weight:600">🔑 Token Secreto de Atajos:</span>
+                    <div style="display:flex;gap:8px">
+                        <button type="button" class="btn btn-secondary btn-sm" onclick="copyShortcutToken('${esc(sInfo.token)}')">📋 Copiar Token</button>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="regenerateSiriToken()">🔄 Regenerar</button>
+                    </div>
+                </div>
+                <code style="display:block;padding:8px 12px;border-radius:8px;background:var(--bg-card);font-size:0.85rem;font-family:monospace;word-break:break-all;color:var(--primary);user-select:all">${esc(sInfo.token)}</code>
+                <div style="font-size:0.75rem;color:var(--text-muted);margin-top:8px">
+                    URL Base: <code>${esc(sInfo.shortcut_endpoint)}</code>
+                </div>
+            </div>
+
+            <div style="font-size:0.88rem;font-weight:600;margin-bottom:10px">🎙️ Atajos configurados y listos:</div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(260px, 1fr));gap:10px">
+                <div style="padding:12px;border-radius:10px;background:var(--bg-card);border:1px solid var(--border-light)">
+                    <div style="font-weight:700;font-size:0.88rem;margin-bottom:4px">💉 Registrar Inyección TRH</div>
+                    <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:8px">"Oye Siri, registrar inyección"</div>
+                    <div style="font-size:0.75rem">Acción: <code>log_injection</code></div>
+                    <button class="btn btn-ghost btn-sm" style="margin-top:8px;width:100%" onclick="showShortcutSetupModal('log_injection')">ℹ️ Cómo configurar en iPhone</button>
+                </div>
+                <div style="padding:12px;border-radius:10px;background:var(--bg-card);border:1px solid var(--border-light)">
+                    <div style="font-weight:700;font-size:0.88rem;margin-bottom:4px">🏋️ Registrar Serie de Gym</div>
+                    <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:8px">"Oye Siri, serie de Sentadilla"</div>
+                    <div style="font-size:0.75rem">Acción: <code>log_workout_set</code></div>
+                    <button class="btn btn-ghost btn-sm" style="margin-top:8px;width:100%" onclick="showShortcutSetupModal('log_workout_set')">ℹ️ Cómo configurar en iPhone</button>
+                </div>
+                <div style="padding:12px;border-radius:10px;background:var(--bg-card);border:1px solid var(--border-light)">
+                    <div style="font-weight:700;font-size:0.88rem;margin-bottom:4px">☀️ Resumen del Día (Briefing)</div>
+                    <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:8px">"Oye Siri, ¿qué tengo hoy en Nicole?"</div>
+                    <div style="font-size:0.75rem">Acción: <code>daily_summary</code></div>
+                    <button class="btn btn-ghost btn-sm" style="margin-top:8px;width:100%" onclick="showShortcutSetupModal('daily_summary')">ℹ️ Cómo configurar en iPhone</button>
+                </div>
+                <div style="padding:12px;border-radius:10px;background:var(--bg-card);border:1px solid var(--border-light)">
+                    <div style="font-weight:700;font-size:0.88rem;margin-bottom:4px">⚖️ Registrar Peso Corporal</div>
+                    <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:8px">"Oye Siri, registrar peso"</div>
+                    <div style="font-size:0.75rem">Acción: <code>log_weight</code></div>
+                    <button class="btn btn-ghost btn-sm" style="margin-top:8px;width:100%" onclick="showShortcutSetupModal('log_weight')">ℹ️ Cómo configurar en iPhone</button>
+                </div>
+                <div style="padding:12px;border-radius:10px;background:var(--bg-card);border:1px solid var(--border-light)">
+                    <div style="font-weight:700;font-size:0.88rem;margin-bottom:4px">📌 Nueva Tarea Rápida</div>
+                    <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:8px">"Oye Siri, nueva tarea: Comprar..."</div>
+                    <div style="font-size:0.75rem">Acción: <code>create_task</code></div>
+                    <button class="btn btn-ghost btn-sm" style="margin-top:8px;width:100%" onclick="showShortcutSetupModal('create_task')">ℹ️ Cómo configurar en iPhone</button>
+                </div>
+                <div style="padding:12px;border-radius:10px;background:var(--bg-card);border:1px solid var(--border-light)">
+                    <div style="font-weight:700;font-size:0.88rem;margin-bottom:4px">💵 Registrar Viático de Campo</div>
+                    <div style="font-size:0.78rem;color:var(--text-muted);margin-bottom:8px">"Oye Siri, viático taxi 20 soles"</div>
+                    <div style="font-size:0.75rem">Acción: <code>create_reimbursement</code></div>
+                    <button class="btn btn-ghost btn-sm" style="margin-top:8px;width:100%" onclick="showShortcutSetupModal('create_reimbursement')">ℹ️ Cómo configurar en iPhone</button>
+                </div>
+            </div>
+        </div>
     </div>`;
+}
+
+function copyShortcutToken(token) {
+    if (!token) { showToast('Token no disponible'); return; }
+    navigator.clipboard.writeText(token).then(() => {
+        showToast('🔑 Token copiado al portapapeles');
+    }).catch(() => {
+        copyLanUrl(token);
+    });
+}
+
+async function regenerateSiriToken() {
+    if (!confirm('¿Regenerar el token de Atajos de Siri? Deberás actualizar el token en tus Atajos de iPhone configurados.')) return;
+    const res = await api(eel.regenerate_shortcut_token);
+    if (res && res.ok) {
+        showToast('✨ Nuevo token generado');
+        navigate('settings');
+    } else {
+        showToast('Error al regenerar token');
+    }
+}
+
+async function showShortcutSetupModal(actionId) {
+    const sInfo = await api(eel.get_shortcut_info) || {};
+    const token = sInfo.token || '';
+    const cloudUrl = sInfo.cloud_url || 'https://nicolecarp.pythonanywhere.com';
+
+    const guides = {
+        'daily_summary': {
+            title: '☀️ Atajo: Resumen del Día',
+            phrase: '¿Qué tengo hoy en Nicole?',
+            method: 'GET',
+            url: `${cloudUrl}/api/shortcut/daily_summary?token=${token}`,
+            steps: [
+                'Abre la app <strong>Atajos</strong> en tu iPhone y toca el <strong>+</strong>.',
+                'Nombra el atajo: <em>¿Qué tengo hoy en Nicole?</em>',
+                'Agrega la acción: <strong>Obtener contenido de URL</strong>.',
+                `Configura la URL: <code style="word-break:break-all">${cloudUrl}/api/shortcut/daily_summary?token=${token}</code> (Método: GET).`,
+                'Agrega la acción: <strong>Obtener valor de diccionario</strong> con clave: <code>message</code>.',
+                'Agrega la acción: <strong>Leer texto con voz</strong> pasando el valor anterior.',
+                '¡Listo! Ahora di <em>"Oye Siri, ¿qué tengo hoy en Nicole?"</em> y Siri te hablará con tu agenda.'
+            ]
+        },
+        'log_injection': {
+            title: '💉 Atajo: Registrar Inyección TRH',
+            phrase: 'Registrar inyección',
+            method: 'POST',
+            url: `${cloudUrl}/api/shortcut/log_injection?token=${token}`,
+            steps: [
+                'Abre la app <strong>Atajos</strong> en tu iPhone y toca <strong>+</strong>.',
+                'Nombra el atajo: <em>Registrar inyección</em>.',
+                'Agrega la acción: <strong>Obtener contenido de URL</strong> con método <strong>POST</strong>.',
+                `URL: <code style="word-break:break-all">${cloudUrl}/api/shortcut/log_injection?token=${token}</code>.`,
+                'En el cuerpo JSON, puedes incluir (opcional): <code>dose_mg</code>: 4.0.',
+                'Agrega: <strong>Obtener valor de diccionario</strong> (clave: <code>message</code>) → <strong>Leer texto con voz</strong>.',
+                '¡Listo! También puedes asignarlo al <strong>Botón de Acción</strong> del iPhone.'
+            ]
+        },
+        'log_weight': {
+            title: '⚖️ Atajo: Registrar Peso',
+            phrase: 'Registrar peso',
+            method: 'POST',
+            url: `${cloudUrl}/api/shortcut/log_weight?token=${token}`,
+            steps: [
+                'Abre <strong>Atajos</strong> y toca <strong>+</strong>.',
+                'Agrega la acción: <strong>Solicitar entrada</strong> (Tipo: Número, Pregunta: "¿Cuánto pesas hoy?").',
+                'Agrega: <strong>Obtener contenido de URL</strong> con método <strong>POST</strong>.',
+                `URL: <code style="word-break:break-all">${cloudUrl}/api/shortcut/log_weight?token=${token}</code>.',
+                'En el cuerpo JSON agrega: clave <code>weight</code> con el valor de la <strong>Entrada provista</strong>.',
+                'Agrega: <strong>Obtener valor de diccionario</strong> (clave: <code>message</code>) → <strong>Leer con voz</strong>.'
+            ]
+        },
+        'log_workout_set': {
+            title: '🏋️ Atajo: Registrar Serie de Gimnasio',
+            phrase: 'Anotar serie',
+            method: 'POST',
+            url: `${cloudUrl}/api/shortcut/log_workout_set?token=${token}`,
+            steps: [
+                'Abre <strong>Atajos</strong> y toca <strong>+</strong>.',
+                'Agrega: <strong>Solicitar entrada</strong> (Texto: "¿Qué ejercicio?").',
+                'Agrega: <strong>Solicitar entrada</strong> (Número: "¿Kilos?").',
+                'Agrega: <strong>Solicitar entrada</strong> (Número: "¿Repeticiones?").',
+                'Agrega: <strong>Obtener contenido de URL</strong> (POST).',
+                `URL: <code style="word-break:break-all">${cloudUrl}/api/shortcut/log_workout_set?token=${token}</code>.',
+                'En el cuerpo JSON agrega los campos: <code>exercise_name</code>, <code>weight</code> y <code>reps</code>.',
+                'Agrega: <strong>Leer texto con voz</strong> con el valor de la clave <code>message</code>.'
+            ]
+        },
+        'create_task': {
+            title: '📌 Atajo: Nueva Tarea',
+            phrase: 'Nueva tarea en Nicole',
+            method: 'POST',
+            url: `${cloudUrl}/api/shortcut/create_task?token=${token}`,
+            steps: [
+                'Abre <strong>Atajos</strong> y toca <strong>+</strong>.',
+                'Agrega: <strong>Solicitar entrada</strong> (Texto: "¿Qué tarea quieres anotar?").',
+                'Agrega: <strong>Obtener contenido de URL</strong> (POST).',
+                `URL: <code style="word-break:break-all">${cloudUrl}/api/shortcut/create_task?token=${token}</code>.',
+                'En el cuerpo JSON agrega: <code>title</code> con la entrada provista y <code>area</code>: personal.',
+                'Agrega: <strong>Leer texto con voz</strong> con <code>message</code>.'
+            ]
+        },
+        'create_reimbursement': {
+            title: '💵 Atajo: Registrar Viático',
+            phrase: 'Registrar viático',
+            method: 'POST',
+            url: `${cloudUrl}/api/shortcut/create_reimbursement?token=${token}`,
+            steps: [
+                'Abre <strong>Atajos</strong> y toca <strong>+</strong>.',
+                'Agrega: <strong>Solicitar entrada</strong> (Número: "¿Monto en soles?").',
+                'Agrega: <strong>Solicitar entrada</strong> (Texto: "¿Concepto o motivo?").',
+                'Agrega: <strong>Obtener contenido de URL</strong> (POST).',
+                `URL: <code style="word-break:break-all">${cloudUrl}/api/shortcut/create_reimbursement?token=${token}</code>.',
+                'En el cuerpo JSON agrega: <code>amount</code> y <code>concept</code>.',
+                'Agrega: <strong>Leer texto con voz</strong> con <code>message</code>.'
+            ]
+        }
+    };
+
+    const g = guides[actionId] || guides['daily_summary'];
+    const stepsHtml = g.steps.map((st, i) => `<li style="margin-bottom:8px">${st}</li>`).join('');
+
+    const html = `<div style="font-size:0.88rem;line-height:1.5">
+        <div style="padding:10px 14px;border-radius:10px;background:var(--primary-light);color:var(--primary);margin-bottom:14px">
+            🗣️ <strong>Frase de activación con Siri:</strong> <em>"${g.phrase}"</em>
+        </div>
+        <div style="font-weight:600;margin-bottom:6px">📋 Pasos en la app Atajos de iOS:</div>
+        <ol style="padding-left:20px;margin-bottom:16px">${stepsHtml}</ol>
+        <div style="margin-top:14px">
+            <button class="btn btn-secondary btn-sm" onclick="copyLanUrl('${esc(g.url)}')">📋 Copiar URL del Atajo</button>
+        </div>
+    </div>`;
+
+    openModal(g.title, html);
 }
 
 async function syncCloudFromGithub() {
@@ -9382,6 +9591,9 @@ function copyLanUrl(url) {
 
 // ===== GLOBAL: expose functions to HTML onclick =====
 window.navigate = navigate;
+window.copyShortcutToken = copyShortcutToken;
+window.regenerateSiriToken = regenerateSiriToken;
+window.showShortcutSetupModal = showShortcutSetupModal;
 window.switchWorkTab = switchWorkTab;
 window.calMove = calMove;
 window.showTaskForm = showTaskForm;
@@ -9528,14 +9740,21 @@ async function renderFinance(el) {
     const summary = (summaryRes && summaryRes.ok) ? summaryRes : {
         total_income: 0, total_expense: 0, net_balance: 0,
         expenses_by_category: [], incomes_by_category: [],
-        accounts: [], goal: null, transactions: []
+        accounts: [], goal: null, transactions: [],
+        debts_summary: { total_original: 0, total_paid: 0, total_remaining: 0, progress_percent: 0, active_count: 0, paid_count: 0 },
+        recurring_summary: { total_expected: 0, total_paid: 0, total_pending: 0, total_items: 0, paid_count: 0, pending_count: 0 },
+        salary_summary: { has_record: false, expected_amount: 0, received_amount: 0, difference: 0, status: 'pending' }
     };
 
     const months = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
     const tabs = [
-        { id: 'resumen', label: '📊 Resumen & Movimientos' },
+        { id: 'resumen', label: '📊 Resumen' },
+        { id: 'movimientos', label: '💸 Gastos y Movimientos' },
+        { id: 'fijos', label: '📅 Gastos Fijos' },
+        { id: 'deudas', label: '💳 Deudas & Avance' },
+        { id: 'sueldos', label: '💼 Sueldos (Esperado vs Cobrado)' },
         { id: 'meta', label: '🗽 Meta Operación USD' },
-        { id: 'cuentas', label: '💳 Cuentas & Billeteras' },
+        { id: 'cuentas', label: '🏦 Cuentas & Billeteras' },
     ];
 
     let monthOptions = '';
@@ -9547,19 +9766,42 @@ async function renderFinance(el) {
         yearOptions += `<option value="${y}" ${y === year ? 'selected' : ''}>${y}</option>`;
     });
 
+    let actionButtons = '';
+    if (tab === 'resumen' || tab === 'movimientos') {
+        actionButtons = `
+            <button class="btn btn-secondary" onclick="showGoalContributionModal()">🗽 Sumar a Operación</button>
+            <button class="btn btn-primary" onclick="showNewFinanceTransactionModal()">+ Nuevo movimiento</button>
+        `;
+    } else if (tab === 'fijos') {
+        actionButtons = `<button class="btn btn-primary" onclick="showFinanceRecurringModal()">+ Nuevo Gasto Fijo</button>`;
+    } else if (tab === 'deudas') {
+        actionButtons = `<button class="btn btn-primary" onclick="showFinanceDebtModal()">+ Nueva Deuda</button>`;
+    } else if (tab === 'sueldos') {
+        actionButtons = `<button class="btn btn-primary" onclick="showFinanceSalaryModal(${month}, ${year})">+ Cargar Sueldo</button>`;
+    } else if (tab === 'meta') {
+        actionButtons = `
+            <button class="btn btn-secondary" onclick="showGoalConfigModal()">⚙️ Configurar Meta</button>
+            <button class="btn btn-primary" onclick="showGoalContributionModal()">+ Sumar Aporte</button>
+        `;
+    } else if (tab === 'cuentas') {
+        actionButtons = `
+            <button class="btn btn-secondary" onclick="showFinanceTransferModal()">⇆ Transferir</button>
+            <button class="btn btn-primary" onclick="showFinanceAccountModal()">+ Nueva Cuenta</button>
+        `;
+    }
+
     let html = `
     <div class="page-header" style="margin-bottom:14px">
         <div>
             <h1>Finanzas</h1>
-            <div class="subtitle">Control de gastos, ingresos y meta de ahorro</div>
+            <div class="subtitle">Control de gastos, ingresos, deudas, sueldos y ahorro</div>
         </div>
         <div class="page-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <div style="display:flex;gap:4px;align-items:center">
                 <select class="form-control" style="width:auto;padding:6px 10px;font-size:0.82rem" onchange="changeFinancePeriod(this.value, null)">${monthOptions}</select>
                 <select class="form-control" style="width:auto;padding:6px 10px;font-size:0.82rem" onchange="changeFinancePeriod(null, this.value)">${yearOptions}</select>
             </div>
-            <button class="btn btn-secondary" onclick="showGoalContributionModal()">🗽 Sumar a Operación</button>
-            <button class="btn btn-primary" onclick="showNewFinanceTransactionModal()">+ Nuevo movimiento</button>
+            ${actionButtons}
         </div>
     </div>
     <div class="subnav">
@@ -9571,6 +9813,10 @@ async function renderFinance(el) {
     const content = el.querySelector('#financeContent');
 
     if (tab === 'resumen') renderFinanceResumen(content, summary);
+    else if (tab === 'movimientos') renderFinanceMovimientos(content, summary);
+    else if (tab === 'fijos') await renderFinanceFijos(content, summary);
+    else if (tab === 'deudas') await renderFinanceDeudas(content, summary);
+    else if (tab === 'sueldos') await renderFinanceSueldos(content, summary);
     else if (tab === 'meta') renderFinanceMeta(content, summary);
     else if (tab === 'cuentas') renderFinanceCuentas(content, summary);
 }
@@ -9649,6 +9895,11 @@ function renderFinanceResumen(el, data) {
     const net = data.net_balance;
     const netColor = net >= 0 ? 'var(--sage-dark, #2D6A4F)' : 'var(--rose-dark, #C9184A)';
     const netBg = net >= 0 ? 'rgba(82, 183, 136, 0.12)' : 'rgba(242, 139, 168, 0.12)';
+
+    const recSum = data.recurring_summary || { total_expected: 0, total_paid: 0, total_pending: 0, total_items: 0, paid_count: 0 };
+    const debtSum = data.debts_summary || { total_original: 0, total_paid: 0, total_remaining: 0, progress_percent: 0, active_count: 0 };
+    const salSum = data.salary_summary || { has_record: false, expected_amount: 0, received_amount: 0, difference: 0 };
+
     const kpiHtml = `
     <div class="finance-kpi-grid">
         <div class="finance-kpi-card">
@@ -9675,15 +9926,74 @@ function renderFinanceResumen(el, data) {
                 <div class="finance-kpi-sub">${net >= 0 ? 'Superávit mensual' : 'Déficit mensual'}</div>
             </div>
         </div>
+        <div class="finance-kpi-card" style="cursor:pointer" onclick="switchFinanceTab('fijos')">
+            <div class="finance-kpi-icon" style="background:rgba(245,158,11,0.15);color:#D97706">📅</div>
+            <div class="finance-kpi-info">
+                <div class="finance-kpi-label">Gastos Fijos del Mes</div>
+                <div class="finance-kpi-value" style="font-size:1.15rem">${recSum.paid_count}/${recSum.total_items} pagados</div>
+                <div class="finance-kpi-sub">Pendiente: ${fmtARS(recSum.total_pending)}</div>
+            </div>
+        </div>
     </div>`;
+
+    // Mini cards for Sueldos & Deudas
+    let sueldoCard = '';
+    if (salSum.has_record || salSum.expected_amount > 0) {
+        const diff = salSum.difference;
+        const diffText = diff < 0
+            ? `<span style="color:#E11D48;font-weight:700">Falta cobrar: ${fmtARS(Math.abs(diff))}</span>`
+            : `<span style="color:#10B981;font-weight:700">✓ Cobrado completo</span>`;
+
+        sueldoCard = `
+        <div class="card" style="margin-bottom:20px;padding:16px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;border-left:4px solid ${diff < 0 ? '#E11D48' : '#10B981'}">
+            <div style="display:flex;align-items:center;gap:12px">
+                <span style="font-size:1.8rem">💼</span>
+                <div>
+                    <div style="font-weight:700;font-size:0.95rem">Sueldo del Mes (${state.financeMonth}/${state.financeYear})</div>
+                    <div style="font-size:0.82rem;color:var(--text-muted);margin-top:2px">
+                        Pactado: <strong>${fmtARS(salSum.expected_amount)}</strong> · Cobrado real: <strong>${fmtARS(salSum.received_amount)}</strong>
+                    </div>
+                </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px">
+                <div style="font-size:0.85rem">${diffText}</div>
+                <button class="btn btn-secondary btn-sm" onclick="showFinanceSalaryModal(${state.financeMonth}, ${state.financeYear})">Editar Sueldo</button>
+                <button class="btn btn-ghost btn-sm" onclick="switchFinanceTab('sueldos')">Ver año →</button>
+            </div>
+        </div>`;
+    }
+
+    let deudasCard = '';
+    if (debtSum.has_debts || debtSum.total_original > 0) {
+        deudasCard = `
+        <div class="card" style="margin-bottom:20px;padding:16px 20px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;border-left:4px solid #6366F1">
+            <div style="display:flex;align-items:center;gap:12px;flex:1;min-width:240px">
+                <span style="font-size:1.8rem">💳</span>
+                <div style="flex:1">
+                    <div style="display:flex;justify-content:space-between;align-items:baseline">
+                        <div style="font-weight:700;font-size:0.95rem">Deudas & Avance de Pagos</div>
+                        <div style="font-size:0.8rem;font-weight:600;color:#6366F1">${debtSum.progress_percent}% amortizado</div>
+                    </div>
+                    <div class="finance-progress-bar-wrap" style="height:8px;margin:6px 0">
+                        <div class="finance-progress-bar-fill" style="width:${debtSum.progress_percent}%;background:linear-gradient(90deg, #6366F1, #10B981)"></div>
+                    </div>
+                    <div style="font-size:0.78rem;color:var(--text-muted)">
+                        Saldo restante: <strong>${fmtARS(debtSum.total_remaining)}</strong> (de ${fmtARS(debtSum.total_original)} originales)
+                    </div>
+                </div>
+            </div>
+            <div style="display:flex;gap:8px">
+                <button class="btn btn-ghost btn-sm" onclick="switchFinanceTab('deudas')">Ver deudas y pagar →</button>
+            </div>
+        </div>`;
+    }
 
     // Account chips strip
     let accountsStrip = '<div class="finance-accounts-strip">';
     (data.accounts || []).forEach(acc => {
-        const isSelected = String(state.financeFilterAccount) === String(acc.id);
         const currFmt = acc.currency === 'USD' ? fmtUSD(acc.current_balance) : fmtARS(acc.current_balance);
         accountsStrip += `
-        <div class="finance-account-chip${isSelected ? ' selected' : ''}" onclick="filterFinanceTxAccount('${isSelected ? '' : acc.id}')">
+        <div class="finance-account-chip" onclick="filterFinanceTxAccount('${acc.id}');switchFinanceTab('movimientos')">
             <div class="finance-acc-icon">${acc.icon || '💳'}</div>
             <div style="min-width:0;flex:1">
                 <div class="finance-acc-name">${esc(acc.name)}</div>
@@ -9722,7 +10032,89 @@ function renderFinanceResumen(el, data) {
         catsHtml += `</div></div>`;
     }
 
-    // Filter transactions
+    // Recent transactions (up to 8)
+    const txs = data.transactions || [];
+    let recentTxHtml = `
+    <div class="card" style="padding:18px 20px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+            <div style="font-weight:700;font-size:0.95rem">Últimos Movimientos del Mes</div>
+            <div style="display:flex;gap:8px">
+                <button class="btn btn-primary btn-sm" onclick="showNewFinanceTransactionModal()">+ Nuevo Movimiento</button>
+                <button class="btn btn-ghost btn-sm" onclick="switchFinanceTab('movimientos')">Ver todos (${txs.length}) →</button>
+            </div>
+        </div>`;
+
+    if (txs.length === 0) {
+        recentTxHtml += `
+        <div class="empty-state" style="padding:24px 10px">
+            <p>No hay movimientos registrados este mes.</p>
+        </div></div>`;
+    } else {
+        recentTxHtml += '<div class="finance-tx-list">';
+        txs.slice(0, 8).forEach(t => {
+            recentTxHtml += buildTransactionRowHtml(t);
+        });
+        recentTxHtml += '</div></div>';
+    }
+
+    el.innerHTML = goalHtml + kpiHtml + sueldoCard + deudasCard + accountsStrip + catsHtml + recentTxHtml;
+}
+
+function buildTransactionRowHtml(t) {
+    const isGoal = (t.type === 'goal_contribution');
+    const isInc = (t.type === 'income');
+    const isTrf = (t.type === 'transfer');
+
+    let icon = t.category_icon || '🏷️';
+    let color = t.category_color || '#8b5cf6';
+    if (isGoal) { icon = '🗽'; color = '#B388EB'; }
+    if (isTrf) { icon = '⇆'; color = '#6366F1'; }
+
+    let sign = '-';
+    let amtClass = 'expense';
+    if (isInc) { sign = '+'; amtClass = 'income'; }
+    else if (isGoal) { sign = '🗽'; amtClass = 'goal_contribution'; }
+    else if (isTrf) { sign = '⇆'; amtClass = 'transfer'; }
+
+    let accountText = esc(t.account_name || 'Cuenta');
+    if (isTrf && t.dest_account_name) {
+        accountText = `${esc(t.account_name)} → ${esc(t.dest_account_name)}`;
+    }
+
+    const searchKey = `${t.description || ''} ${t.category_name || ''} ${t.account_name || ''} ${t.date || ''}`;
+
+    return `
+    <div class="finance-tx-row" data-search="${esc(searchKey)}">
+        <div class="finance-tx-left">
+            <div class="finance-tx-icon-bubble" style="background:${color}22;color:${color}">
+                ${icon}
+            </div>
+            <div class="finance-tx-details">
+                <div class="finance-tx-desc">${esc(t.description || t.category_name || (isTrf ? 'Transferencia' : (isGoal ? 'Aporte Operación' : 'Movimiento')))}</div>
+                <div class="finance-tx-meta">
+                    <span>${fmtDate(t.date)}</span>
+                    <span>·</span>
+                    <span style="font-weight:600">${accountText}</span>
+                    ${t.category_name && !isGoal && !isTrf ? `<span>·</span><span>${esc(t.category_name)}</span>` : ''}
+                </div>
+            </div>
+        </div>
+        <div class="finance-tx-right">
+            <div style="text-align:right">
+                <div class="finance-tx-amount ${amtClass}">
+                    ${sign} ${fmtARS(t.amount)}
+                </div>
+                ${isGoal && t.goal_amount_usd ? `<span class="finance-tx-usd-badge">+${fmtUSD(t.goal_amount_usd)} a la meta</span>` : ''}
+            </div>
+            <div style="display:flex;gap:4px">
+                <button class="btn btn-ghost btn-sm" onclick="showNewFinanceTransactionModal(${t.id})" title="Editar" style="padding:4px 8px">✏️</button>
+                <button class="btn btn-ghost btn-sm" onclick="deleteFinanceTransactionPrompt(${t.id})" title="Eliminar" style="padding:4px 8px;color:var(--rose)">🗑️</button>
+            </div>
+        </div>
+    </div>`;
+}
+
+function renderFinanceMovimientos(el, data) {
     const txs = data.transactions || [];
     const filterType = state.financeFilterType || 'all';
     const filterAcc = state.financeFilterAccount ? parseInt(state.financeFilterAccount) : null;
@@ -9736,78 +10128,6 @@ function renderFinanceResumen(el, data) {
         return true;
     });
 
-    let txListHtml = '';
-    if (filteredTxs.length === 0) {
-        txListHtml = `
-        <div class="empty-state" style="padding:40px 20px">
-            <div class="empty-icon">💸</div>
-            <h3>Sin movimientos en este período</h3>
-            <p>Registra tu primer gasto, ingreso o aporte a la meta.</p>
-            <div style="margin-top:12px;display:flex;gap:8px;justify-content:center">
-                <button class="btn btn-primary" onclick="showNewFinanceTransactionModal()">+ Nuevo movimiento</button>
-                <button class="btn btn-secondary" onclick="showGoalContributionModal()">🗽 Sumar a Operación</button>
-            </div>
-        </div>`;
-    } else {
-        txListHtml = '<div class="finance-tx-list">';
-        filteredTxs.forEach(t => {
-            const isGoal = (t.type === 'goal_contribution');
-            const isInc = (t.type === 'income');
-            const isExp = (t.type === 'expense');
-            const isTrf = (t.type === 'transfer');
-
-            let icon = t.category_icon || '🏷️';
-            let color = t.category_color || '#8b5cf6';
-            if (isGoal) { icon = '🗽'; color = '#B388EB'; }
-            if (isTrf) { icon = '⇆'; color = '#6366F1'; }
-
-            let sign = '-';
-            let amtClass = 'expense';
-            if (isInc) { sign = '+'; amtClass = 'income'; }
-            else if (isGoal) { sign = '🗽'; amtClass = 'goal_contribution'; }
-            else if (isTrf) { sign = '⇆'; amtClass = 'transfer'; }
-
-            let accountText = esc(t.account_name || 'Cuenta');
-            if (isTrf && t.dest_account_name) {
-                accountText = `${esc(t.account_name)} → ${esc(t.dest_account_name)}`;
-            }
-
-            const searchKey = `${t.description || ''} ${t.category_name || ''} ${t.account_name || ''} ${t.date || ''}`;
-
-            txListHtml += `
-            <div class="finance-tx-row" data-search="${esc(searchKey)}">
-                <div class="finance-tx-left">
-                    <div class="finance-tx-icon-bubble" style="background:${color}22;color:${color}">
-                        ${icon}
-                    </div>
-                    <div class="finance-tx-details">
-                        <div class="finance-tx-desc">${esc(t.description || t.category_name || (isTrf ? 'Transferencia' : (isGoal ? 'Aporte Operación' : 'Movimiento')))}</div>
-                        <div class="finance-tx-meta">
-                            <span>${fmtDate(t.date)}</span>
-                            <span>·</span>
-                            <span style="font-weight:600">${accountText}</span>
-                            ${t.category_name && !isGoal && !isTrf ? `<span>·</span><span>${esc(t.category_name)}</span>` : ''}
-                        </div>
-                    </div>
-                </div>
-                <div class="finance-tx-right">
-                    <div style="text-align:right">
-                        <div class="finance-tx-amount ${amtClass}">
-                            ${sign} ${fmtARS(t.amount)}
-                        </div>
-                        ${isGoal && t.goal_amount_usd ? `<span class="finance-tx-usd-badge">+${fmtUSD(t.goal_amount_usd)} a la meta</span>` : ''}
-                    </div>
-                    <div style="display:flex;gap:4px">
-                        <button class="btn btn-ghost btn-sm" onclick="showNewFinanceTransactionModal(${t.id})" title="Editar" style="padding:4px 8px">✏️</button>
-                        <button class="btn btn-ghost btn-sm" onclick="deleteFinanceTransactionPrompt(${t.id})" title="Eliminar" style="padding:4px 8px;color:var(--rose)">🗑️</button>
-                    </div>
-                </div>
-            </div>`;
-        });
-        txListHtml += '</div>';
-    }
-
-    // Filter bar
     const filterPills = [
         { id: 'all', label: 'Todos' },
         { id: 'expense', label: 'Gastos' },
@@ -9816,8 +10136,8 @@ function renderFinanceResumen(el, data) {
         { id: 'transfer', label: 'Transferencias' },
     ];
 
-    let filterPillsHtml = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+    let headerHtml = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:12px">
         <div style="display:flex;gap:4px;flex-wrap:wrap">
             ${filterPills.map(p => `
                 <button class="subnav-item${filterType === p.id ? ' active' : ''}" style="padding:5px 12px;font-size:0.78rem" onclick="filterFinanceTxType('${p.id}')">
@@ -9828,11 +10148,894 @@ function renderFinanceResumen(el, data) {
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <input type="text" class="form-control" placeholder="🔍 Buscar concepto..." style="width:200px;padding:6px 10px;font-size:0.82rem" oninput="onSearchFinanceTx(this.value)">
             ${state.financeFilterAccount ? `<button class="btn btn-ghost btn-sm" onclick="filterFinanceTxAccount('')" style="font-size:0.75rem">Limpiar filtro cuenta ✕</button>` : ''}
+            <button class="btn btn-primary btn-sm" onclick="showNewFinanceTransactionModal()">+ Registrar Gasto / Ingreso</button>
         </div>
     </div>`;
 
-    el.innerHTML = goalHtml + kpiHtml + accountsStrip + catsHtml + filterPillsHtml + txListHtml;
+    let listHtml = '';
+    if (filteredTxs.length === 0) {
+        listHtml = `
+        <div class="empty-state" style="padding:50px 20px">
+            <div class="empty-icon">💸</div>
+            <h3>Sin movimientos con los filtros actuales</h3>
+            <p>Registra un gasto del día a día, ingreso o aporte a la meta.</p>
+            <button class="btn btn-primary" onclick="showNewFinanceTransactionModal()" style="margin-top:10px">+ Registrar Movimiento</button>
+        </div>`;
+    } else {
+        listHtml = '<div class="finance-tx-list">';
+        filteredTxs.forEach(t => {
+            listHtml += buildTransactionRowHtml(t);
+        });
+        listHtml += '</div>';
+    }
+
+    el.innerHTML = headerHtml + listHtml;
 }
+
+async function renderFinanceFijos(el, summaryData) {
+    const month = state.financeMonth || (new Date().getMonth() + 1);
+    const year = state.financeYear || new Date().getFullYear();
+
+    const recRes = await api(eel.get_finance_recurring, month, year);
+    const recData = (recRes && recRes.ok) ? recRes : { recurring: [], summary: { total_expected: 0, total_paid: 0, total_pending: 0, total_count: 0, paid_count: 0 } };
+
+    const items = recData.recurring || [];
+    const sum = recData.summary || {};
+    const pct = sum.total_expected > 0 ? Math.min(100, Math.round((sum.total_paid / sum.total_expected) * 100)) : 0;
+
+    let progressCard = `
+    <div class="card" style="padding:20px;margin-bottom:20px;background:var(--card)">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+            <div>
+                <div style="font-weight:700;font-size:1.1rem">Gastos Fijos Mensuales · ${month}/${year}</div>
+                <div style="font-size:0.82rem;color:var(--text-muted)">Alquiler, servicios, internet, gimnasio y suscripciones</div>
+            </div>
+            <div style="text-align:right">
+                <span style="font-size:1.4rem;font-weight:800;color:var(--text)">${fmtARS(sum.total_paid)}</span>
+                <span style="font-size:0.85rem;color:var(--text-muted)"> de ${fmtARS(sum.total_expected)}</span>
+                <span class="task-badge ${pct === 100 ? 'completed' : 'due-soon'}" style="margin-left:6px">${pct}% pagado</span>
+            </div>
+        </div>
+        <div class="finance-progress-bar-wrap" style="height:10px;margin:10px 0 12px 0">
+            <div class="finance-progress-bar-fill" style="width:${Math.max(2, pct)}%;background:linear-gradient(90deg, #F59E0B, #10B981)"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:0.82rem;color:var(--text-muted)">
+            <span>${sum.paid_count} de ${sum.total_count} gastos saldados</span>
+            <span>Resta pagar este mes: <strong style="color:#C9184A">${fmtARS(sum.total_pending)}</strong></span>
+        </div>
+    </div>`;
+
+    let itemsHtml = '';
+    if (items.length === 0) {
+        itemsHtml = `
+        <div class="empty-state" style="padding:40px 10px">
+            <div class="empty-icon">📅</div>
+            <h3>No tienes gastos fijos configurados</h3>
+            <p>Agrega los servicios, alquiler y suscripciones que pagas todos los meses.</p>
+            <button class="btn btn-primary" onclick="showFinanceRecurringModal()" style="margin-top:10px">+ Nuevo Gasto Fijo</button>
+        </div>`;
+    } else {
+        itemsHtml = '<div style="display:flex;flex-direction:column;gap:10px">';
+        items.forEach(r => {
+            const isPaid = r.is_paid;
+            const isOverdue = r.is_overdue;
+
+            let rowClass = isPaid ? 'is-paid' : (isOverdue ? 'is-overdue' : 'is-pending');
+            let statusBadge = isPaid
+                ? `<span class="task-badge completed" style="font-size:0.75rem">✓ Pagado el ${fmtDate(r.paid_date)} (${fmtARS(r.paid_amount)})</span>`
+                : (isOverdue
+                    ? `<span class="task-badge overdue" style="font-size:0.75rem">⚠️ Vencido (Día ${r.due_day})</span>`
+                    : `<span class="task-badge due-soon" style="font-size:0.75rem">Vence día ${r.due_day}</span>`);
+
+            let actionBtn = isPaid
+                ? `<button class="btn btn-ghost btn-sm" onclick="unmarkRecurringPaidPrompt(${r.log_id})" title="Desmarcar pago" style="font-size:0.75rem;color:var(--text-muted)">Desmarcar ✕</button>`
+                : `<button class="btn btn-primary btn-sm" onclick="showQuickPayRecurringModal(${r.id}, ${month}, ${year}, ${r.amount}, ${r.account_id || ''}, '${esc(r.name)}')" style="font-size:0.78rem;padding:4px 10px">✓ Marcar como pagado</button>`;
+
+            itemsHtml += `
+            <div class="finance-rec-row ${rowClass}">
+                <div style="display:flex;align-items:center;gap:12px;min-width:0;flex:1">
+                    <div style="font-size:1.4rem;width:38px;height:38px;border-radius:10px;background:rgba(245,158,11,0.12);display:flex;align-items:center;justify-content:center">
+                        ${r.category_icon || '📅'}
+                    </div>
+                    <div style="min-width:0">
+                        <div style="font-weight:700;font-size:0.95rem;color:var(--text)">${esc(r.name)}</div>
+                        <div style="font-size:0.76rem;color:var(--text-muted);margin-top:2px;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                            ${statusBadge}
+                            <span>·</span>
+                            <span>Vence día ${r.due_day} de cada mes</span>
+                            ${r.default_account_name ? `<span>·</span><span>${esc(r.default_account_name)}</span>` : ''}
+                        </div>
+                    </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:14px;flex-shrink:0">
+                    <div style="text-align:right">
+                        <div style="font-size:1.1rem;font-weight:700;color:var(--text);font-variant-numeric:tabular-nums">${fmtARS(r.amount)}</div>
+                        <div style="font-size:0.72rem;color:var(--text-muted)">mensual estimado</div>
+                    </div>
+                    <div>${actionBtn}</div>
+                    <div style="display:flex;gap:4px">
+                        <button class="btn btn-ghost btn-sm" onclick="showFinanceRecurringModal(${r.id})" style="padding:4px 6px">✏️</button>
+                        <button class="btn btn-ghost btn-sm" onclick="deleteFinanceRecurringPrompt(${r.id})" style="padding:4px 6px;color:var(--rose)">🗑️</button>
+                    </div>
+                </div>
+            </div>`;
+        });
+        itemsHtml += '</div>';
+    }
+
+    el.innerHTML = progressCard + itemsHtml;
+}
+
+async function renderFinanceDeudas(el, summaryData) {
+    const debtsRes = await api(eel.get_finance_debts);
+    const debtsData = (debtsRes && debtsRes.ok) ? debtsRes : { debts: [], summary: { total_original: 0, total_paid: 0, total_remaining: 0, progress_percent: 0, active_count: 0, paid_count: 0 } };
+
+    const debts = debtsData.debts || [];
+    const sum = debtsData.summary || {};
+    const pct = sum.progress_percent || 0;
+
+    let heroHtml = `
+    <div class="finance-hero-card" style="padding:22px 24px;border-top:4px solid #6366F1">
+        <div class="finance-goal-header">
+            <div class="finance-goal-title-group">
+                <div class="finance-goal-icon" style="background:rgba(99,102,241,0.15);color:#6366F1">💳</div>
+                <div>
+                    <div class="finance-goal-title">Plan de Desendeudamiento & Avance</div>
+                    <div class="finance-goal-subtitle">Control de amortización de préstamos, tarjetas y saldos pendientes</div>
+                </div>
+            </div>
+            <div style="display:flex;gap:8px">
+                <button class="btn btn-primary" onclick="showFinanceDebtModal()">+ Nueva Deuda</button>
+            </div>
+        </div>
+        <div style="display:flex;align-items:baseline;gap:12px;margin:12px 0 6px 0">
+            <span style="font-size:2rem;font-weight:800;color:#6366F1;font-variant-numeric:tabular-nums">${fmtARS(sum.total_paid)}</span>
+            <span style="font-size:1rem;color:var(--text-muted)">pagados de ${fmtARS(sum.total_original)}</span>
+            <span class="task-badge" style="background:rgba(99,102,241,0.15);color:#6366F1;font-size:0.85rem">${pct}% completado</span>
+        </div>
+        <div class="finance-progress-bar-wrap" style="height:12px">
+            <div class="finance-progress-bar-fill" style="width:${Math.max(2, pct)}%;background:linear-gradient(90deg, #6366F1, #10B981)"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;font-size:0.82rem;color:var(--text-muted);margin-top:8px">
+            <span>Deuda restante por pagar: <strong style="color:#E11D48">${fmtARS(sum.total_remaining)}</strong></span>
+            <span>${sum.active_count} deudas activas · ${sum.paid_count} saldadas</span>
+        </div>
+    </div>`;
+
+    let debtsHtml = '';
+    if (debts.length === 0) {
+        debtsHtml = `
+        <div class="empty-state" style="padding:40px 10px">
+            <div class="empty-icon">🎉</div>
+            <h3>Sin deudas registradas</h3>
+            <p>¡Felicitaciones! O puedes cargar un préstamo, tarjeta o compromiso para trackear su amortización.</p>
+            <button class="btn btn-primary" onclick="showFinanceDebtModal()" style="margin-top:10px">+ Registrar Deuda</button>
+        </div>`;
+    } else {
+        debts.forEach(d => {
+            const isPaid = d.is_paid;
+            const payments = d.payments || [];
+
+            let paymentsListHtml = '';
+            if (payments.length > 0) {
+                paymentsListHtml = `
+                <div style="margin-top:12px;border-top:1px solid var(--border-light);padding-top:10px">
+                    <div style="font-size:0.75rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:6px">Historial de Pagos / Cuotas</div>
+                    <div style="display:flex;flex-direction:column;gap:6px">
+                        ${payments.map(p => `
+                            <div style="display:flex;justify-content:space-between;align-items:center;font-size:0.8rem;padding:4px 8px;background:var(--bg);border-radius:6px">
+                                <span><strong>${fmtDate(p.date)}</strong> ${p.installment_number ? `· Cuota ${p.installment_number}` : ''} ${p.notes ? `(${esc(p.notes)})` : ''}</span>
+                                <div style="display:flex;align-items:center;gap:8px">
+                                    <span style="font-weight:700;color:#10B981">${fmtARS(p.amount)}</span>
+                                    <button class="btn btn-ghost btn-sm" onclick="deleteDebtPaymentPrompt(${p.id})" style="padding:1px 4px;color:var(--rose)">✕</button>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>`;
+            }
+
+            debtsHtml += `
+            <div class="finance-debt-card ${isPaid ? 'paid' : ''}">
+                <div class="finance-debt-header">
+                    <div>
+                        <div class="finance-debt-title">${esc(d.title)}</div>
+                        <div class="finance-debt-creditor">Acreedor / Entidad: <strong>${esc(d.creditor || 'Particular')}</strong> ${d.due_date ? `· Vence: ${fmtDate(d.due_date)}` : ''}</div>
+                    </div>
+                    <div style="display:flex;gap:6px;align-items:center">
+                        <span class="task-badge ${isPaid ? 'completed' : 'due-soon'}">${isPaid ? 'Saldada ✓' : 'Activa'}</span>
+                        ${!isPaid ? `<button class="btn btn-primary btn-sm" onclick="showFinanceDebtPaymentModal(${d.id})">+ Pagar Cuota</button>` : ''}
+                        <button class="btn btn-ghost btn-sm" onclick="showFinanceDebtModal(${d.id})" style="padding:4px 6px">✏️</button>
+                        <button class="btn btn-ghost btn-sm" onclick="deleteFinanceDebtPrompt(${d.id})" style="padding:4px 6px;color:var(--rose)">🗑️</button>
+                    </div>
+                </div>
+
+                <div class="finance-debt-stat-row">
+                    <div>
+                        <div class="finance-debt-stat-label">Total Original</div>
+                        <div class="finance-debt-stat-val">${fmtARS(d.total_amount)}</div>
+                    </div>
+                    <div>
+                        <div class="finance-debt-stat-label">Amortizado</div>
+                        <div class="finance-debt-stat-val" style="color:#10B981">${fmtARS(d.total_paid)}</div>
+                    </div>
+                    <div>
+                        <div class="finance-debt-stat-label">Resta Pagar</div>
+                        <div class="finance-debt-stat-val" style="color:#E11D48">${fmtARS(d.remaining_amount)}</div>
+                    </div>
+                    <div>
+                        <div class="finance-debt-stat-label">Cuotas</div>
+                        <div class="finance-debt-stat-val">${d.installments_paid || 0} / ${d.installments_total || 1}</div>
+                    </div>
+                </div>
+
+                <div class="finance-progress-bar-wrap" style="height:8px;margin:8px 0">
+                    <div class="finance-progress-bar-fill" style="width:${d.progress_percent}%;background:linear-gradient(90deg, #6366F1, #10B981)"></div>
+                </div>
+
+                ${paymentsListHtml}
+            </div>`;
+        });
+    }
+
+    el.innerHTML = heroHtml + debtsHtml;
+}
+
+async function renderFinanceSueldos(el, summaryData) {
+    const year = state.financeYear || new Date().getFullYear();
+    const salRes = await api(eel.get_finance_salaries, year);
+    const salData = (salRes && salRes.ok) ? salRes : { months: [], summary: { total_expected: 0, total_received: 0, total_difference: 0, pending_months_count: 0 } };
+
+    const months = salData.months || [];
+    const sum = salData.summary || {};
+    const hasDiff = sum.total_difference !== 0;
+
+    let heroHtml = `
+    <div class="card" style="padding:22px 24px;margin-bottom:20px;border-top:4px solid #10B981">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px">
+            <div>
+                <div style="font-weight:700;font-size:1.1rem">Comparativa Salarial ${year} · Sueldo Esperado vs Cobrado</div>
+                <div style="font-size:0.82rem;color:var(--text-muted)">Registro de haberes pactados vs efectivamente depositados</div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center">
+                <select class="form-control" style="width:auto;padding:5px 10px;font-size:0.82rem" onchange="changeFinancePeriod(null, this.value)">
+                    <option value="2025" ${year === 2025 ? 'selected' : ''}>2025</option>
+                    <option value="2026" ${year === 2026 ? 'selected' : ''}>2026</option>
+                    <option value="2027" ${year === 2027 ? 'selected' : ''}>2027</option>
+                </select>
+            </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-top:10px;padding:12px 14px;background:var(--bg);border-radius:var(--radius-sm)">
+            <div>
+                <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase">Total Esperado Anual</div>
+                <div style="font-size:1.3rem;font-weight:800;color:var(--text)">${fmtARS(sum.total_expected)}</div>
+            </div>
+            <div>
+                <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase">Total Cobrado Real</div>
+                <div style="font-size:1.3rem;font-weight:800;color:#10B981">${fmtARS(sum.total_received)}</div>
+            </div>
+            <div>
+                <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase">Brecha / Diferencia</div>
+                <div style="font-size:1.3rem;font-weight:800;color:${sum.total_difference < 0 ? '#E11D48' : '#10B981'}">
+                    ${sum.total_difference >= 0 ? '+' : ''}${fmtARS(sum.total_difference)}
+                </div>
+                <div style="font-size:0.75rem;color:var(--text-muted)">
+                    ${sum.total_difference < 0 ? `⚠️ Faltante acumulado` : `Al día con los haberes`}
+                </div>
+            </div>
+        </div>
+    </div>`;
+
+    let tableHtml = `
+    <div class="card" style="padding:0;overflow:hidden">
+        <div class="table-container">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Mes</th>
+                        <th>Sueldo Esperado</th>
+                        <th>Sueldo Cobrado</th>
+                        <th>Diferencia / Faltante</th>
+                        <th>Fecha & Cuenta</th>
+                        <th>Estado</th>
+                        <th style="text-align:right">Acciones</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${months.map(m => {
+                        let diffText = '-';
+                        if (m.expected_amount > 0 || m.received_amount > 0) {
+                            if (m.difference < 0) {
+                                diffText = `<span style="color:#E11D48;font-weight:700">-${fmtARS(m.difference_abs)} (Pendiente)</span>`;
+                            } else if (m.difference === 0 && m.received_amount > 0) {
+                                diffText = `<span style="color:#10B981;font-weight:700">✓ Exacto</span>`;
+                            } else if (m.difference > 0) {
+                                diffText = `<span style="color:#10B981;font-weight:700">+${fmtARS(m.difference)} (Extra)</span>`;
+                            }
+                        }
+
+                        let statusBadge = '<span class="salary-status-badge pending">Sin registrar</span>';
+                        if (m.is_fully_paid) {
+                            statusBadge = '<span class="salary-status-badge paid_full">✓ Cobrado completo</span>';
+                        } else if (m.is_underpaid && m.received_amount > 0) {
+                            statusBadge = '<span class="salary-status-badge paid_partial">⚠️ Cobro parcial</span>';
+                        } else if (m.expected_amount > 0 && m.received_amount === 0) {
+                            statusBadge = '<span class="salary-status-badge pending">⏳ Pendiente de cobro</span>';
+                        }
+
+                        return `
+                        <tr>
+                            <td><strong>${esc(m.month_name)}</strong></td>
+                            <td style="font-variant-numeric:tabular-nums">${m.expected_amount > 0 ? fmtARS(m.expected_amount) : '<span style="color:var(--text-muted)">$ 0</span>'}</td>
+                            <td style="font-variant-numeric:tabular-nums;font-weight:700;color:#10B981">${m.received_amount > 0 ? fmtARS(m.received_amount) : '<span style="color:var(--text-muted)">$ 0</span>'}</td>
+                            <td style="font-variant-numeric:tabular-nums">${diffText}</td>
+                            <td style="font-size:0.8rem">${m.payment_date ? fmtDate(m.payment_date) : '-'} ${m.account_name ? `· ${esc(m.account_name)}` : ''}</td>
+                            <td>${statusBadge}</td>
+                            <td style="text-align:right">
+                                <button class="btn btn-secondary btn-sm" onclick="showFinanceSalaryModal(${m.month}, ${year})">Cargar / Editar</button>
+                            </td>
+                        </tr>`;
+                    }).join('')}
+                </tbody>
+            </table>
+        </div>
+    </div>`;
+
+    el.innerHTML = heroHtml + tableHtml;
+}
+
+// Modales para Deudas, Fijos y Sueldos
+
+async function showFinanceDebtModal(debtId = null) {
+    let d = null;
+    if (debtId) {
+        const debtsRes = await api(eel.get_finance_debts);
+        d = (debtsRes && debtsRes.debts ? debtsRes.debts.find(x => x.id === debtId) : null);
+    }
+
+    const defaultTitle = d ? d.title : '';
+    const defaultCreditor = d ? d.creditor : '';
+    const defaultTotal = d ? d.total_amount : '';
+    const defaultInitPaid = d ? d.initial_paid : 0;
+    const defaultDue = d ? (d.due_date || '') : '';
+    const defaultInstTot = d ? (d.installments_total || 1) : 1;
+    const defaultInstPaid = d ? (d.installments_paid || 0) : 0;
+    const defaultNotes = d ? (d.notes || '') : '';
+
+    const bodyHtml = `
+    <input type="hidden" id="debtId" value="${debtId || ''}">
+    <div class="form-group">
+        <label class="form-label">Concepto o Título de la Deuda *</label>
+        <input type="text" id="debtTitle" class="form-control" placeholder="Ej: Tarjeta Visa, Préstamo Banco, Deuda con Juan..." value="${esc(defaultTitle)}" required>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group">
+            <label class="form-label">Acreedor / Entidad</label>
+            <input type="text" id="debtCreditor" class="form-control" placeholder="Ej: Banco Santander, Mercado Pago..." value="${esc(defaultCreditor)}">
+        </div>
+        <div class="form-group">
+            <label class="form-label">Monto Total Original ($ ARS) *</label>
+            <input type="number" step="any" id="debtTotal" class="form-control" placeholder="0.00" value="${defaultTotal}" required>
+        </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group">
+            <label class="form-label">Pagos Previos Iniciales ($ ARS)</label>
+            <input type="number" step="any" id="debtInitPaid" class="form-control" value="${defaultInitPaid}">
+            <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px">Lo que ya habías pagado antes de registrarla</div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Fecha Límite / Vencimiento</label>
+            <input type="date" id="debtDueDate" class="form-control" value="${defaultDue}">
+        </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group">
+            <label class="form-label">Cantidad de Cuotas Totales</label>
+            <input type="number" id="debtInstTot" class="form-control" value="${defaultInstTot}">
+        </div>
+        <div class="form-group">
+            <label class="form-label">Cuotas Pagadas hasta ahora</label>
+            <input type="number" id="debtInstPaid" class="form-control" value="${defaultInstPaid}">
+        </div>
+    </div>
+    <div class="form-group">
+        <label class="form-label">Notas / Observaciones</label>
+        <input type="text" id="debtNotes" class="form-control" placeholder="Ej: Tasa fija, cuotas sin interés..." value="${esc(defaultNotes)}">
+    </div>`;
+
+    openModal(debtId ? 'Editar Deuda' : 'Nueva Deuda', bodyHtml);
+    document.getElementById('modalSave').onclick = saveFinanceDebtForm;
+}
+
+async function saveFinanceDebtForm() {
+    const id = document.getElementById('debtId').value;
+    const title = document.getElementById('debtTitle').value.trim();
+    const creditor = document.getElementById('debtCreditor').value.trim();
+    const total_amount = parseFloat(document.getElementById('debtTotal').value);
+    const initial_paid = parseFloat(document.getElementById('debtInitPaid').value) || 0;
+    const due_date = document.getElementById('debtDueDate').value || null;
+    const installments_total = parseInt(document.getElementById('debtInstTot').value) || 1;
+    const installments_paid = parseInt(document.getElementById('debtInstPaid').value) || 0;
+    const notes = document.getElementById('debtNotes').value.trim();
+
+    if (!title || isNaN(total_amount) || total_amount <= 0) {
+        showToast('Ingresa un título y un monto total válido');
+        return;
+    }
+
+    const payload = {
+        title, creditor, total_amount, initial_paid, due_date,
+        installments_total, installments_paid, notes, currency: 'ARS'
+    };
+
+    let res;
+    if (id) {
+        res = await api(eel.update_finance_debt, parseInt(id), payload);
+    } else {
+        res = await api(eel.create_finance_debt, payload);
+    }
+
+    if (res && res.ok) {
+        showToast(id ? 'Deuda actualizada' : 'Deuda creada');
+        closeModal();
+        navigate('finance');
+    } else {
+        showToast('Error: ' + ((res && res.error) || 'No se pudo guardar'));
+    }
+}
+
+async function showFinanceDebtPaymentModal(debtId) {
+    const [debtsRes, accounts] = await Promise.all([
+        api(eel.get_finance_debts),
+        api(eel.get_finance_accounts)
+    ]);
+
+    const debt = (debtsRes && debtsRes.debts) ? debtsRes.debts.find(d => d.id === debtId) : null;
+    if (!debt) return;
+
+    let accOptions = accounts.map(a => `<option value="${a.id}">${a.icon || '💳'} ${esc(a.name)} (${fmtARS(a.current_balance)})</option>`).join('');
+
+    const bodyHtml = `
+    <input type="hidden" id="payDebtId" value="${debtId}">
+    <div style="background:rgba(99,102,241,0.1);padding:14px;border-radius:var(--radius-sm);margin-bottom:14px;border:1px solid rgba(99,102,241,0.25)">
+        <div style="font-weight:700;font-size:1rem;color:#6366F1">${esc(debt.title)}</div>
+        <div style="font-size:0.8rem;color:var(--text-muted);margin-top:2px">
+            Saldo Restante: <strong>${fmtARS(debt.remaining_amount)}</strong> · Cuotas pagadas: ${debt.installments_paid || 0}/${debt.installments_total || 1}
+        </div>
+    </div>
+    <div class="form-group">
+        <label class="form-label">Monto del Pago / Cuota ($ ARS) *</label>
+        <input type="number" step="any" id="payDebtAmount" class="form-control" placeholder="0.00" value="${debt.remaining_amount > 0 ? (debt.installments_total > 1 ? Math.round(debt.total_amount / debt.installments_total) : debt.remaining_amount) : ''}" style="font-size:1.15rem;font-weight:700" required>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group">
+            <label class="form-label">Cuenta de débito (¿de dónde sale la plata?)</label>
+            <select id="payDebtAccount" class="form-control">${accOptions}</select>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Número de Cuota (opcional)</label>
+            <input type="number" id="payDebtInstNum" class="form-control" value="${(debt.installments_paid || 0) + 1}">
+        </div>
+    </div>
+    <div class="form-group">
+        <label class="form-label">Fecha del Pago</label>
+        <input type="date" id="payDebtDate" class="form-control" value="${todayStr()}">
+    </div>
+    <div class="form-group">
+        <label class="form-label">Detalle / Comprobante</label>
+        <input type="text" id="payDebtNotes" class="form-control" placeholder="Ej: Pago mínimo, Cuota 3 de 12..." value="Pago cuota">
+    </div>`;
+
+    openModal('Registrar Pago de Deuda', bodyHtml);
+    document.getElementById('modalSave').onclick = saveFinanceDebtPaymentForm;
+}
+
+async function saveFinanceDebtPaymentForm() {
+    const debt_id = parseInt(document.getElementById('payDebtId').value);
+    const amount = parseFloat(document.getElementById('payDebtAmount').value);
+    const account_id = document.getElementById('payDebtAccount').value;
+    const installment_number = document.getElementById('payDebtInstNum').value;
+    const date = document.getElementById('payDebtDate').value;
+    const notes = document.getElementById('payDebtNotes').value;
+
+    if (isNaN(amount) || amount <= 0) {
+        showToast('Ingresa un monto válido mayor a 0');
+        return;
+    }
+
+    const res = await api(eel.pay_finance_debt, {
+        debt_id,
+        amount,
+        account_id: account_id ? parseInt(account_id) : null,
+        installment_number: installment_number ? parseInt(installment_number) : null,
+        date,
+        notes
+    });
+
+    if (res && res.ok) {
+        showToast('Pago registrado exitosamente');
+        closeModal();
+        navigate('finance');
+    } else {
+        showToast('Error: ' + ((res && res.error) || 'No se pudo guardar el pago'));
+    }
+}
+
+async function deleteFinanceDebtPrompt(id) {
+    if (!confirm('¿Deseas eliminar esta deuda y todo su historial de pagos?')) return;
+    const res = await api(eel.delete_finance_debt, id);
+    if (res && res.ok) {
+        showToast('Deuda eliminada');
+        navigate('finance');
+    } else {
+        showToast('Error al eliminar');
+    }
+}
+
+async function deleteDebtPaymentPrompt(id) {
+    if (!confirm('¿Deseas anular este pago de deuda?')) return;
+    const res = await api(eel.delete_debt_payment, id);
+    if (res && res.ok) {
+        showToast('Pago anulado');
+        navigate('finance');
+    } else {
+        showToast('Error al anular');
+    }
+}
+
+async function showFinanceRecurringModal(recId = null) {
+    const [categories, accounts] = await Promise.all([
+        api(eel.get_finance_categories),
+        api(eel.get_finance_accounts)
+    ]);
+
+    let rec = null;
+    if (recId) {
+        const res = await api(eel.get_finance_recurring);
+        rec = (res && res.recurring) ? res.recurring.find(r => r.id === recId) : null;
+    }
+
+    const defaultName = rec ? rec.name : '';
+    const defaultAmt = rec ? rec.amount : '';
+    const defaultDay = rec ? (rec.due_day || 10) : 10;
+    const defaultCat = rec ? rec.category_id : '';
+    const defaultAcc = rec ? rec.account_id : '';
+    const defaultAuto = rec ? rec.auto_debit : 0;
+    const defaultNotes = rec ? (rec.notes || '') : '';
+
+    let catOptions = `<option value="">-- Sin categoría --</option>` +
+        (categories || []).map(c => `<option value="${c.id}" ${c.id === defaultCat ? 'selected' : ''}>${c.icon || '🏷️'} ${esc(c.name)}</option>`).join('');
+
+    let accOptions = `<option value="">-- Sin cuenta predeterminada --</option>` +
+        (accounts || []).map(a => `<option value="${a.id}" ${a.id === defaultAcc ? 'selected' : ''}>${a.icon || '💳'} ${esc(a.name)}</option>`).join('');
+
+    const bodyHtml = `
+    <input type="hidden" id="recId" value="${recId || ''}">
+    <div class="form-group">
+        <label class="form-label">Nombre del Gasto Fijo *</label>
+        <input type="text" id="recName" class="form-control" placeholder="Ej: Alquiler, Edenor, Movistar, Gimnasio..." value="${esc(defaultName)}" required>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group">
+            <label class="form-label">Monto Mensual Estimado ($ ARS) *</label>
+            <input type="number" step="any" id="recAmount" class="form-control" placeholder="0.00" value="${defaultAmt}" required>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Día de Vencimiento (1 al 31) *</label>
+            <input type="number" min="1" max="31" id="recDueDay" class="form-control" value="${defaultDay}" required>
+        </div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group">
+            <label class="form-label">Categoría</label>
+            <select id="recCategory" class="form-control">${catOptions}</select>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Cuenta Predeterminada</label>
+            <select id="recAccount" class="form-control">${accOptions}</select>
+        </div>
+    </div>
+    <div class="form-group">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="recAutoDebit" ${defaultAuto ? 'checked' : ''}>
+            <span>Débito automático en cuenta / tarjeta</span>
+        </label>
+    </div>
+    <div class="form-group">
+        <label class="form-label">Notas</label>
+        <input type="text" id="recNotes" class="form-control" placeholder="Ej: Número de cliente, código de pago electrónico..." value="${esc(defaultNotes)}">
+    </div>`;
+
+    openModal(recId ? 'Editar Gasto Fijo' : 'Nuevo Gasto Fijo', bodyHtml);
+    document.getElementById('modalSave').onclick = saveFinanceRecurringForm;
+}
+
+async function saveFinanceRecurringForm() {
+    const id = document.getElementById('recId').value;
+    const name = document.getElementById('recName').value.trim();
+    const amount = parseFloat(document.getElementById('recAmount').value);
+    const due_day = parseInt(document.getElementById('recDueDay').value) || 10;
+    const category_id = document.getElementById('recCategory').value;
+    const account_id = document.getElementById('recAccount').value;
+    const auto_debit = document.getElementById('recAutoDebit').checked ? 1 : 0;
+    const notes = document.getElementById('recNotes').value.trim();
+
+    if (!name || isNaN(amount) || amount < 0) {
+        showToast('Ingresa un nombre y un monto válido');
+        return;
+    }
+
+    const payload = {
+        name, amount, due_day,
+        category_id: category_id ? parseInt(category_id) : null,
+        account_id: account_id ? parseInt(account_id) : null,
+        auto_debit, notes, currency: 'ARS'
+    };
+
+    let res;
+    if (id) {
+        res = await api(eel.update_finance_recurring, parseInt(id), payload);
+    } else {
+        res = await api(eel.create_finance_recurring, payload);
+    }
+
+    if (res && res.ok) {
+        showToast(id ? 'Gasto fijo actualizado' : 'Gasto fijo creado');
+        closeModal();
+        navigate('finance');
+    } else {
+        showToast('Error: ' + ((res && res.error) || 'No se pudo guardar'));
+    }
+}
+
+async function showQuickPayRecurringModal(recId, month, year, amount, defaultAccountId, name) {
+    const accounts = await api(eel.get_finance_accounts);
+    let accOptions = (accounts || []).map(a => `<option value="${a.id}" ${a.id == defaultAccountId ? 'selected' : ''}>${a.icon || '💳'} ${esc(a.name)} (${fmtARS(a.current_balance)})</option>`).join('');
+
+    const bodyHtml = `
+    <input type="hidden" id="qpRecId" value="${recId}">
+    <input type="hidden" id="qpMonth" value="${month}">
+    <input type="hidden" id="qpYear" value="${year}">
+    <div style="font-weight:700;font-size:1.05rem;margin-bottom:8px">${esc(name)}</div>
+    <div style="font-size:0.85rem;color:var(--text-muted);margin-bottom:14px">Registrar pago correspondiente a <strong>${month}/${year}</strong></div>
+
+    <div class="form-group">
+        <label class="form-label">Monto Pagado ($ ARS) *</label>
+        <input type="number" step="any" id="qpAmount" class="form-control" value="${amount}" style="font-size:1.15rem;font-weight:700" required>
+    </div>
+    <div class="form-group">
+        <label class="form-label">Cuenta de débito *</label>
+        <select id="qpAccount" class="form-control">${accOptions}</select>
+    </div>
+    <div class="form-group">
+        <label class="form-label">Fecha de pago</label>
+        <input type="date" id="qpDate" class="form-control" value="${todayStr()}">
+    </div>
+    <div class="form-group">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="qpCreateTx" checked>
+            <span>Crear movimiento de gasto en la cuenta seleccionada</span>
+        </label>
+    </div>`;
+
+    openModal('Pagar Gasto Fijo', bodyHtml);
+    document.getElementById('modalSave').onclick = saveQuickPayRecurringForm;
+}
+
+async function saveQuickPayRecurringForm() {
+    const recurring_id = parseInt(document.getElementById('qpRecId').value);
+    const month = parseInt(document.getElementById('qpMonth').value);
+    const year = parseInt(document.getElementById('qpYear').value);
+    const paid_amount = parseFloat(document.getElementById('qpAmount').value);
+    const account_id = document.getElementById('qpAccount').value;
+    const paid_date = document.getElementById('qpDate').value;
+    const create_transaction = document.getElementById('qpCreateTx').checked;
+
+    if (isNaN(paid_amount) || paid_amount <= 0) {
+        showToast('Ingresa un monto válido mayor a 0');
+        return;
+    }
+
+    const res = await api(eel.mark_recurring_paid, {
+        recurring_id, month, year, paid_amount, paid_date,
+        account_id: account_id ? parseInt(account_id) : null,
+        create_transaction
+    });
+
+    if (res && res.ok) {
+        showToast('Gasto fijo marcado como pagado');
+        closeModal();
+        navigate('finance');
+    } else {
+        showToast('Error: ' + ((res && res.error) || 'No se pudo registrar'));
+    }
+}
+
+async function unmarkRecurringPaidPrompt(logId) {
+    if (!confirm('¿Deseas desmarcar este gasto fijo como pagado? Se anulará el registro.')) return;
+    const res = await api(eel.unmark_recurring_paid, logId);
+    if (res && res.ok) {
+        showToast('Gasto fijo desmarcado');
+        navigate('finance');
+    } else {
+        showToast('Error');
+    }
+}
+
+async function deleteFinanceRecurringPrompt(id) {
+    if (!confirm('¿Deseas eliminar este gasto fijo mensual?')) return;
+    const res = await api(eel.delete_finance_recurring, id);
+    if (res && res.ok) {
+        showToast('Gasto fijo eliminado');
+        navigate('finance');
+    } else {
+        showToast('Error al eliminar');
+    }
+}
+
+async function showFinanceSalaryModal(month, year) {
+    const [salRes, accounts] = await Promise.all([
+        api(eel.get_finance_salaries, year),
+        api(eel.get_finance_accounts)
+    ]);
+
+    const item = (salRes && salRes.months) ? salRes.months.find(m => m.month === month) : null;
+
+    const defaultExp = item ? item.expected_amount : '';
+    const defaultRec = item ? item.received_amount : '';
+    const defaultDate = item && item.payment_date ? item.payment_date : todayStr();
+    const defaultAcc = item ? item.account_id : '';
+    const defaultNotes = item ? item.notes : '';
+
+    let accOptions = (accounts || []).map(a => `<option value="${a.id}" ${a.id == defaultAcc ? 'selected' : ''}>${a.icon || '💳'} ${esc(a.name)} (${fmtARS(a.current_balance)})</option>`).join('');
+
+    const monthNames = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+
+    const bodyHtml = `
+    <input type="hidden" id="salMonth" value="${month}">
+    <input type="hidden" id="salYear" value="${year}">
+    <div style="font-weight:700;font-size:1.05rem;margin-bottom:14px">Liquidación de Sueldo · ${monthNames[month - 1]} ${year}</div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group">
+            <label class="form-label">Sueldo que debería haber cobrado ($ ARS) *</label>
+            <input type="number" step="any" id="salExpected" class="form-control" placeholder="Pactado" value="${defaultExp}" style="font-size:1.1rem;font-weight:700" required>
+            <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px">Monto acordado / liquidado en blanco</div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Sueldo efectivamente cobrado ($ ARS)</label>
+            <input type="number" step="any" id="salReceived" class="form-control" placeholder="Depositado" value="${defaultRec}" style="font-size:1.1rem;font-weight:700;color:#10B981">
+            <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px">Lo que realmente entró a tu cuenta</div>
+        </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="form-group">
+            <label class="form-label">Cuenta donde se cobró</label>
+            <select id="salAccount" class="form-control">${accOptions}</select>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Fecha de cobro</label>
+            <input type="date" id="salDate" class="form-control" value="${defaultDate}">
+        </div>
+    </div>
+
+    <div class="form-group">
+        <label class="form-label">Notas / Descuentos / Conceptos</label>
+        <input type="text" id="salNotes" class="form-control" placeholder="Ej: Faltan horas extras, retención sindicato, bono..." value="${esc(defaultNotes)}">
+    </div>
+
+    <div class="form-group">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+            <input type="checkbox" id="salSyncTx" checked>
+            <span>Impactar el sueldo cobrado como ingreso en la cuenta seleccionada</span>
+        </label>
+    </div>`;
+
+    openModal(`Cargar Sueldo · ${monthNames[month - 1]} ${year}`, bodyHtml);
+    document.getElementById('modalSave').onclick = saveFinanceSalaryForm;
+}
+
+async function saveFinanceSalaryForm() {
+    const month = parseInt(document.getElementById('salMonth').value);
+    const year = parseInt(document.getElementById('salYear').value);
+    const expected_amount = parseFloat(document.getElementById('salExpected').value) || 0;
+    const received_amount = parseFloat(document.getElementById('salReceived').value) || 0;
+    const account_id = document.getElementById('salAccount').value;
+    const payment_date = document.getElementById('salDate').value;
+    const notes = document.getElementById('salNotes').value;
+    const sync_transaction = document.getElementById('salSyncTx').checked;
+
+    if (expected_amount <= 0 && received_amount <= 0) {
+        showToast('Ingresa al menos el sueldo esperado o el recibido');
+        return;
+    }
+
+    const res = await api(eel.save_finance_salary, {
+        month, year, expected_amount, received_amount,
+        account_id: account_id ? parseInt(account_id) : null,
+        payment_date, notes, sync_transaction
+    });
+
+    if (res && res.ok) {
+        showToast('Sueldo guardado correctamente');
+        closeModal();
+        navigate('finance');
+    } else {
+        showToast('Error: ' + ((res && res.error) || 'No se pudo guardar'));
+    }
+}
+
+// Global window bindings for Finance
+window.fmtARS = fmtARS;
+window.fmtUSD = fmtUSD;
+window.renderFinance = renderFinance;
+window.switchFinanceTab = switchFinanceTab;
+window.changeFinancePeriod = changeFinancePeriod;
+window.filterFinanceTxType = filterFinanceTxType;
+window.filterFinanceTxAccount = filterFinanceTxAccount;
+window.onSearchFinanceTx = onSearchFinanceTx;
+window.showNewFinanceTransactionModal = showNewFinanceTransactionModal;
+window.setTxModalType = setTxModalType;
+window.onTxAmountChanged = onTxAmountChanged;
+window.onTxGoalUsdChanged = onTxGoalUsdChanged;
+window.saveFinanceTransactionForm = saveFinanceTransactionForm;
+window.showGoalContributionModal = showGoalContributionModal;
+window.onGoalUsdType = onGoalUsdType;
+window.onGoalArsType = onGoalArsType;
+window.saveGoalContributionForm = saveGoalContributionForm;
+window.showGoalConfigModal = showGoalConfigModal;
+window.saveGoalConfigForm = saveGoalConfigForm;
+window.showFinanceAccountModal = showFinanceAccountModal;
+window.saveFinanceAccountForm = saveFinanceAccountForm;
+window.showFinanceTransferModal = showFinanceTransferModal;
+window.saveFinanceTransferForm = saveFinanceTransferForm;
+window.deleteFinanceTransactionPrompt = deleteFinanceTransactionPrompt;
+window.deleteFinanceAccountPrompt = deleteFinanceAccountPrompt;
+
+// Bindings para Deudas, Gastos Fijos y Sueldos
+window.showFinanceDebtModal = showFinanceDebtModal;
+window.saveFinanceDebtForm = saveFinanceDebtForm;
+window.showFinanceDebtPaymentModal = showFinanceDebtPaymentModal;
+window.saveFinanceDebtPaymentForm = saveFinanceDebtPaymentForm;
+window.deleteFinanceDebtPrompt = deleteFinanceDebtPrompt;
+window.deleteDebtPaymentPrompt = deleteDebtPaymentPrompt;
+
+window.showFinanceRecurringModal = showFinanceRecurringModal;
+window.saveFinanceRecurringForm = saveFinanceRecurringForm;
+window.showQuickPayRecurringModal = showQuickPayRecurringModal;
+window.saveQuickPayRecurringForm = saveQuickPayRecurringForm;
+window.unmarkRecurringPaidPrompt = unmarkRecurringPaidPrompt;
+window.deleteFinanceRecurringPrompt = deleteFinanceRecurringPrompt;
+
+window.showFinanceSalaryModal = showFinanceSalaryModal;
+window.saveFinanceSalaryForm = saveFinanceSalaryForm;
+window.renderFinanceMovimientos = renderFinanceMovimientos;
+window.renderFinanceFijos = renderFinanceFijos;
+window.renderFinanceDeudas = renderFinanceDeudas;
+window.renderFinanceSueldos = renderFinanceSueldos;
+
+
+// New bindings for Deudas, Fijos y Sueldos
+window.showFinanceDebtModal = showFinanceDebtModal;
+window.saveFinanceDebtForm = saveFinanceDebtForm;
+window.showFinanceDebtPaymentModal = showFinanceDebtPaymentModal;
+window.saveFinanceDebtPaymentForm = saveFinanceDebtPaymentForm;
+window.deleteFinanceDebtPrompt = deleteFinanceDebtPrompt;
+window.deleteDebtPaymentPrompt = deleteDebtPaymentPrompt;
+
+window.showFinanceRecurringModal = showFinanceRecurringModal;
+window.saveFinanceRecurringForm = saveFinanceRecurringForm;
+window.showQuickPayRecurringModal = showQuickPayRecurringModal;
+window.saveQuickPayRecurringForm = saveQuickPayRecurringForm;
+window.unmarkRecurringPaidPrompt = unmarkRecurringPaidPrompt;
+window.deleteFinanceRecurringPrompt = deleteFinanceRecurringPrompt;
+
+window.showFinanceSalaryModal = showFinanceSalaryModal;
+window.saveFinanceSalaryForm = saveFinanceSalaryForm;
+
 
 async function renderFinanceMeta(el, data) {
     const goalRes = await api(eel.get_finance_goals);
@@ -10572,6 +11775,29 @@ window.showFinanceTransferModal = showFinanceTransferModal;
 window.saveFinanceTransferForm = saveFinanceTransferForm;
 window.deleteFinanceTransactionPrompt = deleteFinanceTransactionPrompt;
 window.deleteFinanceAccountPrompt = deleteFinanceAccountPrompt;
+
+// Bindings para Deudas, Gastos Fijos y Sueldos
+window.showFinanceDebtModal = showFinanceDebtModal;
+window.saveFinanceDebtForm = saveFinanceDebtForm;
+window.showFinanceDebtPaymentModal = showFinanceDebtPaymentModal;
+window.saveFinanceDebtPaymentForm = saveFinanceDebtPaymentForm;
+window.deleteFinanceDebtPrompt = deleteFinanceDebtPrompt;
+window.deleteDebtPaymentPrompt = deleteDebtPaymentPrompt;
+
+window.showFinanceRecurringModal = showFinanceRecurringModal;
+window.saveFinanceRecurringForm = saveFinanceRecurringForm;
+window.showQuickPayRecurringModal = showQuickPayRecurringModal;
+window.saveQuickPayRecurringForm = saveQuickPayRecurringForm;
+window.unmarkRecurringPaidPrompt = unmarkRecurringPaidPrompt;
+window.deleteFinanceRecurringPrompt = deleteFinanceRecurringPrompt;
+
+window.showFinanceSalaryModal = showFinanceSalaryModal;
+window.saveFinanceSalaryForm = saveFinanceSalaryForm;
+window.renderFinanceMovimientos = renderFinanceMovimientos;
+window.renderFinanceFijos = renderFinanceFijos;
+window.renderFinanceDeudas = renderFinanceDeudas;
+window.renderFinanceSueldos = renderFinanceSueldos;
+
 
 
 

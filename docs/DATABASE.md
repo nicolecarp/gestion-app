@@ -168,6 +168,7 @@ Acreditaciones de seguridad, capacitaciones y exámenes médicos obligatorios.
 | `file_data` | BLOB | | Archivo binario adjunto (PDF o imagen) |
 | `file_name` | TEXT | | Nombre original del archivo |
 | `file_type` | TEXT | | MIME type del archivo |
+| `external_url` | TEXT | | Enlace a OneDrive u otra nube |
 | `notes` | TEXT | | Observaciones |
 
 ### `service_records` & `daily_control`

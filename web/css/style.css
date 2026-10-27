@@ -2838,4 +2838,130 @@ tr:hover td { background: var(--bg); }
     margin-top: 2px;
 }
 
+/* Deudas & Avance */
+.finance-debt-card {
+    background: var(--card);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius);
+    padding: 18px 20px;
+    margin-bottom: 14px;
+    box-shadow: var(--shadow-sm);
+    transition: var(--transition);
+}
+
+.finance-debt-card:hover {
+    box-shadow: var(--shadow);
+    transform: translateY(-1px);
+}
+
+.finance-debt-card.paid {
+    opacity: 0.78;
+    background: rgba(82, 183, 136, 0.04);
+    border-color: rgba(82, 183, 136, 0.3);
+}
+
+.finance-debt-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.finance-debt-title {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--text);
+}
+
+.finance-debt-creditor {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+}
+
+.finance-debt-stat-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 10px;
+    margin: 12px 0;
+    padding: 10px 12px;
+    background: var(--bg);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border-light);
+}
+
+.finance-debt-stat-label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.finance-debt-stat-val {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+
+/* Gastos Fijos */
+.finance-rec-row {
+    background: var(--card);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    transition: var(--transition);
+}
+
+.finance-rec-row:hover {
+    border-color: var(--border);
+    box-shadow: var(--shadow-sm);
+}
+
+.finance-rec-row.is-paid {
+    border-left: 4px solid var(--sage-dark, #2D6A4F);
+}
+
+.finance-rec-row.is-pending {
+    border-left: 4px solid #F59E0B;
+}
+
+.finance-rec-row.is-overdue {
+    border-left: 4px solid var(--rose-dark, #C9184A);
+    background: rgba(242, 139, 168, 0.04);
+}
+
+/* Sueldos */
+.salary-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: var(--radius-full);
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.salary-status-badge.paid_full {
+    background: rgba(82, 183, 136, 0.15);
+    color: #2D6A4F;
+}
+
+.salary-status-badge.paid_partial {
+    background: rgba(245, 158, 11, 0.15);
+    color: #B45309;
+}
+
+.salary-status-badge.pending {
+    background: rgba(225, 29, 72, 0.12);
+    color: #BE123C;
+}
+
+
 

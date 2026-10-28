@@ -1403,6 +1403,43 @@ def apply_cleanups_and_seeds(conn):
         except Exception as e:
             print("[seed_po_v3] Error:", e)
 
+    # 12. Seed October 2026 OCs for Embotelladora La Selva (seed_po_v4_oct2026)
+    seed_po4 = conn.execute("SELECT value FROM config WHERE key='seed_po_v4_oct2026'").fetchone()
+    if not seed_po4:
+        try:
+            conn.execute("""
+                INSERT OR REPLACE INTO client_sites (
+                    id, client_id, codigo_cliente, codigo_sede, codigo_cliente_sede,
+                    nombre_cliente, sede_cliente, distrito, is_regular, monthly_fee,
+                    servicios, location_code, periodicity, is_active
+                ) VALUES (
+                    60, 14, 'ELS', 'LAM', 'ELS-LAM',
+                    'EMBOTELLADORA LA SELVA - PLANTA IQUITOS (CAMBIO DE LAMINAS)', 'CAMBIO DE LAMINAS',
+                    'Iquitos', 0, 3840.00, 'SERVICIO DE CAMBIO DE LAMINAS DE INSECTOCUTORES', '1', 'eventual', 1
+                )
+            """)
+            new_selva_ocs = [
+                (14, 15, 2026, 10, '6300012092', 4225.0, 'pending', 'SERV DESINSECTACION - Planta Iquitos JR3 (5 posiciones)', 'mensual', '2026-10-28', 'Planta Iquitos JR3', '6300', 'JR3', 'Embotelladora La Selva S.A.C.', '[{"pos": "10", "mat": "000000000000451108", "desc": "SERV DESINSECTACION", "cant": 1.0, "un": "UN", "pu": 1200.0}, {"pos": "20", "mat": "000000000000451109", "desc": "SERV DESINFECCION", "cant": 1.0, "un": "UN", "pu": 200.0}, {"pos": "30", "mat": "000000000000451110", "desc": "SERV DESRATIZACION", "cant": 1.0, "un": "UN", "pu": 1100.0}, {"pos": "40", "mat": "000000000000451111", "desc": "SERV MONITOREO INSECTOCUTORES", "cant": 1.0, "un": "UN", "pu": 1600.0}, {"pos": "50", "mat": "000000000000451112", "desc": "SERV CONTROL DE AVES", "cant": 1.0, "un": "UN", "pu": 125.0}]'),
+                (14, 16, 2026, 10, '6300012093', 1250.0, 'pending', 'SERV DESINSECTACION - Planta Iquitos JR3 (5 posiciones)', 'mensual', '2026-10-28', 'Planta Iquitos JR3', '6300', 'JR3', 'Embotelladora La Selva S.A.C.', '[{"pos": "10", "mat": "000000000000451108", "desc": "SERV DESINSECTACION", "cant": 1.0, "un": "UN", "pu": 600.0}, {"pos": "20", "mat": "000000000000451108", "desc": "SERV DESINSECTACION", "cant": 1.0, "un": "UN", "pu": 100.0}, {"pos": "30", "mat": "000000000000451109", "desc": "SERV DESINFECCION", "cant": 1.0, "un": "UN", "pu": 50.0}, {"pos": "40", "mat": "000000000000451110", "desc": "SERV DESRATIZACION", "cant": 1.0, "un": "UN", "pu": 400.0}, {"pos": "50", "mat": "000000000000451112", "desc": "SERV CONTROL DE AVES", "cant": 1.0, "un": "UN", "pu": 100.0}]'),
+                (14, 17, 2026, 10, '6300012094', 1420.0, 'pending', 'SERV DESINSECTACION - Planta Iquitos JR3', 'mensual', '2026-10-28', 'Planta Iquitos JR3', '6300', 'JR3', 'Embotelladora La Selva S.A.C.', '[{"pos": "10", "mat": "000000000000451108", "desc": "SERV DESINSECTACION", "cant": 1.0, "un": "UN", "pu": 1420.0}]'),
+                (14, 60, 2026, 10, '6300012096', 3840.0, 'pending', 'CAMBIO DE LAMINAS DE INSECTOCUTORES - Planta Iquitos JR3', 'eventual', '2026-10-28', 'Planta Iquitos JR3', '6300', 'JR3', 'Embotelladora La Selva S.A.C.', '[{"pos": "10", "mat": "000000000000451111", "desc": "SERV MONITOREO INSECTOCUTORES", "cant": 1.0, "un": "UN", "pu": 3840.0}]')
+            ]
+            for cid, sid, y, m, oc, am, st, nt, per, dt, cloc, idcloc, idsoc, soc, items_str in new_selva_ocs:
+                existing_po = conn.execute("SELECT id FROM purchase_orders WHERE oc_number = ?", (oc,)).fetchone()
+                if not existing_po:
+                    conn.execute("""
+                        INSERT INTO purchase_orders (
+                            client_id, client_site_id, year, month, oc_number, amount, status, notes,
+                            periodicity, issue_date, centro_logistico, id_centro_logistico, sociedad_code, sociedad_name, items_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (cid, sid, y, m, oc, am, st, nt, per, dt, cloc, idcloc, idsoc, soc, items_str))
+
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('seed_po_v4_oct2026', '1')")
+            conn.commit()
+            print("[seed_po_v4_oct2026] Successfully updated October 2026 OCs.")
+        except Exception as e:
+            print("[seed_po_v4_oct2026] Error:", e)
+
 
 def seed_default_workouts(conn):
     count = conn.execute("SELECT COUNT(*) FROM workout_days").fetchone()[0]

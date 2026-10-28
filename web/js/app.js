@@ -299,7 +299,7 @@ function getWeatherInfoFromWMO(code, isDay = 1) {
 }
 
 async function fetchWeatherData(forceRefresh = false) {
-    const CACHE_KEY = 'nicole_weather_cache';
+    const CACHE_KEY = 'nicole_weather_cache_v2';
     const CACHE_MS = 20 * 60 * 1000; // 20 minutos de caché
 
     if (!forceRefresh) {
@@ -318,9 +318,9 @@ async function fetchWeatherData(forceRefresh = false) {
         } catch (_) {}
     }
 
-    let lat = -34.6037;
-    let lon = -58.3816;
-    let cityName = 'Buenos Aires';
+    let lat = -34.6602;
+    let lon = -58.3674;
+    let cityName = 'Avellaneda, Buenos Aires';
 
     try {
         const savedCoords = localStorage.getItem('nicole_weather_coords');
@@ -459,7 +459,7 @@ function buildWeatherWidgetHtml(weather, isLoading = false) {
             <div class="weather-header">
                 <div class="weather-location-wrap">
                     <span style="font-size:1rem">📍</span>
-                    <span id="weatherCityName">${esc(weather.cityName || 'Buenos Aires')}</span>
+                    <span id="weatherCityName">${esc(weather.cityName || 'Avellaneda, Buenos Aires')}</span>
                     <span class="weather-badge">Hoy</span>
                 </div>
                 <div class="weather-actions">
@@ -568,7 +568,7 @@ async function getQuickWeatherNotificationText() {
         const cur = weather.current;
         const wInfo = getWeatherInfoFromWMO(cur.weather_code, cur.is_day);
         const temp = Math.round(cur.temperature_2m);
-        const city = weather.cityName || 'Bs As';
+        const city = weather.cityName || 'Avellaneda';
         let minMax = '';
         if (weather.daily && weather.daily.temperature_2m_min && weather.daily.temperature_2m_max) {
             const min = Math.round(weather.daily.temperature_2m_min[0]);

@@ -3612,9 +3612,10 @@ def get_workout_progress():
 # ===================== WEATHER =====================
 
 @eel.expose
-def get_weather_data(lat=-34.6037, lon=-58.3816):
+def get_weather_data(lat=-34.6602, lon=-58.3674):
     """
     Obtiene el pronóstico actual y extendido desde Open-Meteo para el resumen del dashboard.
+    Coordenadas predeterminadas: Avellaneda, Buenos Aires (-34.6602, -58.3674).
     """
     import urllib.request
     import json

@@ -2089,18 +2089,15 @@ function updateQuickBillDueDate() {
     const issueDateStr = document.getElementById('qbIssueDate')?.value || todayStr();
     const termVal = document.getElementById('qbDueTerm')?.value;
     const dispEl = document.getElementById('qbDueDateDisplay');
-    const valEl = document.getElementById('qbDueDateValue');
     if (!dispEl) return;
 
     const days = parseInt(termVal) || 0;
     const info = calcDueDateInfo(issueDateStr, days);
-    
-    if (valEl) valEl.value = info.formatted;
 
     if (days === 0) {
-        dispEl.innerHTML = `<strong>${info.formatted}</strong> <span style="font-size:0.75rem;font-weight:normal;color:var(--text-muted)">(Al Contado · Mismo día)</span>`;
+        dispEl.innerHTML = `${info.formatted} <span style="font-size:0.75rem;font-weight:normal;color:var(--text-muted)">(Al Contado)</span>`;
     } else {
-        dispEl.innerHTML = `<strong>${info.formatted}</strong> <span style="font-size:0.75rem;font-weight:normal;color:var(--text-muted)">(en ${days} días)</span>`;
+        dispEl.innerHTML = `${info.formatted} <span style="font-size:0.75rem;font-weight:normal;color:var(--text-muted)">(en ${days} días)</span>`;
     }
 }
 
@@ -2125,23 +2122,16 @@ function showQuickBillOcModal(poId) {
     const modalHtml = `
     <form id="quickBillForm" onsubmit="saveQuickBillOc(event, ${po.id})">
         <div class="card" style="margin-bottom:14px;padding:12px;background:var(--card)">
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">
-                <div>
-                    <div style="font-weight:700;font-size:0.98rem;color:var(--primary);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                        <span>${esc(clientName)}</span>
-                        ${clientRuc ? `
-                            <span class="tag tag-ghost" style="font-size:0.75rem;padding:2px 7px;font-family:monospace;letter-spacing:0.5px">
-                                RUC: <strong>${esc(clientRuc)}</strong>
-                            </span>
-                        ` : ''}
-                    </div>
-                    <div style="font-size:0.8rem;color:var(--text-muted);margin-top:2px">${esc(siteName)}</div>
+            <div>
+                <div style="font-weight:700;font-size:0.98rem;color:var(--primary);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <span>${esc(clientName)}</span>
+                    ${clientRuc ? `
+                        <span class="tag tag-ghost" style="font-size:0.75rem;padding:2px 7px;font-family:monospace;letter-spacing:0.5px">
+                            RUC: <strong>${esc(clientRuc)}</strong>
+                        </span>
+                    ` : ''}
                 </div>
-                ${clientRuc ? `
-                    <button type="button" class="btn btn-ghost btn-sm" onclick="copySunatField('${esc(clientRuc)}', 'RUC')" style="font-size:0.72rem;padding:2px 7px;color:var(--text-muted)" title="Copiar RUC">
-                        📋 Copiar RUC
-                    </button>
-                ` : ''}
+                <div style="font-size:0.8rem;color:var(--text-muted);margin-top:2px">${esc(siteName)}</div>
             </div>
             <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border-light);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;font-size:0.85rem">
                 <span>OC: <strong>${esc(po.oc_number)}</strong></span>
@@ -2181,19 +2171,9 @@ function showQuickBillOcModal(poId) {
             </div>
         </div>
 
-        <!-- Fecha Calculada de Vencimiento para SUNAT -->
-        <div id="qbDueDateBox" style="margin-bottom:14px;padding:9px 12px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.22);border-radius:8px;display:flex;align-items:center;justify-content:space-between">
-            <div style="display:flex;align-items:center;gap:10px">
-                <span style="font-size:1.15rem">📅</span>
-                <div>
-                    <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;font-weight:600;letter-spacing:0.5px">Fecha Calculada del Crédito (Vencimiento)</div>
-                    <div id="qbDueDateDisplay" style="font-family:monospace;font-weight:700;font-size:1rem;color:var(--primary);margin-top:2px">--/--/----</div>
-                </div>
-            </div>
-            <button type="button" class="btn btn-secondary btn-sm" id="qbCopyDueDateBtn" onclick="copySunatField(document.getElementById('qbDueDateValue')?.value || '', 'Fecha de Vencimiento')" style="font-size:0.75rem;padding:4px 9px;font-weight:600" title="Copiar fecha para el portal SUNAT">
-                📋 Copiar
-            </button>
-            <input type="hidden" id="qbDueDateValue" value="">
+        <div style="margin-top:-2px;margin-bottom:14px;font-size:0.83rem;color:var(--text-muted);display:flex;align-items:center;gap:6px">
+            <span>📅 Vencimiento calculado:</span>
+            <strong id="qbDueDateDisplay" style="color:var(--accent);font-family:monospace;font-size:0.95rem">--/--/----</strong>
         </div>
     </form>`;
 

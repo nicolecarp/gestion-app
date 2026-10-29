@@ -1240,19 +1240,6 @@ async function renderWorkMatrix(el) {
         }
     });
 
-    const pendingOrdersCount = orders.filter(o => o.status === 'pending').length;
-    const invoicedOrdersCount = orders.filter(o => o.status === 'invoiced').length;
-
-    const kpiOrders = isSingleMonth ? orders.filter(o => o.month === mSel) : orders;
-    const kpiPendingOrdersCount = kpiOrders.filter(o => {
-        if (o.status === 'invoiced') return false;
-        const invList = (o.client_site_id ? invMap[o.client_site_id + '-' + o.month] : invMap['c' + o.client_id + '-' + o.month]) || [];
-        const bTot = invList.reduce((acc, i) => acc + (i.amount || 0), 0);
-        if (invList.some(i => i.purchase_order && i.purchase_order.trim() === o.oc_number.trim())) return false;
-        if (bTot >= (o.amount || 0) && bTot > 0) return false;
-        return true;
-    }).length;
-
     // Lookups
     const invMap = {};
     for (const inv of invoices) {
@@ -1281,6 +1268,19 @@ async function renderWorkMatrix(el) {
             ocMap[kc].push(po);
         }
     }
+
+    const pendingOrdersCount = orders.filter(o => o.status === 'pending').length;
+    const invoicedOrdersCount = orders.filter(o => o.status === 'invoiced').length;
+
+    const kpiOrders = isSingleMonth ? orders.filter(o => o.month === mSel) : orders;
+    const kpiPendingOrdersCount = kpiOrders.filter(o => {
+        if (o.status === 'invoiced') return false;
+        const invList = (o.client_site_id ? invMap[o.client_site_id + '-' + o.month] : invMap['c' + o.client_id + '-' + o.month]) || [];
+        const bTot = invList.reduce((acc, i) => acc + (i.amount || 0), 0);
+        if (invList.some(i => i.purchase_order && i.purchase_order.trim() === o.oc_number.trim())) return false;
+        if (bTot >= (o.amount || 0) && bTot > 0) return false;
+        return true;
+    }).length;
 
     // Group filtered sites by client (Empresa)
     const sitesByClient = {};

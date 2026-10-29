@@ -209,6 +209,15 @@ def create_invoice(data):
               data.get('purchase_order'), detraccion, credito,
               data.get('location_code'), data.get('items_json'), data.get('status', 'issued')))
         new_id = cur.lastrowid
+
+        # Auto-mark matching purchase order as invoiced
+        po_num = (data.get('purchase_order') or '').strip()
+        site_id = data.get('client_site_id')
+        if po_num:
+            conn.execute("UPDATE purchase_orders SET status='invoiced' WHERE oc_number=? OR oc_number LIKE ?", (po_num, f"%{po_num}%"))
+        if site_id and mb and yb:
+            conn.execute("UPDATE purchase_orders SET status='invoiced' WHERE client_site_id=? AND month=? AND year=?", (site_id, mb, yb))
+
         conn.commit()
         return {'ok': True, 'id': new_id}
     except Exception as e:
@@ -248,6 +257,17 @@ def update_invoice(id, data):
               data.get('due_date'), data.get('status', 'issued'), mb, yb,
               data.get('purchase_order'), detraccion, credito,
               data.get('location_code'), data.get('items_json'), id))
+
+        # Auto-mark matching purchase order as invoiced if not annulled
+        inv_status = data.get('status', 'issued')
+        po_num = (data.get('purchase_order') or '').strip()
+        site_id = data.get('client_site_id')
+        if inv_status != 'annulled':
+            if po_num:
+                conn.execute("UPDATE purchase_orders SET status='invoiced' WHERE oc_number=? OR oc_number LIKE ?", (po_num, f"%{po_num}%"))
+            if site_id and mb and yb:
+                conn.execute("UPDATE purchase_orders SET status='invoiced' WHERE client_site_id=? AND month=? AND year=?", (site_id, mb, yb))
+
         conn.commit()
         return {'ok': True}
     except Exception as e:
@@ -1993,9 +2013,36 @@ def get_monthly_billing(year=None):
             ORDER BY i.month_billed ASC, i.id ASC
         """, (year,)).fetchall()
 
-        # Purchase orders for this year
+        # Auto-sync any purchase orders that already have matching active invoices
+        conn.execute("""
+            UPDATE purchase_orders 
+            SET status = 'invoiced'
+            WHERE status = 'pending' AND id IN (
+                SELECT po.id 
+                FROM purchase_orders po
+                JOIN invoices i ON (
+                    (i.purchase_order IS NOT NULL AND i.purchase_order != '' AND (i.purchase_order = po.oc_number OR po.oc_number LIKE '%' || i.purchase_order || '%'))
+                    OR (i.client_site_id = po.client_site_id AND i.month_billed = po.month AND i.year_billed = po.year)
+                )
+                WHERE (i.status != 'annulled' OR i.status IS NULL)
+            )
+        """)
+        conn.commit()
+
+        # Purchase orders for this year with dynamic computed status
         orders = conn.execute("""
-            SELECT po.*, cs.nombre_cliente as site_name, cs.location_code as site_location, c.business_name as empresa, c.ruc
+            SELECT po.*,
+                   CASE 
+                       WHEN EXISTS (
+                           SELECT 1 FROM invoices i 
+                           WHERE (
+                               (i.purchase_order IS NOT NULL AND i.purchase_order != '' AND (i.purchase_order = po.oc_number OR po.oc_number LIKE '%' || i.purchase_order || '%'))
+                               OR (i.client_site_id = po.client_site_id AND i.month_billed = po.month AND i.year_billed = po.year)
+                           ) AND (i.status != 'annulled' OR i.status IS NULL)
+                       ) THEN 'invoiced'
+                       ELSE po.status
+                   END as status,
+                   cs.nombre_cliente as site_name, cs.location_code as site_location, c.business_name as empresa, c.ruc
             FROM purchase_orders po
             JOIN clients c ON po.client_id = c.id
             LEFT JOIN client_sites cs ON po.client_site_id = cs.id

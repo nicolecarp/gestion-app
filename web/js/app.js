@@ -2160,6 +2160,7 @@ function showQuickBillOcModal(poId) {
                     <option value="21">Crédito a 21 días</option>
                     <option value="30" selected>Crédito a 30 días</option>
                     <option value="45">Crédito a 45 días</option>
+                    <option value="60">Crédito a 60 días</option>
                     <option value="90">Crédito a 90 días</option>
                     <option value="0">Al Contado (0 días)</option>
                 </select>
@@ -3573,6 +3574,7 @@ async function renderWorkCalculator(el) {
                         <option value="21"${window.extCalc.dueDays === 21 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Crédito a 21 días</option>
                         <option value="30"${window.extCalc.dueDays === 30 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Crédito a 30 días</option>
                         <option value="45"${window.extCalc.dueDays === 45 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Crédito a 45 días</option>
+                        <option value="60"${window.extCalc.dueDays === 60 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Crédito a 60 días</option>
                         <option value="90"${window.extCalc.dueDays === 90 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Crédito a 90 días</option>
                         <option value="0"${window.extCalc.dueDays === 0 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Al Contado (Mismo día)</option>
                         <option value="custom"${window.extCalc.isCustomDueDate ? ' selected' : ''}>Personalizado (Elegir fecha)</option>

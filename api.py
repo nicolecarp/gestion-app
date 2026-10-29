@@ -170,7 +170,7 @@ def get_invoices():
             FROM invoices i
             JOIN clients c ON i.client_id=c.id
             LEFT JOIN client_sites cs ON i.client_site_id = cs.id
-            ORDER BY COALESCE(i.year_billed, 0) DESC, COALESCE(i.month_billed, 0) DESC, i.id DESC
+            ORDER BY i.series DESC, CAST(i.number AS INTEGER) DESC, i.number DESC, i.id DESC
         """).fetchall()
         return [dict(r) for r in rows]
     finally:
@@ -259,8 +259,18 @@ def update_invoice(id, data):
 def delete_invoice(id):
     conn = get_connection()
     try:
+        inv = conn.execute("SELECT purchase_order, client_site_id, month_billed, year_billed FROM invoices WHERE id=?", (id,)).fetchone()
+        po_num = inv['purchase_order'] if inv else None
+
         conn.execute("DELETE FROM invoices WHERE id=?", (id,))
         conn.commit()
+
+        if po_num:
+            other = conn.execute("SELECT COUNT(id) FROM invoices WHERE purchase_order=? AND status != 'annulled'", (po_num,)).fetchone()[0]
+            if other == 0:
+                conn.execute("UPDATE purchase_orders SET status='pending' WHERE oc_number=?", (po_num,))
+                conn.commit()
+
         return {'ok': True}
     except Exception as e:
         return {'ok': False, 'error': str(e)}

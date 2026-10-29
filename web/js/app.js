@@ -1449,7 +1449,7 @@ async function renderWorkMatrix(el) {
                             ${selMonthName} ${state.matrixYear} (Sin IGV)
                         </th>
                         <th style="text-align:right;font-size:0.75rem;min-width:115px;padding:6px 8px">Facturado Mes</th>
-                        <th style="text-align:center;font-size:0.75rem;min-width:90px;padding:6px 6px">Diferencia</th>
+                        <th style="text-align:center;font-size:0.75rem;min-width:95px;padding:6px 6px">Estado / Saldo</th>
                         <th style="text-align:center;font-size:0.75rem;min-width:115px;padding:6px 6px">Acción</th>
                     </tr>
                 </thead>
@@ -1457,6 +1457,7 @@ async function renderWorkMatrix(el) {
 
         let singleMonthBilledTotal = 0;
         let singleMonthExpectedTotal = 0;
+        let singleMonthPendingOcTotal = 0;
 
         for (const cid of companyIds) {
             const clientSites = sitesByClient[cid] || [];
@@ -1469,6 +1470,8 @@ async function renderWorkMatrix(el) {
             let empMonthBilled = 0;
             let empMonthPendingOcs = 0;
 
+            let empMonthPendingOcAmount = 0;
+
             for (const s of clientSites) {
                 const fee = parseFloat(s.monthly_fee) || 0;
                 empTotalCuota += fee;
@@ -1480,10 +1483,12 @@ async function renderWorkMatrix(el) {
                 singleMonthBilledTotal += mTot;
 
                 const ocs = ocMap[s.id + '-' + mSel] || [];
-                empMonthPendingOcs += ocs.filter(o => o.status === 'pending').length;
+                const pendingOcs = ocs.filter(o => o.status === 'pending');
+                empMonthPendingOcs += pendingOcs.length;
+                empMonthPendingOcAmount += pendingOcs.reduce((sum, o) => sum + (o.amount || 0), 0);
             }
 
-            const empDiff = empMonthBilled - empTotalCuota;
+            singleMonthPendingOcTotal += empMonthPendingOcAmount;
 
             // Company Row
             html += `<tr class="matrix-empresa-row ${isExpanded ? '' : 'collapsed'}" onclick="toggleEmpresaExpand(${cid})">
@@ -1512,11 +1517,15 @@ async function renderWorkMatrix(el) {
                     ${empMonthBilled > 0 ? `S/ ${fmtMoney(empMonthBilled)}` : '—'}
                 </td>
                 <td style="text-align:center;padding:6px 4px">
-                    ${(empTotalCuota > 0 || empMonthBilled > 0) ? `
-                        <span class="tag ${empDiff >= 0 ? 'tag-sage' : 'tag-rose'}" style="font-size:0.7rem;padding:2px 6px">
-                            ${empDiff >= 0 ? '+' : ''}${fmtMoney(empDiff)}
+                    ${empMonthPendingOcs > 0 ? `
+                        <span class="tag tag-gold" style="font-size:0.7rem;padding:2px 6px" title="Órdenes de compra pendientes de facturar">
+                            ⏳ ${empMonthPendingOcs} OC pend.
                         </span>
-                    ` : '<span style="color:var(--text-muted);font-size:0.75rem">-</span>'}
+                    ` : (empMonthBilled > 0 ? `
+                        <span class="tag tag-sage" style="font-size:0.7rem;padding:2px 6px">
+                            ✓ Facturado
+                        </span>
+                    ` : '<span style="color:var(--text-muted);font-size:0.75rem">—</span>')}
                 </td>
                 <td style="text-align:center;padding:6px 4px;font-size:0.72rem;color:var(--text-muted)">
                     ${isExpanded ? '▲ Colapsar' : '▼ Desglosar'}
@@ -1542,18 +1551,36 @@ async function renderWorkMatrix(el) {
 
                     if (cellInvs.length > 0 && cellOcs.length > 0) {
                         const po = cellOcs[0];
-                        const inv = cellInvs[0];
-                        cellContent = `<div class="matrix-cell-invoiced ${isCellMatched ? 'matrix-cell-highlight' : ''}" style="padding:6px 10px;text-align:left;display:flex;justify-content:space-between;align-items:center" onclick="showInvoiceForm(${inv.id})">
-                            <div>
-                                <div style="font-family:monospace;font-weight:700;font-size:0.85rem;color:var(--accent)">S/ ${fmtMoney(monthAmount)}</div>
-                                <div style="font-size:0.72rem;color:var(--text-muted)">Factura: <strong>${esc(inv.series)}-${esc(inv.number)}</strong></div>
-                            </div>
-                            <div style="text-align:right">
-                                <span class="tag tag-gold" style="font-size:0.72rem">OC ${esc(po.oc_number)}</span>
-                                <div style="font-size:0.68rem;color:#10b981;font-weight:700">✓ Facturado</div>
-                            </div>
-                        </div>`;
-                        actionButton = `<button class="btn btn-ghost btn-sm" style="font-size:0.75rem;padding:3px 8px" onclick="showInvoiceForm(${inv.id})">✎ Factura</button>`;
+                        if (cellInvs.length === 1) {
+                            const inv = cellInvs[0];
+                            cellContent = `<div class="matrix-cell-invoiced ${isCellMatched ? 'matrix-cell-highlight' : ''}" style="padding:6px 10px;text-align:left;display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="showInvoiceForm(${inv.id})">
+                                <div>
+                                    <div style="font-family:monospace;font-weight:700;font-size:0.85rem;color:var(--accent)">S/ ${fmtMoney(monthAmount)}</div>
+                                    <div style="font-size:0.72rem;color:var(--text-muted)">Factura: <strong>${esc(inv.series)}-${esc(inv.number)}</strong></div>
+                                </div>
+                                <div style="text-align:right">
+                                    <span class="tag tag-gold" style="font-size:0.72rem">OC ${esc(po.oc_number)}</span>
+                                    <div style="font-size:0.68rem;color:#10b981;font-weight:700">✓ Facturado</div>
+                                </div>
+                            </div>`;
+                            actionButton = `<button class="btn btn-ghost btn-sm" style="font-size:0.75rem;padding:3px 8px" onclick="showInvoiceForm(${inv.id})">✎ Factura</button>`;
+                        } else {
+                            // Multiple invoices in same cell (e.g. duplicate)
+                            cellContent = `<div style="display:flex;flex-direction:column;gap:4px">` +
+                                cellInvs.map(inv => `
+                                    <div class="matrix-cell-invoiced" style="padding:4px 8px;display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="showInvoiceForm(${inv.id})">
+                                        <div>
+                                            <span style="font-family:monospace;font-weight:700;font-size:0.82rem;color:var(--accent)">S/ ${fmtMoney(inv.amount || 0)}</span>
+                                            <span style="font-size:0.72rem;color:var(--text-muted);margin-left:4px">F: <strong>${esc(inv.series)}-${esc(inv.number)}</strong></span>
+                                        </div>
+                                        <div style="display:flex;align-items:center;gap:4px">
+                                            <span class="tag tag-sage" style="font-size:0.65rem">Facturada</span>
+                                            <button class="btn btn-ghost btn-sm" style="padding:1px 5px;font-size:0.7rem;color:#ef4444" onclick="event.stopPropagation(); deleteInvoice(${inv.id}, '${esc(inv.series)}-${esc(inv.number)}')" title="Eliminar comprobante">✕</button>
+                                        </div>
+                                    </div>
+                                `).join('') + `</div>`;
+                            actionButton = `<button class="btn btn-ghost btn-sm" style="font-size:0.75rem;padding:3px 8px" onclick="showInvoiceForm(${cellInvs[0].id})">✎ Facturas (${cellInvs.length})</button>`;
+                        }
                     } else if (cellOcs.length > 0) {
                         const po = cellOcs[0];
                         cellContent = `<div class="matrix-cell-oc ${isCellMatched ? 'matrix-cell-highlight' : ''}" style="padding:6px 10px;text-align:left;display:flex;justify-content:space-between;align-items:center" onclick="showQuickBillOcModal(${po.id})">
@@ -1568,18 +1595,35 @@ async function renderWorkMatrix(el) {
                         </div>`;
                         actionButton = `<button class="btn btn-primary btn-sm" style="font-size:0.72rem;padding:3px 8px" onclick="showQuickBillOcModal(${po.id})">Facturar ➔</button>`;
                     } else if (cellInvs.length > 0) {
-                        const inv = cellInvs[0];
-                        const ocDisp = inv.purchase_order;
-                        cellContent = `<div class="matrix-cell-invoiced ${isCellMatched ? 'matrix-cell-highlight' : ''}" style="padding:6px 10px;text-align:left;display:flex;justify-content:space-between;align-items:center" onclick="showInvoiceForm(${inv.id})">
-                            <div>
-                                <div style="font-family:monospace;font-weight:700;font-size:0.85rem;color:var(--accent)">S/ ${fmtMoney(monthAmount)}</div>
-                                <div style="font-size:0.72rem;color:var(--text-muted)">F: <strong>${esc(inv.series)}-${esc(inv.number)}</strong></div>
-                            </div>
-                            <div style="text-align:right">
-                                ${ocDisp ? `<span class="tag tag-gold" style="font-size:0.72rem">OC ${esc(ocDisp)}</span>` : '<span style="font-size:0.68rem;color:#10b981;font-weight:700">✓ Facturado</span>'}
-                            </div>
-                        </div>`;
-                        actionButton = `<button class="btn btn-ghost btn-sm" style="font-size:0.75rem;padding:3px 8px" onclick="showInvoiceForm(${inv.id})">✎ Factura</button>`;
+                        if (cellInvs.length === 1) {
+                            const inv = cellInvs[0];
+                            const ocDisp = inv.purchase_order;
+                            cellContent = `<div class="matrix-cell-invoiced ${isCellMatched ? 'matrix-cell-highlight' : ''}" style="padding:6px 10px;text-align:left;display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="showInvoiceForm(${inv.id})">
+                                <div>
+                                    <div style="font-family:monospace;font-weight:700;font-size:0.85rem;color:var(--accent)">S/ ${fmtMoney(monthAmount)}</div>
+                                    <div style="font-size:0.72rem;color:var(--text-muted)">F: <strong>${esc(inv.series)}-${esc(inv.number)}</strong></div>
+                                </div>
+                                <div style="text-align:right">
+                                    ${ocDisp ? `<span class="tag tag-gold" style="font-size:0.72rem">OC ${esc(ocDisp)}</span>` : '<span style="font-size:0.68rem;color:#10b981;font-weight:700">✓ Facturado</span>'}
+                                </div>
+                            </div>`;
+                            actionButton = `<button class="btn btn-ghost btn-sm" style="font-size:0.75rem;padding:3px 8px" onclick="showInvoiceForm(${inv.id})">✎ Factura</button>`;
+                        } else {
+                            cellContent = `<div style="display:flex;flex-direction:column;gap:4px">` +
+                                cellInvs.map(inv => `
+                                    <div class="matrix-cell-invoiced" style="padding:4px 8px;display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="showInvoiceForm(${inv.id})">
+                                        <div>
+                                            <span style="font-family:monospace;font-weight:700;font-size:0.82rem;color:var(--accent)">S/ ${fmtMoney(inv.amount || 0)}</span>
+                                            <span style="font-size:0.72rem;color:var(--text-muted);margin-left:4px">F: <strong>${esc(inv.series)}-${esc(inv.number)}</strong></span>
+                                        </div>
+                                        <div style="display:flex;align-items:center;gap:4px">
+                                            <span class="tag tag-sage" style="font-size:0.65rem">Facturada</span>
+                                            <button class="btn btn-ghost btn-sm" style="padding:1px 5px;font-size:0.7rem;color:#ef4444" onclick="event.stopPropagation(); deleteInvoice(${inv.id}, '${esc(inv.series)}-${esc(inv.number)}')" title="Eliminar comprobante">✕</button>
+                                        </div>
+                                    </div>
+                                `).join('') + `</div>`;
+                            actionButton = `<button class="btn btn-ghost btn-sm" style="font-size:0.75rem;padding:3px 8px" onclick="showInvoiceForm(${cellInvs[0].id})">✎ Facturas (${cellInvs.length})</button>`;
+                        }
                     } else {
                         cellContent = `<div class="matrix-cell-empty" style="padding:8px 6px;text-align:center" onclick="showPurchaseOrderModal(null, ${s.id}, ${s.client_id}, ${mSel}, ${state.matrixYear})">
                             <span style="font-size:0.75rem;font-weight:600">+ Registrar OC / Cuota</span>
@@ -1587,8 +1631,26 @@ async function renderWorkMatrix(el) {
                         actionButton = `<button class="btn btn-ghost btn-sm" style="font-size:0.72rem;padding:3px 8px" onclick="showPurchaseOrderModal(null, ${s.id}, ${s.client_id}, ${mSel}, ${state.matrixYear})">+ OC</button>`;
                     }
 
-                    const diffSite = monthAmount - fee;
-                    const diffCls = diffSite >= 0 ? 'tag-sage' : 'tag-rose';
+                    // Estado / Saldo: SI NO HAY OC, NO DEBE SALIR SALDO NEGATIVO (no es pérdida)
+                    let statusSiteBadge = '<span style="color:var(--text-muted);font-size:0.75rem">—</span>';
+                    if (cellOcs.length > 0) {
+                        const ocSum = cellOcs.reduce((sum, o) => sum + (o.amount || 0), 0);
+                        const hasPendingOc = cellOcs.some(o => o.status === 'pending');
+                        if (monthAmount >= ocSum && ocSum > 0) {
+                            if (monthAmount > ocSum) {
+                                statusSiteBadge = `<span class="tag tag-sage" style="font-size:0.7rem;padding:2px 6px">+S/ ${fmtMoney(monthAmount - ocSum)}</span>`;
+                            } else {
+                                statusSiteBadge = `<span class="tag tag-sage" style="font-size:0.7rem;padding:2px 6px">✓ Facturado</span>`;
+                            }
+                        } else if (hasPendingOc) {
+                            const pendDiff = ocSum - monthAmount;
+                            statusSiteBadge = `<span class="tag tag-gold" style="font-size:0.7rem;padding:2px 6px" title="OC pendiente de facturar">⏳ S/ ${fmtMoney(pendDiff)} pend.</span>`;
+                        }
+                    } else if (monthAmount > 0) {
+                        statusSiteBadge = `<span class="tag tag-sage" style="font-size:0.7rem;padding:2px 6px">+S/ ${fmtMoney(monthAmount)}</span>`;
+                    } else {
+                        statusSiteBadge = '<span style="color:var(--text-muted);font-size:0.75rem">—</span>';
+                    }
 
                     html += `<tr class="matrix-site-row">
                         <td class="matrix-sticky-col matrix-site-indent">
@@ -1615,11 +1677,7 @@ async function renderWorkMatrix(el) {
                             ${monthAmount > 0 ? `S/ ${fmtMoney(monthAmount)}` : '—'}
                         </td>
                         <td style="text-align:center;padding:6px 4px">
-                            ${(fee > 0 || monthAmount > 0) ? `
-                                <span class="tag ${diffCls}" style="font-size:0.7rem;padding:2px 6px">
-                                    ${diffSite >= 0 ? '+' : ''}${fmtMoney(diffSite)}
-                                </span>
-                            ` : '<span style="color:var(--text-muted);font-size:0.75rem">—</span>'}
+                            ${statusSiteBadge}
                         </td>
                         <td style="text-align:center;padding:6px 4px;white-space:nowrap">
                             ${actionButton}
@@ -1644,9 +1702,15 @@ async function renderWorkMatrix(el) {
                             S/ ${fmtMoney(singleMonthBilledTotal)}
                         </td>
                         <td style="text-align:center">
-                            <span class="tag ${singleMonthDiff >= 0 ? 'tag-sage' : 'tag-rose'}" style="font-size:0.72rem">
-                                ${(singleMonthDiff >= 0 ? '+' : '')}${fmtMoney(singleMonthDiff)}
-                            </span>
+                            ${singleMonthPendingOcTotal > 0 ? `
+                                <span class="tag tag-gold" style="font-size:0.72rem">
+                                    ⏳ S/ ${fmtMoney(singleMonthPendingOcTotal)} por facturar
+                                </span>
+                            ` : (singleMonthBilledTotal > 0 ? `
+                                <span class="tag tag-sage" style="font-size:0.72rem">
+                                    ✓ Facturación al día
+                                </span>
+                            ` : '<span style="color:var(--text-muted);font-size:0.72rem">—</span>')}
                         </td>
                         <td style="text-align:center">-</td>
                     </tr>
@@ -1671,7 +1735,7 @@ async function renderWorkMatrix(el) {
 
         html += `
                         <th style="text-align:right;font-size:0.75rem;min-width:100px;padding:6px 8px">Total Sin IGV</th>
-                        <th style="text-align:center;font-size:0.75rem;min-width:80px;padding:6px 6px">Diferencia</th>
+                        <th style="text-align:center;font-size:0.75rem;min-width:85px;padding:6px 6px">Estado</th>
                     </tr>
                 </thead>
                 <tbody>`;
@@ -1818,18 +1882,25 @@ async function renderWorkMatrix(el) {
                         html += `</td>`;
                     }
 
-                    const expectedSum = fee * (siteBilledMonths || 1);
-                    const diff = siteInvoicedSum - expectedSum;
-                    const diffCls = diff >= 0 ? 'tag-sage' : 'tag-rose';
+                    const siteYearOcs = (orders || []).filter(o => o.client_site_id === s.id);
+                    const sitePendingOcs = siteYearOcs.filter(o => o.status === 'pending');
+                    const sitePendingSum = sitePendingOcs.reduce((acc, o) => acc + (o.amount || 0), 0);
+
+                    let site12mStatusBadge = '<span style="color:var(--text-muted);font-size:0.75rem">—</span>';
+                    if (sitePendingSum > 0) {
+                        site12mStatusBadge = `<span class="tag tag-gold" style="font-size:0.7rem;padding:2px 6px">⏳ S/ ${fmtMoney(sitePendingSum)} pend.</span>`;
+                    } else if (siteInvoicedSum > 0) {
+                        site12mStatusBadge = `<span class="tag tag-sage" style="font-size:0.7rem;padding:2px 6px">✓ Facturado</span>`;
+                    } else {
+                        site12mStatusBadge = '<span style="color:var(--text-muted);font-size:0.75rem">—</span>';
+                    }
 
                     html += `
                         <td style="text-align:right;font-family:monospace;font-weight:700;font-size:0.82rem;padding:6px 8px">
-                            S/ ${fmtMoney(siteInvoicedSum)}
+                            ${siteInvoicedSum > 0 ? `S/ ${fmtMoney(siteInvoicedSum)}` : '—'}
                         </td>
                         <td style="text-align:center;padding:6px 4px">
-                            <span class="tag ${diffCls}" style="font-size:0.7rem;padding:2px 6px">
-                                ${diff >= 0 ? '+' : ''}${fmtMoney(diff)}
-                            </span>
+                            ${site12mStatusBadge}
                         </td>
                     </tr>`;
                 }
@@ -2688,6 +2759,13 @@ async function deletePurchaseOrder(id) {
 
 
 // --- WORK INVOICES (facturación mensual) ---
+
+function toggleInvoiceSort() {
+    state.invoiceSort = state.invoiceSort === 'asc' ? 'desc' : 'asc';
+    const elView = document.getElementById('view-work');
+    if (elView) renderWorkInvoices(elView);
+}
+
 async function renderWorkInvoices(el) {
     const data = await api(eel.get_monthly_billing) || { sites: [], invoices: [] };
     const allInvoices = await api(eel.get_invoices) || [];
@@ -2695,6 +2773,17 @@ async function renderWorkInvoices(el) {
     const clients = await api(eel.get_clients) || [];
 
     state.invoiceStatusFilter = state.invoiceStatusFilter || 'all';
+    state.invoiceSort = state.invoiceSort || 'desc';
+
+    // Ordenar predeterminadamente por número de comprobante descendente (más reciente primero: 1910, 1909...)
+    allInvoices.sort((a, b) => {
+        const numA = parseInt(a.number) || 0;
+        const numB = parseInt(b.number) || 0;
+        if (numA !== numB) {
+            return state.invoiceSort === 'asc' ? (numA - numB) : (numB - numA);
+        }
+        return (b.series || '').localeCompare(a.series || '');
+    });
     
     // Separate active (vigentes) from annulled
     const vigentes = allInvoices.filter(i => i.status !== 'annulled');
@@ -2802,7 +2891,7 @@ async function renderWorkInvoices(el) {
             <table id="invoicesTable">
                 <thead style="position:sticky;top:0;background:var(--card);z-index:2">
                     <tr>
-                        <th style="min-width:130px">Comprobante</th>
+                        <th style="min-width:130px;cursor:pointer" onclick="toggleInvoiceSort()" title="Ordenar por número de comprobante">Comprobante ${state.invoiceSort === 'asc' ? '▲' : '▼'}</th>
                         <th style="min-width:100px">N° OC</th>
                         <th style="text-align:center;min-width:70px">Centro</th>
                         <th style="min-width:200px">Cliente / Sede</th>
@@ -2862,8 +2951,8 @@ async function renderWorkInvoices(el) {
                 <td style="text-align:center;font-size:0.8rem">${mesStr}</td>
                 <td style="text-align:center">${statusBadge}</td>
                 <td style="text-align:right;white-space:nowrap">
-                    <button class="btn btn-ghost btn-sm" onclick="showInvoiceForm(${i.id})" title="Editar">✎</button>
-                    <button class="btn btn-ghost btn-sm" onclick="deleteInvoice(${i.id})" title="Eliminar">✕</button>
+                    <button class="btn btn-ghost btn-sm" onclick="showInvoiceForm(${i.id})" title="Editar comprobante">✎</button>
+                    <button class="btn btn-ghost btn-sm" style="color:#ef4444" onclick="deleteInvoice(${i.id}, '${esc(i.series)}-${esc(i.number)}')" title="Eliminar factura permanente">🗑️</button>
                 </td>
             </tr>`;
         }
@@ -3066,6 +3155,16 @@ function showInvoiceModal(inv) {
                     </select>
                 </div>
             </div>
+            ${inv ? `
+            <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+                <div style="font-size:0.75rem;color:var(--text-muted)">
+                    Comprobante: <strong>${esc(inv.series)}-${esc(inv.number)}</strong> · ID #${inv.id}
+                </div>
+                <button type="button" class="btn btn-ghost btn-sm" style="color:#ef4444;border:1px solid rgba(239,68,68,0.3)" onclick="deleteInvoice(${inv.id}, '${esc(inv.series)}-${esc(inv.number)}')">
+                    🗑️ Eliminar esta Factura
+                </button>
+            </div>
+            ` : ''}
         </form>`;
 
         openModal(inv ? 'Editar factura' : 'Nueva factura', html);
@@ -3108,7 +3207,11 @@ function showInvoiceModal(inv) {
             if (res && res.ok) {
                 showToast(inv ? 'Factura actualizada' : 'Factura registrada');
                 closeModal();
-                navigate('work');
+                const elView = document.getElementById('view-work');
+                if (elView) {
+                    if (state.workTab === 'invoices') await renderWorkInvoices(elView);
+                    else await renderWorkMatrix(elView);
+                }
             } else {
                 showToast(res?.error || 'Error al guardar');
             }
@@ -3169,12 +3272,24 @@ function recalcModalInvoiceAmounts() {
     if (elCre) elCre.value = cred > 0 ? cred.toFixed(2) : '';
 }
 
-async function deleteInvoice(id) {
-    if (!confirm('¿Eliminar esta factura? Se quitará de los registros de facturación.')) return;
+async function deleteInvoice(id, label) {
+    const promptMsg = label
+        ? `¿Eliminar la factura ${label}? Se quitará permanentemente de los registros.`
+        : '¿Eliminar esta factura? Se quitará permanentemente de los registros.';
+    if (!confirm(promptMsg)) return;
+
     const res = await api(eel.delete_invoice, id);
     if (res && res.ok) {
-        showToast('Factura eliminada');
-        navigate('work');
+        showToast(`✓ Factura ${label || ''} eliminada correctamente`);
+        closeModal();
+        const elView = document.getElementById('view-work');
+        if (elView) {
+            if (state.workTab === 'invoices') {
+                await renderWorkInvoices(elView);
+            } else {
+                await renderWorkMatrix(elView);
+            }
+        }
     } else {
         showToast(res && res.error ? res.error : 'Error al eliminar');
     }
@@ -9604,6 +9719,7 @@ window.showClientSiteForm = showClientSiteForm;
 window.deleteClientSite = deleteClientSite;
 window.showInvoiceForm = showInvoiceForm;
 window.deleteInvoice = deleteInvoice;
+window.toggleInvoiceSort = toggleInvoiceSort;
 window.showQuickBillOcModal = showQuickBillOcModal;
 window.showEditSiteModal = showEditSiteModal;
 window.copySunatField = copySunatField;

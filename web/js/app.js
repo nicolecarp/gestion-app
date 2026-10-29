@@ -2112,7 +2112,10 @@ function showQuickBillOcModal(poId) {
 
     const sites = state.allSites || [];
     const site = sites.find(s => s.id === po.client_site_id);
-    const clientName = po.sociedad_name || po.empresa || 'Cliente';
+    const clients = state.allClients || [];
+    const client = clients.find(c => c.id === (po.client_id || site?.client_id || site?.parent_client_id));
+    const clientName = client?.business_name || po.sociedad_name || po.empresa || 'Cliente';
+    const clientRuc = client?.ruc || site?.ruc || po.ruc || '';
     const siteName = po.centro_logistico || po.site_name || site?.nombre_cliente || 'Sede principal';
     const feeSinIgv = parseFloat(po.amount) || 0;
     const feeTotal = Math.round(feeSinIgv * 1.18 * 100) / 100;
@@ -2122,8 +2125,24 @@ function showQuickBillOcModal(poId) {
     const modalHtml = `
     <form id="quickBillForm" onsubmit="saveQuickBillOc(event, ${po.id})">
         <div class="card" style="margin-bottom:14px;padding:12px;background:var(--card)">
-            <div style="font-weight:700;font-size:0.95rem;color:var(--primary)">${esc(clientName)}</div>
-            <div style="font-size:0.8rem;color:var(--text-muted);margin-top:2px">${esc(siteName)}</div>
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap">
+                <div>
+                    <div style="font-weight:700;font-size:0.98rem;color:var(--primary);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                        <span>${esc(clientName)}</span>
+                        ${clientRuc ? `
+                            <span class="tag tag-ghost" style="font-size:0.75rem;padding:2px 7px;font-family:monospace;letter-spacing:0.5px">
+                                RUC: <strong>${esc(clientRuc)}</strong>
+                            </span>
+                        ` : ''}
+                    </div>
+                    <div style="font-size:0.8rem;color:var(--text-muted);margin-top:2px">${esc(siteName)}</div>
+                </div>
+                ${clientRuc ? `
+                    <button type="button" class="btn btn-ghost btn-sm" onclick="copySunatField('${esc(clientRuc)}', 'RUC')" style="font-size:0.72rem;padding:2px 7px;color:var(--text-muted)" title="Copiar RUC">
+                        📋 Copiar RUC
+                    </button>
+                ` : ''}
+            </div>
             <div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border-light);display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;font-size:0.85rem">
                 <span>OC: <strong>${esc(po.oc_number)}</strong></span>
                 <span>Base: <strong>S/ ${fmtMoney(feeSinIgv)}</strong> (Sin IGV)</span>
@@ -2247,7 +2266,13 @@ async function saveQuickBillOc(e, poId) {
 
     const res = await api(eel.create_invoice, invoiceData);
     if (res && res.ok) {
-        await api(eel.update_purchase_order, { id: poId, status: 'invoiced' });
+        try {
+            if (typeof eel.update_purchase_order === 'function') {
+                await api(eel.update_purchase_order, { id: poId, status: 'invoiced' });
+            }
+        } catch(err) {
+            console.warn('PO sync note:', err);
+        }
         showToast(`✓ Factura ${series}-${number} registrada`);
         closeModal();
         const elView = document.getElementById('view-work');
@@ -2954,22 +2979,22 @@ async function renderWorkInvoices(el) {
             annulled: {label:'Anulada',cls:'tag-rose'}
         };
 
-        html += `<div class="table-wrap" style="max-height:680px;overflow-y:auto">
+        html += `<div class="table-wrap" style="max-height:420px;overflow-y:auto">
             <table id="invoicesTable">
                 <thead style="position:sticky;top:0;background:var(--card);z-index:2">
                     <tr>
-                        <th style="min-width:130px;cursor:pointer" onclick="toggleInvoiceSort()" title="Ordenar por número de comprobante">Comprobante ${state.invoiceSort === 'asc' ? '▲' : '▼'}</th>
-                        <th style="min-width:100px">N° OC</th>
-                        <th style="text-align:center;min-width:70px">Centro</th>
-                        <th style="min-width:200px">Cliente / Sede</th>
-                        <th style="min-width:180px">Servicio</th>
-                        <th style="text-align:right;min-width:95px">Subtotal</th>
-                        <th style="text-align:right;min-width:95px">Total</th>
-                        <th style="text-align:right;min-width:90px">Detracción</th>
-                        <th style="text-align:right;min-width:95px">Neto a Cobrar</th>
-                        <th style="text-align:center;min-width:80px">Período</th>
-                        <th style="text-align:center;min-width:90px">Estado</th>
-                        <th style="text-align:right;min-width:80px">Acciones</th>
+                        <th style="min-width:115px;cursor:pointer" onclick="toggleInvoiceSort()" title="Ordenar por número de comprobante">Comprobante ${state.invoiceSort === 'asc' ? '▲' : '▼'}</th>
+                        <th style="text-align:center;width:75px;min-width:75px">Acción</th>
+                        <th style="min-width:90px">N° OC</th>
+                        <th style="text-align:center;min-width:65px">Centro</th>
+                        <th style="min-width:180px">Cliente / Sede</th>
+                        <th style="min-width:160px">Servicio</th>
+                        <th style="text-align:right;min-width:90px">Subtotal</th>
+                        <th style="text-align:right;min-width:90px">Total</th>
+                        <th style="text-align:right;min-width:85px">Detracción</th>
+                        <th style="text-align:right;min-width:90px">Neto a Cobrar</th>
+                        <th style="text-align:center;min-width:75px">Período</th>
+                        <th style="text-align:center;min-width:85px">Estado</th>
                     </tr>
                 </thead>
                 <tbody>`;
@@ -3007,6 +3032,10 @@ async function renderWorkInvoices(el) {
                     <strong>${compStr}</strong>
                     ${perBadge}
                 </td>
+                <td style="text-align:center;white-space:nowrap">
+                    <button class="btn btn-ghost btn-sm" onclick="showInvoiceForm(${i.id})" title="Editar comprobante" style="padding:2px 5px">✎</button>
+                    <button class="btn btn-ghost btn-sm" style="color:#ef4444;padding:2px 5px" onclick="deleteInvoice(${i.id}, '${esc(i.series)}-${esc(i.number)}')" title="Eliminar factura permanente">🗑️</button>
+                </td>
                 <td>${ocStr}</td>
                 <td style="text-align:center;font-size:0.8rem;color:var(--text-muted)">${esc(locStr)}</td>
                 <td><strong>${esc(i.business_name || '')}</strong><br><span style="font-size:0.75rem;color:var(--text-muted)">${esc(i.site_name || '')}</span></td>
@@ -3017,10 +3046,6 @@ async function renderWorkInvoices(el) {
                 <td style="text-align:right;font-family:monospace;color:#10b981;font-weight:700">S/ ${fmtMoney(feeCred)}</td>
                 <td style="text-align:center;font-size:0.8rem">${mesStr}</td>
                 <td style="text-align:center">${statusBadge}</td>
-                <td style="text-align:right;white-space:nowrap">
-                    <button class="btn btn-ghost btn-sm" onclick="showInvoiceForm(${i.id})" title="Editar comprobante">✎</button>
-                    <button class="btn btn-ghost btn-sm" style="color:#ef4444" onclick="deleteInvoice(${i.id}, '${esc(i.series)}-${esc(i.number)}')" title="Eliminar factura permanente">🗑️</button>
-                </td>
             </tr>`;
         }
         html += `</tbody></table></div>`;
@@ -3138,6 +3163,16 @@ function showInvoiceModal(inv) {
 
         const html = `
         <form id="modalForm" onsubmit="return false;">
+            ${inv ? `
+            <div style="margin-bottom:12px;padding:8px 12px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.22);border-radius:8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+                <div style="font-size:0.85rem">
+                    Factura: <strong style="font-family:monospace;font-size:0.95rem">${esc(inv.series)}-${esc(inv.number)}</strong>
+                </div>
+                <button type="button" class="btn btn-ghost btn-sm" style="color:#ef4444;border:1px solid rgba(239,68,68,0.3);padding:3px 8px;font-size:0.75rem" onclick="deleteInvoice(${inv.id}, '${esc(inv.series)}-${esc(inv.number)}')">
+                    🗑️ Eliminar Factura
+                </button>
+            </div>
+            ` : ''}
             <div class="form-row">
                 <div class="form-group" style="flex:1">
                     <label>Empresa *</label>

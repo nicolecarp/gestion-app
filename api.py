@@ -2195,6 +2195,24 @@ def delete_purchase_order(id):
     finally:
         conn.close()
 
+@eel.expose
+def update_purchase_order(data):
+    """Actualiza parcialmente una orden de compra (ej. status)."""
+    conn = get_connection()
+    try:
+        po_id = data.get('id')
+        if not po_id:
+            return {'ok': False, 'error': 'ID requerido'}
+        status = data.get('status')
+        if status:
+            conn.execute("UPDATE purchase_orders SET status=? WHERE id=?", (status, po_id))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
 # ===================== SERVICE RECORDS =====================
 
 

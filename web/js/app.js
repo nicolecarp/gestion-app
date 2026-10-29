@@ -2067,6 +2067,43 @@ async function renderWorkMatrix(el) {
     el.innerHTML = html;
 }
 
+// Helper to calculate due date avoiding timezone rollovers
+function calcDueDateInfo(issueDateStr, days) {
+    if (!issueDateStr) return { iso: '', formatted: '—' };
+    const parts = String(issueDateStr).split('-');
+    if (parts.length !== 3) return { iso: '', formatted: '—' };
+    const y = parseInt(parts[0], 10);
+    const m = parseInt(parts[1], 10) - 1;
+    const d = parseInt(parts[2], 10);
+    const dt = new Date(y, m, d + days, 12, 0, 0);
+    const resY = dt.getFullYear();
+    const resM = String(dt.getMonth() + 1).padStart(2, '0');
+    const resD = String(dt.getDate()).padStart(2, '0');
+    return {
+        iso: `${resY}-${resM}-${resD}`,
+        formatted: `${resD}/${resM}/${resY}`
+    };
+}
+
+function updateQuickBillDueDate() {
+    const issueDateStr = document.getElementById('qbIssueDate')?.value || todayStr();
+    const termVal = document.getElementById('qbDueTerm')?.value;
+    const dispEl = document.getElementById('qbDueDateDisplay');
+    const valEl = document.getElementById('qbDueDateValue');
+    if (!dispEl) return;
+
+    const days = parseInt(termVal) || 0;
+    const info = calcDueDateInfo(issueDateStr, days);
+    
+    if (valEl) valEl.value = info.formatted;
+
+    if (days === 0) {
+        dispEl.innerHTML = `<strong>${info.formatted}</strong> <span style="font-size:0.75rem;font-weight:normal;color:var(--text-muted)">(Al Contado · Mismo día)</span>`;
+    } else {
+        dispEl.innerHTML = `<strong>${info.formatted}</strong> <span style="font-size:0.75rem;font-weight:normal;color:var(--text-muted)">(en ${days} días)</span>`;
+    }
+}
+
 // Quick Facturar OC Modal: Simply enter the invoice number and choose payment term!
 function showQuickBillOcModal(poId) {
     const orders = state.matrixData?.orders || [];
@@ -2106,31 +2143,48 @@ function showQuickBillOcModal(poId) {
             </div>
         </div>
 
-        <div class="form-row">
+        <div class="form-row" style="margin-bottom:6px">
             <div class="form-group" style="flex:1">
                 <label>Fecha de Emisión</label>
-                <input type="date" class="form-control" id="qbIssueDate" value="${todayStr()}">
+                <input type="date" class="form-control" id="qbIssueDate" value="${todayStr()}" onchange="updateQuickBillDueDate()">
             </div>
             <div class="form-group" style="flex:1">
                 <label>Plazo / Vencimiento</label>
-                <select class="form-control" id="qbDueTerm">
-                    <option value="30">Crédito a 30 días</option>
+                <select class="form-control" id="qbDueTerm" onchange="updateQuickBillDueDate()">
+                    <option value="10">Crédito a 10 días</option>
                     <option value="15">Crédito a 15 días</option>
+                    <option value="21">Crédito a 21 días</option>
+                    <option value="30" selected>Crédito a 30 días</option>
                     <option value="45">Crédito a 45 días</option>
-                    <option value="60">Crédito a 60 días</option>
                     <option value="90">Crédito a 90 días</option>
                     <option value="0">Al Contado (0 días)</option>
                 </select>
             </div>
+        </div>
+
+        <!-- Fecha Calculada de Vencimiento para SUNAT -->
+        <div id="qbDueDateBox" style="margin-bottom:14px;padding:9px 12px;background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.22);border-radius:8px;display:flex;align-items:center;justify-content:space-between">
+            <div style="display:flex;align-items:center;gap:10px">
+                <span style="font-size:1.15rem">📅</span>
+                <div>
+                    <div style="font-size:0.72rem;color:var(--text-muted);text-transform:uppercase;font-weight:600;letter-spacing:0.5px">Fecha Calculada del Crédito (Vencimiento)</div>
+                    <div id="qbDueDateDisplay" style="font-family:monospace;font-weight:700;font-size:1rem;color:var(--primary);margin-top:2px">--/--/----</div>
+                </div>
+            </div>
+            <button type="button" class="btn btn-secondary btn-sm" id="qbCopyDueDateBtn" onclick="copySunatField(document.getElementById('qbDueDateValue')?.value || '', 'Fecha de Vencimiento')" style="font-size:0.75rem;padding:4px 9px;font-weight:600" title="Copiar fecha para el portal SUNAT">
+                📋 Copiar
+            </button>
+            <input type="hidden" id="qbDueDateValue" value="">
         </div>
     </form>`;
 
     openModal(`Facturar OC ${po.oc_number}`, modalHtml);
 
     setTimeout(() => {
+        updateQuickBillDueDate();
         const inp = document.getElementById('qbNumber');
         if (inp) inp.focus();
-    }, 120);
+    }, 80);
 
     const saveBtn = document.getElementById('modalSave');
     saveBtn.textContent = 'Registrar Factura';
@@ -2167,12 +2221,8 @@ async function saveQuickBillOc(e, poId) {
     const feeDetr = feeTotal > 700 ? Math.round(feeTotal * 0.12 * 100) / 100 : 0;
     const feeCred = Math.round((feeTotal - feeDetr) * 100) / 100;
 
-    let dueDate = '';
-    try {
-        const d = new Date(issueDate + 'T12:00:00');
-        d.setDate(d.getDate() + dueDays);
-        dueDate = d.toISOString().split('T')[0];
-    } catch(err) {}
+    const dueInfo = calcDueDateInfo(issueDate, dueDays);
+    const dueDate = dueInfo.iso;
 
     const invoiceData = {
         client_id: po.client_id,
@@ -3508,10 +3558,11 @@ async function renderWorkCalculator(el) {
                 <div class="form-group" style="flex:1">
                     <label>Plazo de Pago / Vencimiento</label>
                     <select class="form-control" id="extCalcDueTerm" onchange="onExtCalcDueTermChange(this.value)">
-                        <option value="30"${window.extCalc.dueDays === 30 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Crédito a 30 días</option>
+                        <option value="10"${window.extCalc.dueDays === 10 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Crédito a 10 días</option>
                         <option value="15"${window.extCalc.dueDays === 15 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Crédito a 15 días</option>
+                        <option value="21"${window.extCalc.dueDays === 21 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Crédito a 21 días</option>
+                        <option value="30"${window.extCalc.dueDays === 30 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Crédito a 30 días</option>
                         <option value="45"${window.extCalc.dueDays === 45 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Crédito a 45 días</option>
-                        <option value="60"${window.extCalc.dueDays === 60 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Crédito a 60 días</option>
                         <option value="90"${window.extCalc.dueDays === 90 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Crédito a 90 días</option>
                         <option value="0"${window.extCalc.dueDays === 0 && !window.extCalc.isCustomDueDate ? ' selected' : ''}>Al Contado (Mismo día)</option>
                         <option value="custom"${window.extCalc.isCustomDueDate ? ' selected' : ''}>Personalizado (Elegir fecha)</option>
@@ -9738,6 +9789,8 @@ window.showInvoiceForm = showInvoiceForm;
 window.deleteInvoice = deleteInvoice;
 window.toggleInvoiceSort = toggleInvoiceSort;
 window.showQuickBillOcModal = showQuickBillOcModal;
+window.calcDueDateInfo = calcDueDateInfo;
+window.updateQuickBillDueDate = updateQuickBillDueDate;
 window.showEditSiteModal = showEditSiteModal;
 window.copySunatField = copySunatField;
 window.saveQuickBillOc = saveQuickBillOc;

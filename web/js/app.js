@@ -2120,16 +2120,11 @@ function showQuickBillOcModal(poId) {
     const feeCred = Math.round((feeTotal - feeDetr) * 100) / 100;
 
     const modalHtml = `
-    <form id="quickBillForm" onsubmit="saveQuickBillOc(event, ${po.id})">
+    <form id="quickBillForm" autocomplete="off" onsubmit="saveQuickBillOc(event, ${po.id})">
         <div class="card" style="margin-bottom:14px;padding:12px;background:var(--card)">
             <div>
-                <div style="font-weight:700;font-size:0.98rem;color:var(--primary);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                    <span>${esc(clientName)}</span>
-                    ${clientRuc ? `
-                        <span class="tag tag-ghost" style="font-size:0.75rem;padding:2px 7px;font-family:monospace;letter-spacing:0.5px">
-                            RUC: <strong>${esc(clientRuc)}</strong>
-                        </span>
-                    ` : ''}
+                <div style="font-weight:700;font-size:0.98rem;color:var(--primary)">
+                    ${esc(clientName)}${clientRuc ? ` <span style="font-size:0.85rem;color:var(--text-muted);font-weight:600">(${esc(clientRuc)})</span>` : ''}
                 </div>
                 <div style="font-size:0.8rem;color:var(--text-muted);margin-top:2px">${esc(siteName)}</div>
             </div>
@@ -2144,11 +2139,11 @@ function showQuickBillOcModal(poId) {
         <div class="form-row">
             <div class="form-group" style="max-width:90px">
                 <label>Serie</label>
-                <input class="form-control" id="qbSeries" value="E001" style="font-weight:700">
+                <input class="form-control" id="qbSeries" value="E001" autocomplete="off" style="font-weight:700">
             </div>
             <div class="form-group" style="flex:1">
                 <label>Número de Factura *</label>
-                <input class="form-control" id="qbNumber" placeholder="Ej. 1405" autofocus required style="font-size:1.1rem;font-weight:700;font-family:monospace">
+                <input class="form-control" id="qbNumber" placeholder="Ej. 1405" autofocus required autocomplete="off" spellcheck="false" style="font-size:1.1rem;font-weight:700;font-family:monospace">
             </div>
         </div>
 
@@ -3142,7 +3137,7 @@ function showInvoiceModal(inv) {
         }
 
         const html = `
-        <form id="modalForm" onsubmit="return false;">
+        <form id="modalForm" autocomplete="off" onsubmit="return false;">
             ${inv ? `
             <div style="margin-bottom:12px;padding:8px 12px;background:rgba(239,68,68,0.06);border:1px solid rgba(239,68,68,0.22);border-radius:8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
                 <div style="font-size:0.85rem">
@@ -3173,7 +3168,7 @@ function showInvoiceModal(inv) {
                 </div>
                 <div class="form-group" style="flex:1">
                     <label>Número *</label>
-                    <input class="form-control" name="number" value="${esc(defNumber)}" placeholder="Ej. 1405" required>
+                    <input class="form-control" name="number" value="${esc(defNumber)}" placeholder="Ej. 1405" autocomplete="off" spellcheck="false" required>
                 </div>
                 <div class="form-group" style="flex:1">
                     <label>Orden de Compra</label>

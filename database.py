@@ -1529,6 +1529,150 @@ def apply_cleanups_and_seeds(conn):
         except Exception as e:
             print("[sync_excel_2026_v1] Error:", e)
 
+    # 14. Synchronize billing lag for regular clients (sync_desfase_regular_2026_v1)
+    sync_lag = conn.execute("SELECT value FROM config WHERE key='sync_desfase_regular_2026_v1'").fetchone()
+    if not sync_lag:
+        try:
+            shifts = [
+                # SUR COLOR STAR (Cuota 800)
+                ('1404', 1, 2026),
+                ('1473', 2, 2026),
+                ('1536', 3, 2026),
+                ('1775', 4, 2026),
+                ('1829', 5, 2026),
+                ('1833', 6, 2026),
+                ('1834', 7, 2026),
+                ('1835', 8, 2026),
+                ('1841', 9, 2026),
+                ('1897', 10, 2026),
+
+                # TOPY TOP (Cuota 750)
+                ('1405', 1, 2026),
+                ('1472', 2, 2026),
+                ('1535', 3, 2026),
+                ('1774', 4, 2026),
+                ('1831', 5, 2026),
+                ('1832', 6, 2026),
+                ('1836', 7, 2026),
+                ('1840', 8, 2026),
+                ('1898', 9, 2026),
+
+                # HELATONY'S (Sites 29 & 30)
+                ('1401', 1, 2026),
+                ('1411', 1, 2026),
+                ('1453', 2, 2026),
+                ('1454', 2, 2026),
+                ('1513', 3, 2026),
+                ('1514', 3, 2026),
+                ('1574', 4, 2026),
+                ('1575', 4, 2026),
+                ('1639', 5, 2026),
+                ('1640', 5, 2026),
+                ('1663', 6, 2026),
+                ('1664', 6, 2026),
+                ('1757', 7, 2026),
+                ('1758', 7, 2026),
+                ('1813', 8, 2026),
+                ('1814', 8, 2026),
+                ('1872', 9, 2026),
+                ('1873', 9, 2026),
+
+                # PERUVIAN CHOCOLATES
+                ('1402', 1, 2026),
+                ('1403', 1, 2026),
+                ('1451', 2, 2026),
+                ('1452', 2, 2026),
+                ('1515', 3, 2026),
+                ('1516', 3, 2026),
+                ('1576', 4, 2026),
+                ('1577', 4, 2026),
+                ('1641', 5, 2026),
+                ('1642', 5, 2026),
+                ('1665', 6, 2026),
+                ('1666', 6, 2026),
+                ('1759', 7, 2026),
+                ('1760', 7, 2026),
+                ('1815', 8, 2026),
+                ('1816', 8, 2026),
+                ('1874', 9, 2026),
+                ('1875', 9, 2026),
+
+                # SEW EURODRIVE (Site 31)
+                ('1511', 3, 2026),
+                ('1569', 4, 2026),
+                ('1629', 5, 2026),
+                ('1678', 6, 2026),
+                ('1679', 6, 2026),
+                ('1754', 7, 2026),
+                ('1806', 8, 2026),
+                ('1892', 9, 2026),
+
+                # ASCENSORES S A (Site 33, Fee 1450)
+                ('1466', 1, 2026),
+                ('1470', 2, 2026),
+                ('1471', 3, 2026),
+                ('1547', 4, 2026),
+                ('1633', 5, 2026),
+                ('1717', 6, 2026),
+                ('1755', 7, 2026),
+                ('1805', 8, 2026),
+                ('1876', 9, 2026),
+
+                # PACCU S A (Sites 48 & 49)
+                ('1438', 2, 2026),
+                ('1441', 2, 2026),
+                ('1747', 7, 2026),
+
+                # F Y D INVERSIONES (Sites 44 & 45)
+                ('1681', 6, 2026),
+                ('1682', 6, 2026),
+                ('1768', 7, 2026),
+                ('1769', 7, 2026),
+                ('1809', 8, 2026),
+                ('1890', 9, 2026),
+                ('1889', 9, 2026),
+
+                # VEND S.A.C. CEDI CALLAO ALMACENES (Site 19)
+                ('1893', 9, 2026),
+            ]
+
+            for num, m, yr in shifts:
+                conn.execute("UPDATE invoices SET month_billed = ? WHERE number = ? AND year_billed = ?", (m, num, yr))
+
+            # Sync PO statuses based on updated invoice month_billed
+            conn.execute('''
+                UPDATE purchase_orders 
+                SET status = 'invoiced'
+                WHERE year = 2026 AND status = 'pending' AND id IN (
+                    SELECT po.id 
+                    FROM purchase_orders po
+                    JOIN invoices i ON (
+                        (i.purchase_order IS NOT NULL AND i.purchase_order != '' AND (i.purchase_order = po.oc_number OR po.oc_number LIKE '%' || i.purchase_order || '%'))
+                        OR (i.client_site_id = po.client_site_id AND i.month_billed = po.month AND i.year_billed = po.year)
+                    )
+                    WHERE (i.status != 'annulled' OR i.status IS NULL)
+                )
+            ''')
+            conn.execute('''
+                UPDATE purchase_orders 
+                SET status = 'pending'
+                WHERE year = 2026 AND status = 'invoiced' AND id NOT IN (
+                    SELECT po.id 
+                    FROM purchase_orders po
+                    JOIN invoices i ON (
+                        (i.purchase_order IS NOT NULL AND i.purchase_order != '' AND (i.purchase_order = po.oc_number OR po.oc_number LIKE '%' || i.purchase_order || '%'))
+                        OR (i.client_site_id = po.client_site_id AND i.month_billed = po.month AND i.year_billed = po.year)
+                    )
+                    WHERE (i.status != 'annulled' OR i.status IS NULL)
+                )
+            ''')
+
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('sync_desfase_regular_2026_v1', '1')")
+            conn.commit()
+            print("[sync_desfase_regular_2026_v1] Successfully synchronized billing lag for regular clients.")
+        except Exception as e:
+            print("[sync_desfase_regular_2026_v1] Error:", e)
+
 
 
 def seed_default_workouts(conn):

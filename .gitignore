@@ -9,6 +9,7 @@ build/
 
 # Database
 gestion.db
+scratch/
 
 # Env / secretos
 .secret_key

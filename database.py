@@ -1440,6 +1440,96 @@ def apply_cleanups_and_seeds(conn):
         except Exception as e:
             print("[seed_po_v4_oct2026] Error:", e)
 
+    # 13. Synchronize 2026 OCs and Invoices per master Excel (sync_excel_2026_v1)
+    sync_2026 = conn.execute("SELECT value FROM config WHERE key='sync_excel_2026_v1'").fetchone()
+    if not sync_2026:
+        try:
+            # 1. Delete phantom invoice E001-9311-MAR
+            conn.execute("DELETE FROM invoices WHERE number = '9311-MAR'")
+
+            # 2. Clean artificial suffixes
+            conn.execute("UPDATE invoices SET number = '9248' WHERE number = '9248-CEDI'")
+            conn.execute("UPDATE invoices SET number = '9353' WHERE number = '9353-ADIC'")
+
+            # 3. Fix client_site_id & client_id for misassigned invoices
+            reassignments = [
+                (579, '1372', 7, 11),  # Planta Cusco instead of Planta Pucusana
+                (357, '1744', 17, 14), # La Selva Adicionales instead of Iquitos
+                (409, '1796', 17, 14), # La Selva Adicionales instead of Iquitos
+                (17, '1849', 17, 14),  # La Selva Adicionales instead of Iquitos
+            ]
+            for inv_id, num, site_id, cl_id in reassignments:
+                conn.execute("UPDATE invoices SET client_site_id = ?, client_id = ? WHERE id = ? AND number = ?", (site_id, cl_id, inv_id, num))
+
+            # 4. Correct month_billed for invoices issued early in following month
+            month_corrections = [
+                ('1436', 1, 2026), ('1455', 1, 2026), ('1475', 1, 2026),
+                ('1447', 2, 2026), ('1448', 2, 2026), ('1456', 2, 2026), ('1457', 2, 2026),
+                ('1502', 3, 2026), ('1503', 3, 2026), ('1506', 3, 2026), ('1507', 3, 2026), ('1526', 3, 2026), ('1532', 3, 2026),
+                ('1571', 4, 2026), ('1572', 4, 2026), ('1578', 4, 2026), ('1579', 4, 2026),
+                ('1762', 5, 2026), ('1763', 6, 2026), ('1741', 7, 2026), ('1790', 8, 2026),
+                ('1703', 5, 2026), ('1714', 6, 2026), ('1742', 7, 2026),
+                ('1704', 6, 2026), ('1689', 6, 2026), ('1700', 6, 2026),
+            ]
+            for num, m, yr in month_corrections:
+                conn.execute("UPDATE invoices SET month_billed = ? WHERE number = ? AND year_billed = ?", (m, num, yr))
+
+            # 5. Ensure Annulled Invoices
+            annulled_nums = [
+                '1449', '1530', '9270', '9298', '1525', '1606', '1611', '1612', '1619', '1738', '1793',
+                '1400', '1423', '1427', '1428', '1430', '1431', '1437', '1439', '1444', '1450', '1459',
+                '1492', '1505', '1509', '1520', '1589', '1601', '1878', '1634', '1635', '1636', '1637',
+                '1660', '1662', '1340', '1342', '1343', '1344', '1345', '1356', '1359', '1360', '1368',
+                '1369', '1378', '1387', '1388', '1395'
+            ]
+            q_placeholders = ','.join(['?'] * len(annulled_nums))
+            conn.execute(f"UPDATE invoices SET status = 'annulled' WHERE number IN ({q_placeholders}) AND year_billed = 2026", annulled_nums)
+
+            # 6. Check and update replacement invoices
+            conn.execute("UPDATE invoices SET status = 'paid', month_billed = 2, purchase_order = '4501164544', client_site_id = 14, client_id = 13 WHERE number = '9313' AND year_billed = 2026")
+            conn.execute("UPDATE invoices SET status = 'paid', month_billed = 3, purchase_order = '4501164449', client_site_id = 14, client_id = 13 WHERE number = '9327' AND year_billed = 2026")
+            conn.execute("UPDATE invoices SET status = 'paid', month_billed = 2, purchase_order = '6300010348', client_site_id = 16, client_id = 14 WHERE number = '9312' AND year_billed = 2026")
+            conn.execute("UPDATE invoices SET status = 'paid', month_billed = 2, purchase_order = '4501166570', client_site_id = 3, client_id = 11 WHERE number = '9271' AND year_billed = 2026")
+
+            # 7. Purchase orders corrections
+            conn.execute("UPDATE purchase_orders SET status = 'pending' WHERE id = 74")
+            conn.execute("UPDATE purchase_orders SET month = 9 WHERE oc_number = '4500084312' AND year = 2026")
+
+            # 8. Sync PO status with invoices
+            conn.execute('''
+                UPDATE purchase_orders 
+                SET status = 'invoiced'
+                WHERE year = 2026 AND status = 'pending' AND id IN (
+                    SELECT po.id 
+                    FROM purchase_orders po
+                    JOIN invoices i ON (
+                        (i.purchase_order IS NOT NULL AND i.purchase_order != '' AND (i.purchase_order = po.oc_number OR po.oc_number LIKE '%' || i.purchase_order || '%'))
+                        OR (i.client_site_id = po.client_site_id AND i.month_billed = po.month AND i.year_billed = po.year)
+                    )
+                    WHERE (i.status != 'annulled' OR i.status IS NULL)
+                )
+            ''')
+            conn.execute('''
+                UPDATE purchase_orders 
+                SET status = 'pending'
+                WHERE year = 2026 AND status = 'invoiced' AND id NOT IN (
+                    SELECT po.id 
+                    FROM purchase_orders po
+                    JOIN invoices i ON (
+                        (i.purchase_order IS NOT NULL AND i.purchase_order != '' AND (i.purchase_order = po.oc_number OR po.oc_number LIKE '%' || i.purchase_order || '%'))
+                        OR (i.client_site_id = po.client_site_id AND i.month_billed = po.month AND i.year_billed = po.year)
+                    )
+                    WHERE (i.status != 'annulled' OR i.status IS NULL)
+                )
+            ''')
+
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('sync_excel_2026_v1', '1')")
+            conn.commit()
+            print("[sync_excel_2026_v1] Successfully synchronized 2026 OCs and Invoices per master Excel.")
+        except Exception as e:
+            print("[sync_excel_2026_v1] Error:", e)
+
+
 
 def seed_default_workouts(conn):
     count = conn.execute("SELECT COUNT(*) FROM workout_days").fetchone()[0]

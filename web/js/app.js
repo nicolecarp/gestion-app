@@ -4796,6 +4796,42 @@ function renderLindleyPlanesSubTab(plans, activePlans, pausedPlans, showPaused, 
         </div>
     </div>
 
+    <div class="card" style="margin-bottom:14px;padding:12px 16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+            <div>
+                <span style="font-weight:700;font-size:0.92rem">🔢 Resumen de Sedes y N° / ID de Plan (${esc(monthName)} ${yearNum})</span>
+                <span style="font-size:0.78rem;color:var(--text-muted);margin-left:8px">Haz clic en cualquier fila o en el botón de estado para anotar el ID que te da Arca</span>
+            </div>
+            <button class="btn btn-ghost btn-sm" onclick="copyLindleyIdsTable('${esc(monthName)} ${yearNum}')">📋 Copiar Tabla de IDs</button>
+        </div>
+        <div class="table-wrap">
+            <table style="font-size:0.82rem">
+                <thead>
+                    <tr>
+                        <th>Sede / Plan</th>
+                        <th>Localidad Web</th>
+                        <th>Contratante</th>
+                        <th style="text-align:center">N° / ID Plan Arca</th>
+                        <th style="text-align:center">Estado</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${visiblePlans.map(vp => {
+                        const vDone = !!vp.is_completed_for_period;
+                        const vId = (vp.arca_form_id || '').trim();
+                        return `<tr style="cursor:pointer" onclick="togglePlanCompleted(${vp.id}, '${esc(periodKey)}')">
+                            <td><strong>${esc(vp.name)}</strong></td>
+                            <td style="color:var(--text-muted)">${esc(vp.web_localities)} <span style="font-family:monospace">(${esc(vp.web_codes)})</span></td>
+                            <td>${esc(vp.contact_name || '-')}</td>
+                            <td style="text-align:center">${vId ? `<span class="tag tag-sage" style="font-family:monospace;font-size:0.82rem;font-weight:700">#${esc(vId)}</span>` : '<span style="color:var(--text-muted);font-size:0.76rem">+ Anotar ID</span>'}</td>
+                            <td style="text-align:center">${vDone ? '<span class="tag tag-sage">✅ Subido</span>' : '<span class="tag">⬜ Pendiente</span>'}</td>
+                        </tr>`;
+                    }).join('')}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:14px">`;
 
     for (const p of visiblePlans) {
@@ -4837,8 +4873,8 @@ function renderLindleyPlanesSubTab(plans, activePlans, pausedPlans, showPaused, 
                     </div>
                 </div>
                 <div style="display:flex;gap:4px;align-items:center">
-                    <button class="btn ${isDone ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="togglePlanCompleted(${p.id}, '${esc(periodKey)}')" title="Marcar este plan como subido en el portal en ${esc(monthName)} ${yearNum}">
-                        ${isDone ? '✅ Subido' : '⬜ Pendiente'}
+                    <button class="btn ${isDone ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="togglePlanCompleted(${p.id}, '${esc(periodKey)}')" title="Anotar ID del plan y marcar como subido en ${esc(monthName)} ${yearNum}">
+                        ${isDone ? (p.arca_form_id ? `✅ ID: ${esc(p.arca_form_id)}` : '✅ Subido') : '⬜ Pendiente'}
                     </button>
                     <button class="btn btn-ghost btn-sm" onclick="showEditLindleyPlanModal(${p.id})" title="Editar OC, descripción, contratante o equipos">✎</button>
                 </div>
@@ -5409,12 +5445,55 @@ async function syncLindleyOCsFromDB() {
     }
 }
 
-async function togglePlanCompleted(planId, periodKey) {
-    const res = await api(eel.mark_lindley_plan_completed, planId, periodKey);
+function togglePlanCompleted(planId, periodKey) {
+    const plans = (_lindleyAutoCache && _lindleyAutoCache.plans) || [];
+    const p = plans.find(x => x.id === planId);
+    if (!p) return;
+    const currentId = (p.arca_form_id || '').trim();
+    const isDone = !!p.is_completed_for_period;
+    const html = `<form id="modalForm" onsubmit="event.preventDefault();document.getElementById('modalSave').click();">
+        <div class="form-group">
+            <label>N° / ID del Plan asignado por la plataforma Arca Continental *</label>
+            <input class="form-control" id="arcaFormIdInput" name="arca_form_id" value="${esc(currentId)}" placeholder="Ej: 14582" style="font-size:1.05rem;font-weight:700;font-family:monospace" autocomplete="off">
+            <div style="font-size:0.76rem;color:var(--text-muted);margin-top:4px">Escribe el número de ID que te dio la página para <strong>${esc(p.name)}</strong> (${esc(p.web_localities)}).</div>
+        </div>
+        ${isDone ? `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);display:flex;justify-content:flex-end">
+            <button type="button" class="btn btn-ghost btn-sm" style="color:var(--rose)" onclick="unmarkLindleyPlan(${p.id}, '${esc(periodKey)}')">↩ Pasar de vuelta a Pendiente (Borrar ID)</button>
+        </div>` : ''}
+    </form>`;
+    openModal(`✅ Registrar Plan Subido — ${p.name}`, html);
+    setTimeout(() => { const inp = document.getElementById('arcaFormIdInput'); if (inp) { inp.focus(); inp.select(); } }, 60);
+    document.getElementById('modalSave').onclick = async () => {
+        const val = (document.getElementById('arcaFormIdInput').value || '').trim();
+        if (!val) { showToast('Ingresa el número / ID del plan'); return; }
+        const res = await api(eel.mark_lindley_plan_completed, planId, periodKey, val, false);
+        if (res && res.ok) {
+            showToast(`✅ ${p.name} subido con ID #${val}`);
+            closeModal();
+            navigate('work');
+        } else {
+            showToast('Error al guardar ID');
+        }
+    };
+}
+
+async function unmarkLindleyPlan(planId, periodKey) {
+    const res = await api(eel.mark_lindley_plan_completed, planId, periodKey, '', true);
     if (res && res.ok) {
-        showToast(res.completed ? '✅ Plan marcado como subido este mes' : 'Plan marcado como pendiente');
+        showToast('Plan devuelto a pendiente');
+        closeModal();
         navigate('work');
     }
+}
+
+function copyLindleyIdsTable(periodLabel) {
+    const plans = ((_lindleyAutoCache && _lindleyAutoCache.plans) || []).filter(p => Number(p.is_active_month) === 1 || state.lindleyShowPaused);
+    const lines = [`PLANES DE TRABAJO ARCA CONTINENTAL — ${periodLabel}`, '--------------------------------------------'];
+    for (const p of plans) {
+        const idTxt = (p.arca_form_id || '').trim() ? `ID #${p.arca_form_id.trim()}` : 'PENDIENTE';
+        lines.push(`${p.name} (${p.web_localities}): ${idTxt}`);
+    }
+    copyTextToClipboard(lines.join('\n'), '📋 Tabla de Sedes e IDs copiada al portapapeles');
 }
 
 async function toggleLindleyPlanMonth(planId, activeVal) {

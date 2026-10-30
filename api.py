@@ -3437,6 +3437,8 @@ def get_lindley_automation_data(year=None, month=None):
         plans_rows = [dict(r) for r in conn.execute("SELECT * FROM lindley_plans ORDER BY sort_order ASC, id ASC").fetchall()]
         techs_rows = [dict(r) for r in conn.execute("SELECT * FROM lindley_technicians ORDER BY sort_order ASC, id ASC").fetchall()]
         matrix_rows = [dict(r) for r in conn.execute("SELECT * FROM lindley_matrix_rows ORDER BY sort_order ASC, id ASC").fetchall()]
+        subs_rows = conn.execute("SELECT plan_id, arca_form_id, submitted_at FROM lindley_plan_submissions WHERE period_key = ?", (period_key,)).fetchall()
+        subs_by_plan = {r['plan_id']: dict(r) for r in subs_rows}
 
         for t in techs_rows:
             dni_clean = (t.get('dni') or '').strip()
@@ -3502,7 +3504,9 @@ def get_lindley_automation_data(year=None, month=None):
             p['effective_oc'] = effective_oc
             p['oc_source'] = oc_source
             p['full_description'] = full_desc
-            p['is_completed_for_period'] = (p.get('last_completed_month') == period_key)
+            sub_info = subs_by_plan.get(p['id'])
+            p['arca_form_id'] = (sub_info.get('arca_form_id') if sub_info else '') or ''
+            p['is_completed_for_period'] = bool(sub_info) or (p.get('last_completed_month') == period_key)
 
             group_techs = [t for t in techs_rows if t['tech_group'] == p['tech_group'] and int(t.get('is_active') or 0) == 1]
             p['assigned_technicians'] = group_techs
@@ -3608,14 +3612,26 @@ def toggle_lindley_plan_active(plan_id, is_active_month):
 
 
 @eel.expose
-def mark_lindley_plan_completed(plan_id, period_key):
+def mark_lindley_plan_completed(plan_id, period_key, arca_form_id='', unmark=False):
     conn = get_connection()
     try:
-        row = conn.execute("SELECT last_completed_month FROM lindley_plans WHERE id=?", (int(plan_id),)).fetchone()
-        new_val = '' if (row and row['last_completed_month'] == period_key) else period_key
-        conn.execute("UPDATE lindley_plans SET last_completed_month=? WHERE id=?", (new_val, int(plan_id)))
+        pid = int(plan_id)
+        if unmark:
+            conn.execute("DELETE FROM lindley_plan_submissions WHERE plan_id=? AND period_key=?", (pid, period_key))
+            conn.execute("UPDATE lindley_plans SET last_completed_month='' WHERE id=? AND last_completed_month=?", (pid, period_key))
+            conn.commit()
+            return {'ok': True, 'completed': False, 'arca_form_id': ''}
+        clean_id = str(arca_form_id or '').strip()
+        conn.execute("""
+            INSERT INTO lindley_plan_submissions (plan_id, period_key, arca_form_id, submitted_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(plan_id, period_key) DO UPDATE SET
+                arca_form_id=excluded.arca_form_id,
+                submitted_at=excluded.submitted_at
+        """, (pid, period_key, clean_id, today()))
+        conn.execute("UPDATE lindley_plans SET last_completed_month=? WHERE id=?", (period_key, pid))
         conn.commit()
-        return {'ok': True, 'completed': bool(new_val)}
+        return {'ok': True, 'completed': True, 'arca_form_id': clean_id}
     except Exception as e:
         return {'ok': False, 'error': str(e)}
     finally:

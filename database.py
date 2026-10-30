@@ -680,6 +680,14 @@ def init_db():
             sort_order INTEGER DEFAULT 0
         )""",
         "UPDATE lindley_matrix_rows SET col2 = 'Exposicion de Insecticida / Desinfectante' WHERE matrix_type = 'VEND_FUMIGACION_EQUIPOS' AND col2 = 'Exposicion de Insecticida / Gel'",
+        """CREATE TABLE IF NOT EXISTS lindley_plan_submissions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            plan_id INTEGER NOT NULL REFERENCES lindley_plans(id) ON DELETE CASCADE,
+            period_key TEXT NOT NULL,
+            arca_form_id TEXT DEFAULT '',
+            submitted_at TEXT DEFAULT (datetime('now','-3 hours')),
+            UNIQUE(plan_id, period_key)
+        )""",
     ]:
         try:
             conn.execute(stmt)

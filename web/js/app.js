@@ -5308,14 +5308,15 @@ function buildLindleyCoreExecutorSource() {
                 if (typeof SetDataGrid4 === 'function') SetDataGrid4();
             });
 
-            // 8. Asegurar que el botón verde Aceptar esté habilitado
-            $('#btnGrabar2').removeAttr('disabled');
+            // 8. No tocamos el botón Aceptar: Arca lo deshabilita si hay documentos de empresa vencidos.
+            var btnBlocked = $('#btnGrabar2').is(':disabled');
+            var blockedMsg = btnBlocked ? '<br><b style="color:#fecaca">⚠️ El botón Aceptar está deshabilitado por Arca (revisa documentos de empresa vencidos).</b>' : '';
 
             $('#nicoleAutofillBanner').remove();
-            $('.modal-body').first().prepend(
+            $('#myModal .modal-body').first().prepend(
                 '<div id="nicoleAutofillBanner" style="background:#065f46;color:#fff;padding:10px 14px;border-radius:8px;margin-bottom:12px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,0.18)">' +
                 '<strong>✨ Autollenado Nicole completado: ' + cfg.name + '</strong><br>' +
-                'Localidades: <b>' + (matchedLocs.join(', ') || 'ninguna') + '</b> · Técnicos: <b>' + matchedWorkers + '</b> · Químicos: <b>' + matchedChems + '</b> · Equipos: <b>' + (cfg.useMachinery ? matchedMach : 'NO') + '</b> · Fechas: <b>' + cfg.startDate + ' → ' + cfg.endDate + '</b>' +
+                'Localidades: <b>' + (matchedLocs.join(', ') || 'ninguna') + '</b> · Técnicos: <b>' + matchedWorkers + '</b> · Químicos: <b>' + matchedChems + '</b> · Equipos: <b>' + (cfg.useMachinery ? matchedMach : 'NO') + '</b> · Fechas: <b>' + cfg.startDate + ' → ' + cfg.endDate + '</b>' + blockedMsg +
                 '</div>'
             );
         }
@@ -5564,7 +5565,7 @@ function showLindleyTechModal(techId) {
         <div class="form-row">
             <div class="form-group"><label>Grupo / Planta *</label>
                 <select class="form-control" name="tech_group">
-                    ${groups.map(g => `<option value="${g}" ${(t ? t.tech_group : (state.lindleyTechGroupFilter !== 'TODOS' ? state.lindleyTechGroupFilter : 'MEGAS Y ZARATE')) === g ? 'selected' : ''}>${g}</option>`).join('')}
+                    ${groups.map(g => `<option value="${g}" ${(t ? t.tech_group : (state.lindleyTechGroupFilter && state.lindleyTechGroupFilter !== 'TODOS' ? state.lindleyTechGroupFilter : 'MEGAS Y ZARATE')) === g ? 'selected' : ''}>${g}</option>`).join('')}
                 </select>
             </div>
             <div class="form-group"><label>Activo en este grupo</label>

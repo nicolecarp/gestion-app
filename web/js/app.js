@@ -5486,14 +5486,24 @@ async function unmarkLindleyPlan(planId, periodKey) {
     }
 }
 
-function copyLindleyIdsTable(periodLabel) {
+function formatLindleyShortCopyName(name) {
+    const n = (name || '').trim();
+    if (/VEND.*PLANTA|DESRATIZACI/i.test(n)) return 'VEND ROEDORES';
+    if (/VEND.*EQUIPOS|FUMIGACI/i.test(n)) return 'VEND FUMIGACION';
+    if (/^IQUITOS\s*\+\s*CEDI/i.test(n)) return 'IQUITOS';
+    return n;
+}
+
+function copyLindleyIdsTable() {
     const plans = ((_lindleyAutoCache && _lindleyAutoCache.plans) || []).filter(p => Number(p.is_active_month) === 1 || state.lindleyShowPaused);
-    const lines = [`PLANES DE TRABAJO ARCA CONTINENTAL — ${periodLabel}`, '--------------------------------------------'];
-    for (const p of plans) {
-        const idTxt = (p.arca_form_id || '').trim() ? `ID #${p.arca_form_id.trim()}` : 'PENDIENTE';
-        lines.push(`${p.name} (${p.web_localities}): ${idTxt}`);
-    }
-    copyTextToClipboard(lines.join('\n'), '📋 Tabla de Sedes e IDs copiada al portapapeles');
+    const withId = plans.filter(p => (p.arca_form_id || '').trim() !== '');
+    const targetList = withId.length > 0 ? withId : plans;
+    const lines = targetList.map(p => {
+        const shortName = formatLindleyShortCopyName(p.name);
+        const idTxt = (p.arca_form_id || '').trim();
+        return idTxt ? `${shortName} ${idTxt}` : `${shortName}`;
+    });
+    copyTextToClipboard(lines.join('\n'), '📋 Lista de Sedes e IDs copiada al portapapeles');
 }
 
 async function toggleLindleyPlanMonth(planId, activeVal) {

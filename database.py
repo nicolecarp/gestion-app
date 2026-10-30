@@ -631,6 +631,54 @@ def init_db():
         "ALTER TABLE employee_documents ADD COLUMN external_url TEXT",
         "ALTER TABLE employees ADD COLUMN onedrive_folder_url TEXT",
         "UPDATE config SET value = 'Avellaneda, Buenos Aires' WHERE key = 'weather_city' AND value = 'Buenos Aires'",
+        """CREATE TABLE IF NOT EXISTS lindley_plans (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            is_active_month INTEGER DEFAULT 1,
+            web_codes TEXT NOT NULL,
+            web_localities TEXT NOT NULL,
+            tech_group TEXT NOT NULL,
+            matrix_type TEXT NOT NULL,
+            emerg_sede TEXT NOT NULL,
+            contact_name TEXT,
+            contact_email TEXT,
+            client_site_ids TEXT,
+            oc_override TEXT,
+            activity_text TEXT NOT NULL,
+            use_chemicals INTEGER DEFAULT 1,
+            chemical_ids TEXT DEFAULT '1799,2012,1621,1623',
+            use_vehicles INTEGER DEFAULT 0,
+            use_machinery INTEGER DEFAULT 0,
+            machinery_ids TEXT DEFAULT '',
+            sort_order INTEGER DEFAULT 0,
+            last_completed_month TEXT
+        )""",
+        """CREATE TABLE IF NOT EXISTS lindley_technicians (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tech_group TEXT NOT NULL,
+            short_name TEXT NOT NULL,
+            dni TEXT NOT NULL,
+            web_full_name TEXT NOT NULL,
+            is_active INTEGER DEFAULT 1,
+            altura TEXT DEFAULT 'NO',
+            confinado TEXT DEFAULT 'NO',
+            calor TEXT DEFAULT 'NO',
+            quimicos TEXT DEFAULT 'SI',
+            obra_civil TEXT DEFAULT 'NO',
+            electrico_loto TEXT DEFAULT 'NO',
+            notes TEXT DEFAULT '',
+            sort_order INTEGER DEFAULT 0
+        )""",
+        """CREATE TABLE IF NOT EXISTS lindley_matrix_rows (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            matrix_type TEXT NOT NULL,
+            section_type TEXT NOT NULL,
+            sede_filter TEXT DEFAULT 'TODAS',
+            col1 TEXT NOT NULL,
+            col2 TEXT NOT NULL,
+            col3 TEXT NOT NULL,
+            sort_order INTEGER DEFAULT 0
+        )""",
     ]:
         try:
             conn.execute(stmt)
@@ -1799,6 +1847,148 @@ def apply_cleanups_and_seeds(conn):
             print("[sync_regular_smi_ibero_2026_v1] Successfully added San Miguel and Iberoamericana as regular clients.")
         except Exception as e:
             print("[sync_regular_smi_ibero_2026_v1] Error:", e)
+
+    # 16. Seed Lindley Work Plan Automation & Auto-OC Sync (seed_lindley_automation_v1)
+    seed_lindley_auto = conn.execute("SELECT value FROM config WHERE key='seed_lindley_automation_v1'").fetchone()
+    if not seed_lindley_auto:
+        try:
+            conn.execute("DELETE FROM lindley_plans")
+            conn.execute("DELETE FROM lindley_technicians")
+            conn.execute("DELETE FROM lindley_matrix_rows")
+
+            plans_seed = [
+                (1, 'IQUITOS + CEDI IQUITOS', 1, '358, 359', 'Planta Iquitos + CEDI-Iquitos', 'IQUITOS', 'GENERAL_PLANTAS', 'IQUITOS', 'Angel Alvarado', 'angel.alvaradop@lindley.pe', '15,16', '', 'Control de plagas, Control de roedores, aves, cambio de placas entomológicas, fumigación', 1, '1799,2012,1621,1623', 0, 0, '', 1),
+                (2, 'PUCUSANA', 1, '378', 'Planta Pucusana', 'PUCUSANA', 'GENERAL_PLANTAS', 'LIMA', 'Milagros Vara', 'Mvara@lindley.pe', '3', '', 'Control de plagas, Control de roedores, aves, cambio de placas entomológicas, fumigación', 1, '1799,2012,1621,1623', 0, 0, '', 2),
+                (3, 'MEGA VES', 1, '363', 'Mega Ves', 'MEGAS Y ZARATE', 'GENERAL_PLANTAS', 'LIMA', 'Isabel Hinojosa', 'isabel.hinojosa@aclogistica.pe', '12', '', 'Control de plagas, Control de roedores, aves, cambio de placas entomológicas, fumigación', 1, '1799,2012,1621,1623', 0, 0, '', 3),
+                (4, 'MEGA DUEÑAS', 1, '361', 'Mega Dueñas', 'MEGAS Y ZARATE', 'GENERAL_PLANTAS', 'LIMA', 'David Ullilen', 'dullilen@aclogistica.pe', '11', '', 'Control de plagas, Control de roedores, aves, cambio de placas entomológicas, fumigación', 1, '1799,2012,1621,1623', 0, 0, '', 4),
+                (5, 'MEGA HUACHIPA', 1, '362', 'Mega Huachipa', 'MEGAS Y ZARATE', 'GENERAL_PLANTAS', 'LIMA', 'Cinthya Mendoza', 'cinthya.mendoza@aclogistica.pe', '10', '', 'Control de plagas, Control de roedores, aves, cambio de placas entomológicas, fumigación', 1, '1799,2012,1621,1623', 0, 0, '', 5),
+                (6, 'ZARATE', 1, '379', 'Planta Zarate', 'MEGAS Y ZARATE', 'GENERAL_PLANTAS', 'LIMA', 'Yveth Yaire', 'yaire@lindley.pe', '4', '', 'Control de plagas, Control de roedores, aves, cambio de placas entomológicas, fumigación', 1, '1799,2012,1621,1623', 0, 0, '', 6),
+                (7, 'CEDI TRUJILLO', 1, '360', 'CEDI-Trujillo', 'TRUJILLO', 'GENERAL_PLANTAS', 'TRUJILLO', 'Kenyhi Garcia', 'kenyhi.garcia@aclogistica.pe', '13', '', 'GESTION Y CONTROL AMBIENTAL/ CONTROL DE PLAGAS', 1, '1799,2012,1621,1623', 0, 1, '11707,11708', 7),
+                (8, 'TRUJILLO', 1, '396', 'Planta Trujillo', 'TRUJILLO', 'GENERAL_PLANTAS', 'TRUJILLO', 'Yohana Sarango', 'YSARANGO@lindley.pe', '5', '', 'Javier Llontop, Julio Llontop, Jose Laguna, Diego Obando y Karin Vasquez: Control de plagas, roedores, aves, fumigación (SIN LOTO); Javier Llontop, Diego Obando y Karin Vasquez: cambio de placas entomologicas de insectocutores (CON LOTO)', 1, '1799,2012,1621,1623', 0, 1, '11707,11708', 8),
+                (9, 'VEND EQUIPOS (Fumigación)', 1, '369', 'VENDOMATICA', 'MEGAS Y ZARATE', 'VEND_FUMIGACION_EQUIPOS', 'VEND_EQUIPOS', 'Luis Felix', 'luis.felix@arcacontal.com', '20', '', 'Fumigación de equipos', 1, '1799,2012', 0, 0, '', 9),
+                (10, 'VEND PLANTA (Desratización)', 1, '369', 'VENDOMATICA', 'MEGAS Y ZARATE', 'VEND_DESRATIZACION', 'VEND_PLANTA', 'Xihomara Segura', 'Xihomara.segura@arcacontal.com', '19', '', 'Control de roedores', 1, '1623', 0, 0, '', 10),
+                (11, 'AREQUIPA', 0, '423', 'Planta Arequipa', 'AREQUIPA', 'GENERAL_PLANTAS', 'AREQUIPA', 'Angel Diaz', 'adiaz@lindley.pe', '6', '', 'Control de plagas, Control de roedores, aves, cambio de placas entomológicas, fumigación', 1, '1799,2012,1621,1623', 0, 1, '11707,11708', 11),
+                (12, 'CUSCO', 0, '424', 'Planta Cusco', 'CUSCO', 'GENERAL_PLANTAS', 'CUSCO', 'Giannina Araujo', 'garaujo@lindley.pe', '7', '', 'Control de plagas, Control de roedores, aves, cambio de placas entomológicas, fumigación', 1, '1799,2012,1621,1623', 0, 1, '11707,11708', 12),
+            ]
+            for p in plans_seed:
+                conn.execute("""
+                    INSERT INTO lindley_plans (
+                        id, name, is_active_month, web_codes, web_localities, tech_group,
+                        matrix_type, emerg_sede, contact_name, contact_email, client_site_ids,
+                        oc_override, activity_text, use_chemicals, chemical_ids, use_vehicles,
+                        use_machinery, machinery_ids, sort_order
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, p)
+
+            techs_seed = [
+                # PUCUSANA
+                ('PUCUSANA', 'Bryan Medina', '76510020', 'MEDINA OLIVA BRYAN RUBEN', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', '', 1),
+                ('PUCUSANA', 'Adriana Torres', '76275503', 'TORRES RIVAS ADRIANA BETSABE', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', '', 2),
+                # MEGAS Y ZARATE (Lima + Vendomática, sin Favio Cotaquispe)
+                ('MEGAS Y ZARATE', 'Alvararez Milagros', '71135386', 'ALVARADO SOUZA MILAGROS TERESITA', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', 'Plantas Lima + Vendomática', 3),
+                ('MEGAS Y ZARATE', 'Del Castillo Alan', '41776728', 'DEL CASTILLO TTUPA ALAN CHRISTIAN', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', 'Plantas Lima + Vendomática', 4),
+                ('MEGAS Y ZARATE', 'Henry Herrada', '42553107', 'HERRADA ROLDAN HENRY', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', 'Plantas Lima + Vendomática', 5),
+                ('MEGAS Y ZARATE', 'Llontop Javier', '44476589', 'LLONTOP BENITES ALEX JAVIER', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'SI', 'Plantas Lima + Vendomática (CON LOTO)', 6),
+                ('MEGAS Y ZARATE', 'Medina Bryan', '76510020', 'MEDINA OLIVA BRYAN RUBEN', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', 'Plantas Lima + Vendomática', 7),
+                ('MEGAS Y ZARATE', 'Murrugarra Marco', '72403804', 'MURRUGARRA VALDEZ MARCO ANTONIO', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', 'Plantas Lima + Vendomática', 8),
+                ('MEGAS Y ZARATE', 'Narciso Ronal', '77059523', 'NARCISO CRUZ RONAL ISAIAS', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', 'Plantas Lima + Vendomática', 9),
+                ('MEGAS Y ZARATE', 'Nima Kendy', '70470863', 'NIMA YARLEQUE KENDY DANILA', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', 'Plantas Lima + Vendomática', 10),
+                ('MEGAS Y ZARATE', 'Rios Dany', '80242826', 'RIOS GERMAN DANY PAUL', 1, 'NO', 'NO', 'NO', 'NO', 'NO', 'NO', 'Plantas Lima + Vendomática (Supervisión)', 11),
+                ('MEGAS Y ZARATE', 'Vela Enrique', '47774594', 'VELA MOZOMBITE GEINER ENRIQUE', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', 'Plantas Lima + Vendomática', 12),
+                # IQUITOS
+                ('IQUITOS', 'Lizet Alvarado', '72772695', 'ALVARADO YUMBATO LIZET BRENDA', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', 'Planta Iquitos + CEDI Iquitos', 13),
+                ('IQUITOS', 'Sebastian Gil', '72003713', 'GIL RIOS SEBASTIAN GONZALO', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', 'Planta Iquitos + CEDI Iquitos', 14),
+                # TRUJILLO
+                ('TRUJILLO', 'Llontop Julio', '44011431', 'LLONTOP BENITES JULIO CESAR', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', 'SIN LOTO', 15),
+                ('TRUJILLO', 'Llontop Javier', '44476589', 'LLONTOP BENITES ALEX JAVIER', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'SI', 'CON LOTO', 16),
+                ('TRUJILLO', 'Nima Kendy', '70470863', 'NIMA YARLEQUE KENDY DANILA', 0, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', '', 17),
+                ('TRUJILLO', 'Obando Martinez', '71510419', 'OBANDO MARTINEZ DIEGO JOSE', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'SI', 'CON LOTO', 18),
+                ('TRUJILLO', 'Perez Rodriguez', '74831033', 'PEREZ RODRIGUEZ JESUS MANUEL', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', '', 19),
+                ('TRUJILLO', 'Jose Laguna', '77569770', 'LAGUNA CAIPO JOSE ENRIQUE', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', 'SIN LOTO', 20),
+                ('TRUJILLO', 'Vasquez Karin', '48574525', 'VASQUEZ AREVALO KARIN JANETH', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'SI', 'CON LOTO', 21),
+                # AREQUIPA y CUSCO
+                ('AREQUIPA', 'Rosa Casas', '76447943', 'CASAS LIPE ROSA STEFANY', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', 'Arequipa', 22),
+                ('AREQUIPA', 'David Alvarez', '45807040', 'ALVAREZ QUISPE DAVID', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', 'Arequipa', 23),
+                ('AREQUIPA', 'Margot Gutierrez', '74859559', 'VILLAS GUTIERREZ MARGOT ELIZABETH', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', 'Arequipa', 24),
+                ('CUSCO', 'Bryan Anacleto Zarate Tinco', '70116357', 'ZARATE TINCO BRYAN ANACLETO', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', 'Cusco', 25),
+            ]
+            for t in techs_seed:
+                conn.execute("""
+                    INSERT INTO lindley_technicians (
+                        tech_group, short_name, dni, web_full_name, is_active,
+                        altura, confinado, calor, quimicos, obra_civil, electrico_loto, notes, sort_order
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, t)
+
+            matrix_seed = [
+                # GENERAL_PLANTAS - DPR (#tbl1)
+                ('GENERAL_PLANTAS', 'DPR', 'TODAS', 'Inspeccion de Ambientes', 'Exposicion al ruido mayor a 85 dbs', 'Capacitacion de uso correcto de protectores auditivos (tapones y orejeras)', 1),
+                ('GENERAL_PLANTAS', 'DPR', 'TODAS', 'Inspeccion de Ambientes', 'Caidas en superficies desniveladas', 'Transitar por areas seguras, respetar las señalizaciones, Uso de casco y Zapatos antideslizantes.', 2),
+                ('GENERAL_PLANTAS', 'DPR', 'TODAS', 'Inspeccion de Ambientes', 'Exposicion a Montacargas', 'Espejos Convexo Panoramicos, Transitar por zonas seguras, Respetar Señalizaciones, Uso de chaleco reflectivo.', 3),
+                ('GENERAL_PLANTAS', 'DPR', 'TODAS', 'Control de Roedores', 'Exposicion a Rodenticida', 'Capacitacion y entrenamiento en el puesto de trabajo, Insumo en cantidades minimas concentracion de 0.01 gr/cebadero, lavado continuo de manos, uso de guantes de nitrilo.', 4),
+                ('GENERAL_PLANTAS', 'DPR', 'TODAS', 'Control de Roedores', 'Caidas tropiezos', 'Delimitacion del area de trabajo, Uso correcto de epps, casco, zapatos de seguridad.', 5),
+                ('GENERAL_PLANTAS', 'DPR', 'TODAS', 'Control de Aves', 'Exposicion a riesgo biologico', 'Capacitacion y entrenamiento en el puesto de trabajo, lavado continuo de manos, inspeccion y uso correcto de epps, guantes de nitrilo.', 6),
+                ('GENERAL_PLANTAS', 'DPR', 'TODAS', 'Control de Aves', 'Exposicion al ruido mayor a 85 dbs', 'Capacitacion de uso correcto de protectores auditivos (tapones y orejeras)', 7),
+                ('GENERAL_PLANTAS', 'DPR', 'TODAS', 'Cambio de Placas entomologicas de Insectocutores', 'Exposicion a trampa de luz', 'Desenchufar equipo, Inspeccion y Supervision constante, Capacitacion y entrenamiento de puesto de trabajo. Uso de zapatos y guantes dielectricos.', 8),
+                ('GENERAL_PLANTAS', 'DPR', 'TODAS', 'Cambio de Placas entomologicas de Insectocutores', 'Caidas a desnivel menor a 1.8 mts', 'Inspeccion de escalera, Capacitacion y entrenamiento de puesto de trabajo, personal de apoyo', 9),
+                ('GENERAL_PLANTAS', 'DPR', 'TODAS', 'Fumigacion y desinfeccion de Ambientes', 'Exposicion de Insecticida', 'Capacitacion y entrenamiento de puesto de trabajo, concentracion de insecticida es de 0.03gr /m2 supervision constante, Traje tyvek, respirador media cara con filtro contra gases, guantes de nitrilo.', 10),
+                ('GENERAL_PLANTAS', 'DPR', 'TODAS', 'Fumigacion y desinfeccion de Ambientes', 'Exposicion de desinfectante', 'Capacitacion y entrenamiento de puesto de trabajo, Concentracion de desinfectante es de 0.001 gr / m3, supervision constante, Traje tyvek, respirador media cara con filtro contra gases, guantes de nitrilo.', 11),
+                ('GENERAL_PLANTAS', 'DPR', 'TODAS', 'Fumigacion y desinfeccion de Ambientes', 'Golpes por equipos', 'Capacitacion y entrenamiento de puesto de trabajo, Check list de equipos, Inspeccion pre uso de epps, Guantes de seguridad.', 12),
+                ('GENERAL_PLANTAS', 'DPR', 'TODAS', 'Fumigacion y desinfeccion de Ambientes', 'Exposicion al ruido mayor a 85 dbs', 'Capacitacion de uso correcto de protectores auditivos (tapones y orejeras)', 13),
+                ('GENERAL_PLANTAS', 'DPR', 'TODAS', 'Fumigacion y desinfeccion de Ambientes', 'Caidas en superficies desniveladas', 'Transitar por areas seguras, respetar las señalizaciones, Uso de casco y Zapatos antideslizantes.', 14),
+                # GENERAL_PLANTAS - PNE (#tbl2)
+                ('GENERAL_PLANTAS', 'PNE', 'IQUITOS', 'Lizet Alvarado Yumbato', '993202728', 'Paralizar el trabajo, Delimitar el area de trabajo, Reportar al dueño de area y area de Seguridad, topico, Estabilizar al paciente, trasladarlo al centro de salud mas cercano, realizar investigacion de accidentes.', 15),
+                ('GENERAL_PLANTAS', 'PNE', 'LIMA', 'Dany Rios German', '943576167', 'Paralizar el trabajo, Delimitar el area de trabajo, Reportar al dueño de area y area de Seguridad, topico, Estabilizar al paciente, trasladarlo al centro de salud mas cercano, realizar investigacion de accidentes.', 16),
+                ('GENERAL_PLANTAS', 'PNE', 'TRUJILLO', 'VASQUEZ AREVALO KARIN JANETH', '922664535', 'Paralizar el trabajo, Delimitar el area de trabajo, Reportar al dueño de area y area de Seguridad, topico, Estabilizar al paciente, trasladarlo al centro de salud mas cercano, realizar investigacion de accidentes.', 17),
+                ('GENERAL_PLANTAS', 'PNE', 'AREQUIPA', 'Rosa Casas Lipe', '922671344', 'Paralizar el trabajo, Delimitar el area de trabajo, Reportar al dueño de area y area de Seguridad, topico, Estabilizar al paciente, trasladarlo al centro de salud mas cercano, realizar investigacion de accidentes.', 18),
+                ('GENERAL_PLANTAS', 'PNE', 'CUSCO', 'Rosa Casas Lipe', '922671344', 'Paralizar el trabajo, Delimitar el area de trabajo, Reportar al dueño de area y area de Seguridad, topico, Estabilizar al paciente, trasladarlo al centro de salud mas cercano, realizar investigacion de accidentes.', 19),
+                # GENERAL_PLANTAS - DIA (#tbl3)
+                ('GENERAL_PLANTAS', 'DIA', 'TODAS', 'Fumigacion y desinfeccion de Ambientes', 'Derrame de insumos', 'Traslado en contenedor hermetico', 20),
+                ('GENERAL_PLANTAS', 'DIA', 'TODAS', 'Fumigacion y desinfeccion de Ambientes', 'Envases de quimicos vacios', 'Descarte con entidad autorizada para descarte de envases con quimicos', 21),
+                ('GENERAL_PLANTAS', 'DIA', 'TODAS', 'Control de roedores', 'Rodenticida', 'Acopio en oficina propia para descarte en entidad autorizada', 22),
+                ('GENERAL_PLANTAS', 'DIA', 'TODAS', 'Cambio de placas entomologicas', 'Carton, plastico', 'Descarte en contenedores clasificados de oficina propia.', 23),
+                # GENERAL_PLANTAS - DCI (#tbl4)
+                ('GENERAL_PLANTAS', 'DCI', 'TODAS', 'Control de roedores, aves, cambio de placas entomologicas', 'Falta de orden y limpieza', 'Orden y limpieza del area de trabajo antes, durante y despues de realizar la actividad', 24),
+
+                # VEND_FUMIGACION_EQUIPOS
+                ('VEND_FUMIGACION_EQUIPOS', 'DPR', 'TODAS', 'Inspeccion de Ambientes / Equipos', 'Exposicion al ruido mayor a 85 dbs', 'Capacitacion de uso correcto de protectores auditivos (tapones y orejeras)', 25),
+                ('VEND_FUMIGACION_EQUIPOS', 'DPR', 'TODAS', 'Inspeccion de Ambientes / Equipos', 'Caidas en superficies desniveladas', 'Transitar por areas seguras, respetar las señalizaciones, Uso de casco y Zapatos antideslizantes.', 26),
+                ('VEND_FUMIGACION_EQUIPOS', 'DPR', 'TODAS', 'Fumigacion de Equipos', 'Exposicion de Insecticida / Gel', 'Capacitacion y entrenamiento de puesto de trabajo, supervision constante, uso de EPPs, respirador media cara con filtro contra gases, guantes de nitrilo.', 27),
+                ('VEND_FUMIGACION_EQUIPOS', 'DPR', 'TODAS', 'Fumigacion de Equipos', 'Golpes por equipos', 'Capacitacion y entrenamiento de puesto de trabajo, Check list de equipos, Inspeccion pre uso de epps, Guantes de seguridad.', 28),
+                ('VEND_FUMIGACION_EQUIPOS', 'PNE', 'TODAS', 'Dany Rios German', '943576167', 'Paralizar el trabajo, Delimitar el area de trabajo, Reportar al dueño de area y area de Seguridad, topico, Estabilizar al paciente, trasladarlo al centro de salud mas cercano, realizar investigacion de accidentes.', 29),
+                ('VEND_FUMIGACION_EQUIPOS', 'DIA', 'TODAS', 'Fumigacion de Equipos', 'Derrame de insumos', 'Traslado en contenedor hermetico', 30),
+                ('VEND_FUMIGACION_EQUIPOS', 'DIA', 'TODAS', 'Fumigacion de Equipos', 'Envases de quimicos vacios', 'Descarte con entidad autorizada para descarte de envases con quimicos', 31),
+                ('VEND_FUMIGACION_EQUIPOS', 'DCI', 'TODAS', 'Fumigacion de Equipos', 'Falta de orden y limpieza', 'Orden y limpieza del area de trabajo antes, durante y despues de realizar la actividad', 32),
+
+                # VEND_DESRATIZACION
+                ('VEND_DESRATIZACION', 'DPR', 'TODAS', 'Inspeccion de Ambientes', 'Caidas en superficies desniveladas', 'Transitar por areas seguras, respetar las señalizaciones, Uso de casco y Zapatos antideslizantes.', 33),
+                ('VEND_DESRATIZACION', 'DPR', 'TODAS', 'Control de Roedores (Desratización)', 'Exposicion a Rodenticida', 'Capacitacion y entrenamiento en el puesto de trabajo, Insumo en cantidades minimas concentracion de 0.01 gr/cebadero, lavado continuo de manos, uso de guantes de nitrilo.', 34),
+                ('VEND_DESRATIZACION', 'DPR', 'TODAS', 'Control de Roedores (Desratización)', 'Caidas tropiezos', 'Delimitacion del area de trabajo, Uso correcto de epps, casco, zapatos de seguridad.', 35),
+                ('VEND_DESRATIZACION', 'PNE', 'TODAS', 'Dany Rios German', '943576167', 'Paralizar el trabajo, Delimitar el area de trabajo, Reportar al dueño de area y area de Seguridad, topico, Estabilizar al paciente, trasladarlo al centro de salud mas cercano, realizar investigacion de accidentes.', 36),
+                ('VEND_DESRATIZACION', 'DIA', 'TODAS', 'Control de roedores', 'Rodenticida', 'Acopio en oficina propia para descarte en entidad autorizada', 37),
+                ('VEND_DESRATIZACION', 'DCI', 'TODAS', 'Control de roedores', 'Falta de orden y limpieza', 'Orden y limpieza del area de trabajo antes, durante y despues de realizar la actividad', 38),
+            ]
+            for m_row in matrix_seed:
+                conn.execute("""
+                    INSERT INTO lindley_matrix_rows (
+                        matrix_type, section_type, sede_filter, col1, col2, col3, sort_order
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, m_row)
+
+            # Sync lindley_contacts as well so the contacts list is populated
+            existing_contacts = conn.execute("SELECT COUNT(*) FROM lindley_contacts").fetchone()[0]
+            if existing_contacts == 0:
+                for p in plans_seed:
+                    conn.execute("""
+                        INSERT INTO lindley_contacts (plant, contact_name, email, notes)
+                        VALUES (?, ?, ?, ?)
+                    """, (p[1], p[8], p[9], f"Localidad web: {p[3]} ({p[4]})"))
+
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('seed_lindley_automation_v1', '1')")
+            conn.commit()
+            print("[seed_lindley_automation_v1] Successfully seeded Lindley Work Plan Automation.")
+        except Exception as e:
+            print("[seed_lindley_automation_v1] Error:", e)
 
 
 

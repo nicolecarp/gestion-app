@@ -4666,10 +4666,10 @@ async function deleteOvertime(id) {
     navigate('work');
 }
 
-// --- WORK LINDLEY ---
+// --- WORK LINDLEY (AUTOMATIZACIÓN DE PLANES DE TRABAJO ARCA CONTINENTAL + AUTO-OC) ---
+let _lindleyAutoCache = null;
+
 async function renderWorkLindley(el) {
-    const contacts = await api(eel.get_lindley_contacts) || [];
-    const forms = await api(eel.get_lindley_forms) || [];
     const now = new Date();
     const curMonth = now.getMonth() + 1;
     const curYear = now.getFullYear();
@@ -4677,22 +4677,390 @@ async function renderWorkLindley(el) {
     const nextYear = curMonth === 12 ? curYear + 1 : curYear;
     const valMonth = state.lindleyMonth || nextMonth;
     const valYear = state.lindleyYear || nextYear;
-    const validation = await api(eel.get_lindley_validation, valYear, valMonth) || { employees: [] };
-    const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Setiembre','Octubre','Noviembre','Diciembre'];
+    const subTab = state.lindleySubTab || 'planes';
+    const showPaused = !!state.lindleyShowPaused;
 
+    const [autoData, contacts, forms] = await Promise.all([
+        api(eel.get_lindley_automation_data, valYear, valMonth),
+        api(eel.get_lindley_contacts),
+        api(eel.get_lindley_forms),
+    ]);
+    _lindleyAutoCache = autoData || { plans: [], technicians: [], matrix_rows: [], validation: { employees: [] } };
+
+    const plans = _lindleyAutoCache.plans || [];
+    const techs = _lindleyAutoCache.technicians || [];
+    const matrixRows = _lindleyAutoCache.matrix_rows || [];
+    const validation = _lindleyAutoCache.validation || { employees: [] };
+    const periodKey = _lindleyAutoCache.period_key || `${valYear}-${String(valMonth).padStart(2, '0')}`;
+    const startDate = state.lindleyStartDate || _lindleyAutoCache.default_start_date || `${valYear}-${String(valMonth).padStart(2, '0')}-01`;
+    const endDate = state.lindleyEndDate || _lindleyAutoCache.default_end_date || `${valYear}-${String(valMonth).padStart(2, '0')}-30`;
+
+    const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Setiembre','Octubre','Noviembre','Diciembre'];
     const monthOpts = meses.map((m, i) => `<option value="${i+1}" ${valMonth === i+1 ? 'selected' : ''}>${m}</option>`).join('');
 
-    let html = `<div class="card" style="margin-bottom:18px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+    const activePlans = plans.filter(p => Number(p.is_active_month) === 1);
+    const pausedPlans = plans.filter(p => Number(p.is_active_month) !== 1);
+    const completedCount = activePlans.filter(p => p.is_completed_for_period).length;
+
+    let html = `
+    <div class="card" style="margin-bottom:16px;border-left:4px solid var(--accent)">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:14px">
             <div>
-                <div class="card-title" style="margin-bottom:2px">🚦 Semáforo de Habilitación de Técnicos para Planta</div>
-                <div style="font-size:0.8rem;color:var(--text-muted)">Valida que EMO, MATPEL e Inducción estén vigentes durante todo el mes programado</div>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <div class="card-title" style="margin:0;font-size:1.1rem">⚡ Automatización de Planes de Trabajo — Plataforma Arca Continental Lindley</div>
+                    <span class="tag tag-sage">${completedCount}/${activePlans.length} listos en ${meses[valMonth-1]}</span>
+                </div>
+                <div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">
+                    Autollenado en 1 clic con cruce automático de la <strong>última Orden de Compra (OC)</strong> de tu base de datos · Personal de Lima unificado con Vendomática
+                </div>
             </div>
-            <div style="display:flex;gap:6px;align-items:center">
-                <select class="form-control" style="width:130px;padding:6px 10px;font-size:0.8rem" onchange="changeLindleyValPeriod(this.value, ${valYear})">${monthOpts}</select>
-                <input type="number" class="form-control" style="width:85px;padding:6px 10px;font-size:0.8rem" value="${valYear}" onchange="changeLindleyValPeriod(${valMonth}, this.value)">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <button class="btn btn-primary btn-sm" onclick="copyLindleySuperPanel()" title="Copia un panel flotante con los ${activePlans.length} planes activos para pegarlo una sola vez en la web de Arca Continental">
+                    🪄 Copiar Super-Panel (${activePlans.length} Planes en 1)
+                </button>
+                <button class="btn btn-secondary btn-sm" onclick="syncLindleyOCsFromDB()" title="Busca las últimas OCs en la tabla de Órdenes de Compra y actualiza todas las descripciones">
+                    🔄 Sincronizar OCs de BD
+                </button>
+                <a class="btn btn-ghost btn-sm" href="https://ecuador.arcacontal.com/contratista/formularioTrabajo.aspx" target="_blank" rel="noopener" style="text-decoration:none">
+                    🌐 Abrir Portal Arca ↗
+                </a>
+            </div>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-top:14px;padding-top:12px;border-top:1px solid var(--border)">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <span style="font-size:0.78rem;font-weight:600;color:var(--text-muted)">MES DEL PLAN:</span>
+                <select class="form-control" style="width:125px;padding:5px 8px;font-size:0.8rem" onchange="changeLindleyValPeriod(this.value, ${valYear})">${monthOpts}</select>
+                <input type="number" class="form-control" style="width:80px;padding:5px 8px;font-size:0.8rem" value="${valYear}" onchange="changeLindleyValPeriod(${valMonth}, this.value)">
+                <span style="font-size:0.78rem;color:var(--text-muted);margin-left:6px">Fechas a inyectar en web:</span>
+                <input type="date" id="lindleyStartDate" class="form-control" style="width:138px;padding:5px 8px;font-size:0.8rem" value="${esc(startDate)}" onchange="state.lindleyStartDate=this.value">
+                <span style="color:var(--text-muted)">→</span>
+                <input type="date" id="lindleyEndDate" class="form-control" style="width:138px;padding:5px 8px;font-size:0.8rem" value="${esc(endDate)}" onchange="state.lindleyEndDate=this.value">
+            </div>
+
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+                <button class="btn ${subTab === 'planes' ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="setLindleySubTab('planes')">
+                    🚀 Planes y Autollenado (${activePlans.length})
+                </button>
+                <button class="btn ${subTab === 'tecnicos' ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="setLindleySubTab('tecnicos')">
+                    👷 Técnicos y Permisos (${techs.filter(t => Number(t.is_active) === 1).length})
+                </button>
+                <button class="btn ${subTab === 'matrices' ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="setLindleySubTab('matrices')">
+                    📋 Matrices Web (${matrixRows.length})
+                </button>
+                <button class="btn ${subTab === 'semaforo' ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="setLindleySubTab('semaforo')">
+                    🚦 Semáforo EMO/MATPEL y Contactos
+                </button>
+            </div>
+        </div>
+    </div>`;
+
+    if (subTab === 'planes') {
+        html += renderLindleyPlanesSubTab(plans, activePlans, pausedPlans, showPaused, periodKey, meses[valMonth-1], valYear);
+    } else if (subTab === 'tecnicos') {
+        html += renderLindleyTecnicosSubTab(techs);
+    } else if (subTab === 'matrices') {
+        html += renderLindleyMatricesSubTab(matrixRows);
+    } else {
+        html += renderLindleySemaforoSubTab(validation, contacts, forms, meses, nextMonth, nextYear);
+    }
+
+    el.innerHTML = html;
+}
+
+function setLindleySubTab(tab) {
+    state.lindleySubTab = tab;
+    navigate('work');
+}
+
+function changeLindleyValPeriod(month, year) {
+    state.lindleyMonth = parseInt(month);
+    state.lindleyYear = parseInt(year);
+    state.lindleyStartDate = null;
+    state.lindleyEndDate = null;
+    navigate('work');
+}
+
+function renderLindleyPlanesSubTab(plans, activePlans, pausedPlans, showPaused, periodKey, monthName, yearNum) {
+    const visiblePlans = showPaused ? plans : activePlans;
+
+    let html = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
+        <div style="font-size:0.83rem;color:var(--text-muted)">
+            💡 <strong>¿Cómo usarlo?</strong> En la web de Arca Continental abre <em>Formulario de trabajo</em>, haz clic en <strong>⚡ Copiar Autollenado</strong> en la planta que quieras (o usa el <strong>🪄 Super-Panel</strong>), pégalo en la consola (<code>F12</code> → <em>Console</em> → <code>Ctrl+V</code>) y en <strong>0.5 segundos</strong> verás todo marcado frente a tus ojos listo para darle a <strong>Aceptar</strong>.
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn btn-ghost btn-sm" onclick="state.lindleyShowPaused=!state.lindleyShowPaused;navigate('work')">
+                ${showPaused ? '🙈 Ocultar pausados este mes' : `👁️ Ver pausados este mes (${pausedPlans.length}: Arequipa / Cusco)`}
+            </button>
+        </div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(440px,1fr));gap:14px">`;
+
+    for (const p of visiblePlans) {
+        const isActive = Number(p.is_active_month) === 1;
+        const isDone = !!p.is_completed_for_period;
+        const techs = p.assigned_technicians || [];
+        const lotoTechs = techs.filter(t => t.electrico_loto === 'SI');
+        const blockedTechs = techs.filter(t => t.doc_overall === 'blocked');
+        const warnTechs = techs.filter(t => t.doc_overall === 'warning');
+        const pneRow = (p.pne_rows && p.pne_rows[0]) ? p.pne_rows[0] : null;
+
+        const matrixBadge = p.matrix_type === 'VEND_FUMIGACION_EQUIPOS'
+            ? '<span class="tag tag-primary">Vendomática · Fumigación Equipos</span>'
+            : p.matrix_type === 'VEND_DESRATIZACION'
+            ? '<span class="tag tag-gold">Vendomática · Desratización</span>'
+            : '<span class="tag tag-sage">Matriz General Plantas</span>';
+
+        const ocDetailsTip = (p.detected_oc_details || []).map(d => `${d.site_name}: OC ${d.oc_number} (${d.month}/${d.year})`).join(' | ');
+        const ocBadge = p.oc_source === 'manual'
+            ? `<span class="tag tag-gold" title="OC editada manualmente">✍️ ${esc(p.effective_oc)} (Manual)</span>`
+            : p.effective_oc
+            ? `<span class="tag tag-sage" title="Detectada automáticamente de Órdenes de Compra: ${esc(ocDetailsTip)}">🔗 Última OC BD: ${esc(p.effective_oc)}</span>`
+            : `<span class="tag tag-rose">Sin OC detectada</span>`;
+
+        const chemNames = (p.chemical_list || []).map(c => c.name).join(', ') || 'Ninguno';
+        const machNames = (p.machinery_list || []).map(m => m.name).join(', ') || 'NO';
+
+        html += `
+        <div class="card" style="margin:0;opacity:${isActive ? '1' : '0.68'};border:1px solid ${isDone ? 'var(--sage)' : 'var(--border)'};position:relative">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:8px">
+                <div>
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                        <span style="font-weight:700;font-size:1rem;color:var(--text)">${esc(p.name)}</span>
+                        <span class="tag" style="font-family:monospace;font-size:0.75rem" title="Código(s) que se marcan en #tblC">Cód Web: ${esc(p.web_codes)}</span>
+                        ${!isActive ? '<span class="tag tag-rose">⏸ Pausado este mes</span>' : ''}
+                    </div>
+                    <div style="font-size:0.77rem;color:var(--text-muted);margin-top:2px">
+                        📍 Localidad web: <strong>${esc(p.web_localities)}</strong> · ${matrixBadge}
+                    </div>
+                </div>
+                <div style="display:flex;gap:4px;align-items:center">
+                    <button class="btn ${isDone ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="togglePlanCompleted(${p.id}, '${esc(periodKey)}')" title="Marcar este plan como subido en el portal en ${esc(monthName)} ${yearNum}">
+                        ${isDone ? '✅ Subido' : '⬜ Pendiente'}
+                    </button>
+                    <button class="btn btn-ghost btn-sm" onclick="showEditLindleyPlanModal(${p.id})" title="Editar OC, descripción, contratante o equipos">✎</button>
+                </div>
+            </div>
+
+            <div style="background:var(--bg-elevated, rgba(255,255,255,0.03));border:1px solid var(--border);border-radius:8px;padding:9px 11px;margin-bottom:10px">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:4px;flex-wrap:wrap">
+                    <span style="font-size:0.72rem;font-weight:600;text-transform:uppercase;color:var(--text-muted)">Descripción del Trabajo (#txtDescripcionTrabajo)</span>
+                    ${ocBadge}
+                </div>
+                <div style="font-size:0.83rem;font-weight:500;color:var(--text);line-height:1.35;word-break:break-word">
+                    ${esc(p.full_description)}
+                </div>
+            </div>
+
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.79rem;margin-bottom:10px">
+                <div>
+                    <span style="color:var(--text-muted)">👤 Contratante:</span><br>
+                    <strong>${esc(p.contact_name || '-')}</strong><br>
+                    <span style="font-size:0.74rem;color:var(--text-muted)">${esc(p.contact_email || '-')}</span>
+                </div>
+                <div>
+                    <span style="color:var(--text-muted)">🚑 Emergencia (#tbl2):</span><br>
+                    <strong>${esc(pneRow ? pneRow.col1 : '-')}</strong><br>
+                    <span style="font-size:0.74rem;color:var(--text-muted)">📞 ${esc(pneRow ? pneRow.col2 : '-')}</span>
+                </div>
+                <div>
+                    <span style="color:var(--text-muted)">🧪 Químicos (${(p.chemical_list || []).length}):</span><br>
+                    <span style="font-size:0.75rem">${esc(chemNames)}</span>
+                </div>
+                <div>
+                    <span style="color:var(--text-muted)">⚙️ Equipos / Maquinaria:</span><br>
+                    <span style="font-size:0.75rem;font-weight:${p.use_machinery ? '600' : '400'};color:${p.use_machinery ? 'var(--gold)' : 'var(--text-muted)'}">${esc(machNames)}</span>
+                </div>
+            </div>
+
+            <div style="font-size:0.77rem;padding-top:8px;border-top:1px solid var(--border);margin-bottom:10px">
+                <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;margin-bottom:5px">
+                    <span>👷 <strong>Grupo ${esc(p.tech_group)}</strong> (${techs.length} técnicos activos${lotoTechs.length ? ` · ⚡ ${lotoTechs.length} con LOTO` : ''})</span>
+                    ${blockedTechs.length > 0
+                        ? `<span class="tag tag-rose" style="font-size:0.7rem" title="${esc(blockedTechs.map(t => t.short_name).join(', '))}">⚠️ ${blockedTechs.length} doc vencido/faltante</span>`
+                        : warnTechs.length > 0
+                        ? `<span class="tag tag-gold" style="font-size:0.7rem">⚠️ ${warnTechs.length} vence en el mes</span>`
+                        : `<span class="tag tag-sage" style="font-size:0.7rem">✅ Docs OK</span>`}
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:4px">
+                    ${techs.map(t => {
+                        const lotoTag = t.electrico_loto === 'SI' ? ' ⚡LOTO' : '';
+                        const noQuim = t.quimicos === 'NO' ? ' (Sin Quím.)' : '';
+                        return `<span class="tag" style="font-size:0.7rem;padding:2px 6px" title="DNI: ${esc(t.dni)} | ${esc(t.web_full_name)}">${esc(t.short_name)}${lotoTag}${noQuim}</span>`;
+                    }).join('')}
+                </div>
+            </div>
+
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+                <button class="btn btn-primary btn-sm" style="flex:1;justify-content:center;font-weight:600" onclick="copyLindleyPlanAutofill(${p.id})">
+                    ⚡ Copiar Autollenado (${esc(p.name)})
+                </button>
+                <button class="btn btn-ghost btn-sm" onclick="toggleLindleyPlanMonth(${p.id}, ${isActive ? 0 : 1})" title="${isActive ? 'Pausar este mes' : 'Activar este mes'}">
+                    ${isActive ? '⏸' : '▶️ Activar'}
+                </button>
             </div>
         </div>`;
+    }
+
+    html += `</div>`;
+    return html;
+}
+
+function renderLindleyTecnicosSubTab(techs) {
+    const groupFilter = state.lindleyTechGroupFilter || 'TODOS';
+    const groups = ['TODOS', 'PUCUSANA', 'MEGAS Y ZARATE', 'IQUITOS', 'TRUJILLO', 'AREQUIPA', 'CUSCO'];
+    const filtered = groupFilter === 'TODOS' ? techs : techs.filter(t => t.tech_group === groupFilter);
+
+    let html = `
+    <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+            <div>
+                <div class="card-title" style="margin:0">👷 Matriz de Técnicos por Planta y Permisos de Riesgo (#example3)</div>
+                <div style="font-size:0.8rem;color:var(--text-muted)">
+                    Haz clic en cualquier botón <strong>SI / NO</strong> para cambiar al instante qué se marca en las 6 columnas de la web de Arca Continental. El grupo <strong>MEGAS Y ZARATE</strong> aplica tanto a Plantas Lima como a los 2 planes de <strong>Vendomática</strong>.
+                </div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <select class="form-control" style="width:190px;padding:6px 10px;font-size:0.8rem" onchange="state.lindleyTechGroupFilter=this.value;navigate('work')">
+                    ${groups.map(g => `<option value="${g}" ${groupFilter === g ? 'selected' : ''}>Grupo: ${g}</option>`).join('')}
+                </select>
+                <button class="btn btn-primary btn-sm" onclick="showLindleyTechModal(null)">+ Añadir Técnico a Grupo</button>
+            </div>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Grupo / Sede</th>
+                        <th>Técnico</th>
+                        <th>DNI Web</th>
+                        <th>Nombre en Plataforma Arca</th>
+                        <th style="text-align:center">Activo en Plan</th>
+                        <th style="text-align:center">Altura</th>
+                        <th style="text-align:center">Confinado</th>
+                        <th style="text-align:center">Calor</th>
+                        <th style="text-align:center">Químicos</th>
+                        <th style="text-align:center">Obra Civil</th>
+                        <th style="text-align:center">Eléctrico / LOTO</th>
+                        <th style="text-align:center">Docs ERP</th>
+                        <th>Acciones</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+
+    const renderTogglePill = (techId, field, isYes) => {
+        const nextVal = isYes ? 'NO' : 'SI';
+        const cls = isYes ? 'tag-sage' : '';
+        const style = isYes
+            ? 'cursor:pointer;font-weight:700;border:none'
+            : 'cursor:pointer;opacity:0.65;background:var(--bg-elevated);color:var(--text-muted);border:1px solid var(--border)';
+        return `<button class="tag ${cls}" style="${style}" onclick="quickToggleLindleyTech(${techId}, '${field}', '${nextVal}')">${isYes ? 'SI' : 'NO'}</button>`;
+    };
+
+    for (const t of filtered) {
+        const isAct = Number(t.is_active) === 1;
+        const docBadge = t.doc_overall === 'ok'
+            ? '<span class="tag tag-sage" title="EMO, MATPEL e Inducción vigentes">✅ OK</span>'
+            : t.doc_overall === 'warning'
+            ? `<span class="tag tag-gold" title="${esc((t.doc_issues || []).join(', '))}">⚠️ Vence</span>`
+            : t.doc_overall === 'blocked'
+            ? `<span class="tag tag-rose" title="${esc((t.doc_issues || []).join(', '))}">🚫 Revisar</span>`
+            : '<span class="tag" style="opacity:0.6">-</span>';
+
+        html += `
+        <tr style="opacity:${isAct ? '1' : '0.55'}">
+            <td><span class="tag tag-primary" style="font-size:0.72rem">${esc(t.tech_group)}</span></td>
+            <td><strong>${esc(t.short_name)}</strong>${t.notes ? `<br><span style="font-size:0.72rem;color:var(--text-muted)">${esc(t.notes)}</span>` : ''}</td>
+            <td style="font-family:monospace;font-weight:600">${esc(t.dni)}</td>
+            <td style="font-size:0.78rem">${esc(t.web_full_name)}</td>
+            <td style="text-align:center">${renderTogglePill(t.id, 'is_active', isAct)}</td>
+            <td style="text-align:center">${renderTogglePill(t.id, 'altura', t.altura === 'SI')}</td>
+            <td style="text-align:center">${renderTogglePill(t.id, 'confinado', t.confinado === 'SI')}</td>
+            <td style="text-align:center">${renderTogglePill(t.id, 'calor', t.calor === 'SI')}</td>
+            <td style="text-align:center">${renderTogglePill(t.id, 'quimicos', t.quimicos === 'SI')}</td>
+            <td style="text-align:center">${renderTogglePill(t.id, 'obra_civil', t.obra_civil === 'SI')}</td>
+            <td style="text-align:center">${renderTogglePill(t.id, 'electrico_loto', t.electrico_loto === 'SI')}</td>
+            <td style="text-align:center">${docBadge}</td>
+            <td>
+                <button class="btn btn-ghost btn-sm" onclick="showLindleyTechModal(${t.id})">✎</button>
+                <button class="btn btn-ghost btn-sm" onclick="deleteLindleyTech(${t.id})">✕</button>
+            </td>
+        </tr>`;
+    }
+
+    html += `</tbody></table></div></div>`;
+    return html;
+}
+
+function renderLindleyMatricesSubTab(matrixRows) {
+    const mFilter = state.lindleyMatrixFilter || 'GENERAL_PLANTAS';
+    const filtered = matrixRows.filter(r => r.matrix_type === mFilter);
+    const secLabels = {
+        'DPR': '1. Peligros y Riesgos (#tbl1)',
+        'PNE': '2. Procedimientos y Notificaciones de Emergencia (#tbl2)',
+        'DIA': '3. Impactos Ambientales (#tbl3)',
+        'DCI': '4. Impactos Calidad e Inocuidad (#tbl4)',
+    };
+
+    let html = `
+    <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+            <div>
+                <div class="card-title" style="margin:0">📋 Matrices de Seguridad, Emergencia, Ambiente y Calidad (#tbl1 a #tbl4)</div>
+                <div style="font-size:0.8rem;color:var(--text-muted)">
+                    Filas que el script agrega automáticamente con el botón <code>[+]</code> en cada sección del formulario. Vendomática tiene sus propias matrices separadas para Fumigación de Equipos y Desratización.
+                </div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <select class="form-control" style="width:270px;padding:6px 10px;font-size:0.8rem" onchange="state.lindleyMatrixFilter=this.value;navigate('work')">
+                    <option value="GENERAL_PLANTAS" ${mFilter === 'GENERAL_PLANTAS' ? 'selected' : ''}>🏭 Plantas Generales (Lima, Iquitos, Trujillo, AQP, Cusco)</option>
+                    <option value="VEND_FUMIGACION_EQUIPOS" ${mFilter === 'VEND_FUMIGACION_EQUIPOS' ? 'selected' : ''}>🧊 Vendomática — Fumigación de Equipos</option>
+                    <option value="VEND_DESRATIZACION" ${mFilter === 'VEND_DESRATIZACION' ? 'selected' : ''}>🐀 Vendomática — Desratización (Control Roedores)</option>
+                </select>
+                <button class="btn btn-primary btn-sm" onclick="showLindleyMatrixRowModal(null, '${mFilter}')">+ Agregar Fila</button>
+            </div>
+        </div>
+
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Sección Web</th>
+                        <th>Sede</th>
+                        <th>Columna 1 (Actividad / Responsable)</th>
+                        <th>Columna 2 (Riesgo / Teléfono / Impacto)</th>
+                        <th>Columna 3 (Medidas de Control / Pasos de Emergencia)</th>
+                        <th>Acciones</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+
+    for (const r of filtered) {
+        html += `
+        <tr>
+            <td><strong>${esc(secLabels[r.section_type] || r.section_type)}</strong></td>
+            <td><span class="tag ${r.sede_filter === 'TODAS' ? 'tag-sage' : 'tag-gold'}">${esc(r.sede_filter)}</span></td>
+            <td><strong>${esc(r.col1)}</strong></td>
+            <td>${esc(r.col2)}</td>
+            <td style="font-size:0.8rem;line-height:1.35">${esc(r.col3)}</td>
+            <td style="white-space:nowrap">
+                <button class="btn btn-ghost btn-sm" onclick="showLindleyMatrixRowModal(${r.id})">✎</button>
+                <button class="btn btn-ghost btn-sm" onclick="deleteLindleyMatrixRow(${r.id})">✕</button>
+            </td>
+        </tr>`;
+    }
+
+    html += `</tbody></table></div></div>`;
+    return html;
+}
+
+function renderLindleySemaforoSubTab(validation, contacts, forms, meses, nextMonth, nextYear) {
+    let html = `<div class="card" style="margin-bottom:18px">
+        <div class="card-title" style="margin-bottom:4px">🚦 Semáforo General de Habilitación de Técnicos (EMO, MATPEL e Inducción)</div>
+        <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:12px">Valida que los documentos obligatorios estén vigentes durante todo el mes seleccionado</div>`;
 
     if (!validation.employees || validation.employees.length === 0) {
         html += '<p style="color:var(--text-muted);font-size:0.85rem">Sin técnicos activos</p>';
@@ -4725,7 +5093,7 @@ async function renderWorkLindley(el) {
 
     html += `<div class="two-col">
         <div class="card">
-            <div class="card-title">Contactos por planta</div>
+            <div class="card-title">Directorio de Contactos por Planta</div>
             <div style="margin-bottom:12px"><button class="btn btn-primary btn-sm" onclick="showContactForm()">+ Contacto</button></div>`;
     if (contacts.length === 0) {
         html += '<p style="color:var(--text-muted);font-size:0.85rem">Sin contactos</p>';
@@ -4745,11 +5113,11 @@ async function renderWorkLindley(el) {
     html += `</div>
         <div>
             <div class="card" style="margin-bottom:14px">
-                <div class="card-title">Plan de trabajo mensual</div>
+                <div class="card-title">Cierre Mensual Global</div>
                 <p style="margin-bottom:12px;font-size:0.85rem;color:var(--text-muted)">Programación para ${meses[nextMonth-1]} ${nextYear}</p>
                 <button class="btn btn-primary" onclick="completeForm(${nextMonth}, ${nextYear})">Marcar ${meses[nextMonth-1]} completado</button>
             </div>
-            <div class="card"><div class="card-title">Historial</div>`;
+            <div class="card"><div class="card-title">Historial de Meses</div>`;
     if (forms.length === 0) {
         html += '<p style="color:var(--text-muted);font-size:0.85rem">Ninguno aún</p>';
     } else {
@@ -4760,12 +5128,572 @@ async function renderWorkLindley(el) {
         }
     }
     html += '</div></div></div>';
-    el.innerHTML = html;
+    return html;
 }
 
-function changeLindleyValPeriod(month, year) {
-    state.lindleyMonth = parseInt(month);
-    state.lindleyYear = parseInt(year);
+// --- GENERADOR DE SCRIPT DE AUTOLLENADO (1 CLIC Y SUPER-PANEL) ---
+function buildLindleyPlanPayload(plan) {
+    const startInput = document.getElementById('lindleyStartDate');
+    const endInput = document.getElementById('lindleyEndDate');
+    const startDate = (startInput && startInput.value) || state.lindleyStartDate || (_lindleyAutoCache && _lindleyAutoCache.default_start_date) || '';
+    const endDate = (endInput && endInput.value) || state.lindleyEndDate || (_lindleyAutoCache && _lindleyAutoCache.default_end_date) || '';
+
+    const webCodes = (plan.web_codes || '').split(',').map(s => s.trim()).filter(Boolean);
+    const workers = {};
+    for (const t of (plan.assigned_technicians || [])) {
+        const dni = String(t.dni || '').trim();
+        if (!dni) continue;
+        workers[dni] = {
+            name: t.short_name,
+            altura: t.altura === 'SI' ? 'S' : 'N',
+            confinado: t.confinado === 'SI' ? 'S' : 'N',
+            calor: t.calor === 'SI' ? 'S' : 'N',
+            quimicos: t.quimicos === 'SI' ? 'S' : 'N',
+            obra_civil: t.obra_civil === 'SI' ? 'S' : 'N',
+            electrico: t.electrico_loto === 'SI' ? 'S' : 'N',
+        };
+    }
+
+    return {
+        id: plan.id,
+        name: plan.name,
+        localitiesLabel: plan.web_localities,
+        webCodes: webCodes,
+        description: plan.full_description || '',
+        contactName: plan.contact_name || '',
+        contactEmail: plan.contact_email || '',
+        startDate: startDate,
+        endDate: endDate,
+        workers: workers,
+        useChemicals: Number(plan.use_chemicals) === 1,
+        chemicalIds: (plan.chemical_ids || '').split(',').map(s => s.trim()).filter(Boolean),
+        useVehicles: Number(plan.use_vehicles) === 1,
+        useMachinery: Number(plan.use_machinery) === 1,
+        machineryIds: (plan.machinery_ids || '').split(',').map(s => s.trim()).filter(Boolean),
+        dprRows: plan.dpr_rows || [],
+        pneRows: plan.pne_rows || [],
+        diaRows: plan.dia_rows || [],
+        dciRows: plan.dci_rows || [],
+    };
+}
+
+function buildLindleyCoreExecutorSource() {
+    return `
+    function executeLindleyAutofill(cfg) {
+        if (typeof $ === 'undefined') {
+            alert('⚠️ Ejecuta este script dentro de la pestaña de Arca Continental (formularioTrabajo.aspx).');
+            return;
+        }
+        function doFill() {
+            // 1. Marcar localidades en #tblC
+            $('#chkTodosC').prop('checked', false);
+            var matchedLocs = [];
+            var firstLocRow = null;
+            $('#tblC tbody tr').each(function() {
+                var $tr = $(this);
+                var $chk = $tr.find('td:eq(0) input[type=checkbox]');
+                var code = ($tr.find('td:eq(1)').text() || '').trim();
+                var locName = ($tr.find('td:eq(2)').text() || '').trim();
+                if (cfg.webCodes.indexOf(code) !== -1) {
+                    $chk.prop('checked', true);
+                    $tr.css('background-color', '#dcfce7');
+                    matchedLocs.push(code + ' (' + locName + ')');
+                    if (!firstLocRow) firstLocRow = $tr[0];
+                } else {
+                    $chk.prop('checked', false);
+                    $tr.css('background-color', '');
+                }
+            });
+            if (firstLocRow && firstLocRow.scrollIntoView) {
+                try { firstLocRow.scrollIntoView({ block: 'nearest' }); } catch(e) {}
+            }
+
+            // 2. Cabecera: Descripción (con última OC), Contratante, Correo y Fechas
+            $('#txtDescripcionTrabajo').val(cfg.description);
+            $('#txtNombreContratante').val(cfg.contactName);
+            $('#txtCorreo').val(cfg.contactEmail);
+            $('#txtdatepicker').val(cfg.startDate);
+            $('#txtdatepicker2').val(cfg.endDate);
+
+            // 3. Trabajadores (#example3): desmarcar todos y marcar solo el grupo asignado con sus 6 permisos S/N
+            $('#chkTodos').prop('checked', false);
+            var matchedWorkers = 0;
+            $('#example3 tbody tr').each(function() {
+                var $tr = $(this);
+                var $chk = $tr.find('td:eq(0) input[type=checkbox]');
+                var dni = ($tr.find('td:eq(1)').text() || '').trim();
+                var w = cfg.workers[dni];
+                if (w) {
+                    $chk.prop('checked', true);
+                    $tr.find('td:eq(3) select').val(w.altura).css('background-color', 'white');
+                    $tr.find('td:eq(4) select').val(w.confinado).css('background-color', 'white');
+                    $tr.find('td:eq(5) select').val(w.calor).css('background-color', 'white');
+                    $tr.find('td:eq(6) select').val(w.quimicos).css('background-color', 'white');
+                    $tr.find('td:eq(7) select').val(w.obra_civil).css('background-color', 'white');
+                    $tr.find('td:eq(8) select').val(w.electrico).css('background-color', 'white');
+                    $tr.css('background-color', '#dcfce7');
+                    matchedWorkers++;
+                } else {
+                    $chk.prop('checked', false);
+                    $tr.css('background-color', '');
+                }
+            });
+            $('#spanError').hide().text('');
+
+            // 4. Químicos (#cmbQuimico y #tblQuimico)
+            $('#cmbQuimico').val(cfg.useChemicals ? 'S' : 'N').trigger('change');
+            var matchedChems = 0;
+            $('#chkTodosQuimicos').prop('checked', false);
+            $('#tblQuimico tbody tr').each(function() {
+                var $tr = $(this);
+                var $chk = $tr.find('td:eq(0) input[type=checkbox]');
+                var qid = ($tr.find('td:eq(1)').text() || '').trim();
+                if (cfg.useChemicals && cfg.chemicalIds.indexOf(qid) !== -1) {
+                    $chk.prop('checked', true);
+                    $tr.css('background-color', '#dcfce7');
+                    matchedChems++;
+                } else {
+                    $chk.prop('checked', false);
+                    $tr.css('background-color', '');
+                }
+            });
+
+            // 5. Vehículos (#cmbVehiculos)
+            $('#cmbVehiculos').val(cfg.useVehicles ? 'S' : 'N').trigger('change');
+            $('#chkTodosVehiculos').prop('checked', false);
+            $('#tblVehiculo tbody tr input[type=checkbox]').prop('checked', false);
+
+            // 6. Maquinarias / Equipos (#cmbMaquinaria y #tblMaquinaria)
+            $('#cmbMaquinaria').val(cfg.useMachinery ? 'S' : 'N').trigger('change');
+            var matchedMach = 0;
+            $('#chkTodosMaquinaria').prop('checked', false);
+            $('#tblMaquinaria tbody tr').each(function() {
+                var $tr = $(this);
+                var $chk = $tr.find('td:eq(0) input[type=checkbox]');
+                var mid = ($tr.find('td:eq(1)').text() || '').trim();
+                if (cfg.useMachinery && cfg.machineryIds.indexOf(mid) !== -1) {
+                    $chk.prop('checked', true);
+                    $tr.css('background-color', '#dcfce7');
+                    matchedMach++;
+                } else {
+                    $chk.prop('checked', false);
+                    $tr.css('background-color', '');
+                }
+            });
+
+            // 7. Limpiar y poblar las 4 tablas dinámicas (#tbl1, #tbl2, #tbl3, #tbl4)
+            $('#tbl1 tbody, #tbl2 tbody, #tbl3 tbody, #tbl4 tbody').empty();
+            (cfg.dprRows || []).forEach(function(r) {
+                $('#txtActividadTrabajo').val(r.col1);
+                $('#txtRiesgosPotenciales').val(r.col2);
+                $('#txtMedidasControlarRiesgos').val(r.col3);
+                if (typeof SetDataGrid1 === 'function') SetDataGrid1();
+            });
+            (cfg.pneRows || []).forEach(function(r) {
+                $('#txtNombreResponsable').val(r.col1);
+                $('#txtNumeroContacto').val(r.col2);
+                $('#txtPasosEmergencia').val(r.col3);
+                if (typeof SetDataGrid2 === 'function') SetDataGrid2();
+            });
+            (cfg.diaRows || []).forEach(function(r) {
+                $('#txtActividadesTrabajo2').val(r.col1);
+                $('#txtImpactoAmbiental').val(r.col2);
+                $('#txtMedidasControlarImpacto').val(r.col3);
+                if (typeof SetDataGrid3 === 'function') SetDataGrid3();
+            });
+            (cfg.dciRows || []).forEach(function(r) {
+                $('#txtActividadesTrabajo4').val(r.col1);
+                $('#txtImpactoAmbiental4').val(r.col2);
+                $('#txtCalidadInocuidad').val(r.col3);
+                if (typeof SetDataGrid4 === 'function') SetDataGrid4();
+            });
+
+            // 8. Asegurar que el botón verde Aceptar esté habilitado
+            $('#btnGrabar2').removeAttr('disabled');
+
+            $('#nicoleAutofillBanner').remove();
+            $('.modal-body').first().prepend(
+                '<div id="nicoleAutofillBanner" style="background:#065f46;color:#fff;padding:10px 14px;border-radius:8px;margin-bottom:12px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,0.18)">' +
+                '<strong>✨ Autollenado Nicole completado: ' + cfg.name + '</strong><br>' +
+                'Localidades: <b>' + (matchedLocs.join(', ') || 'ninguna') + '</b> · Técnicos: <b>' + matchedWorkers + '</b> · Químicos: <b>' + matchedChems + '</b> · Equipos: <b>' + (cfg.useMachinery ? matchedMach : 'NO') + '</b> · Fechas: <b>' + cfg.startDate + ' → ' + cfg.endDate + '</b>' +
+                '</div>'
+            );
+        }
+
+        if (!$('#myModal').is(':visible') && $('#btnNuevo').length) {
+            $('#btnNuevo').trigger('click');
+        }
+
+        if ($('#cmbEmpresa').val() !== '5' || $('#tblC tbody tr').length <= 1) {
+            $('#cmbEmpresa').val('5').trigger('change');
+            var tries = 0;
+            var timer = setInterval(function() {
+                tries++;
+                if ($('#tblC tbody tr').length > 1 || tries > 20) {
+                    clearInterval(timer);
+                    setTimeout(doFill, 150);
+                }
+            }, 150);
+        } else {
+            doFill();
+        }
+    }`;
+}
+
+async function copyTextToClipboard(text, successMsg) {
+    try {
+        await navigator.clipboard.writeText(text);
+        showToast(successMsg);
+    } catch (e) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showToast(successMsg);
+    }
+}
+
+function copyLindleyPlanAutofill(planId) {
+    const plans = (_lindleyAutoCache && _lindleyAutoCache.plans) || [];
+    const plan = plans.find(p => p.id === planId);
+    if (!plan) {
+        showToast('Plan no encontrado');
+        return;
+    }
+    const payload = buildLindleyPlanPayload(plan);
+    const script = `(function() {\nconst cfg = ${JSON.stringify(payload)};\n${buildLindleyCoreExecutorSource()}\nexecuteLindleyAutofill(cfg);\n})();`;
+    copyTextToClipboard(script, `⚡ Script de "${plan.name}" copiado. Pégalo en la consola (F12) de Arca Continental`);
+}
+
+function copyLindleySuperPanel() {
+    const plans = ((_lindleyAutoCache && _lindleyAutoCache.plans) || []).filter(p => Number(p.is_active_month) === 1);
+    if (plans.length === 0) {
+        showToast('No hay planes activos este mes');
+        return;
+    }
+    const payloads = plans.map(p => buildLindleyPlanPayload(p));
+    const script = `(function() {
+    const plansList = ${JSON.stringify(payloads)};
+    ${buildLindleyCoreExecutorSource()}
+    $('#nicoleSuperPanel').remove();
+    var $panel = $('<div id="nicoleSuperPanel" style="position:fixed;top:14px;right:14px;width:270px;background:#1e293b;color:#f8fafc;border:2px solid #10b981;border-radius:12px;padding:12px;z-index:999999;box-shadow:0 12px 32px rgba(0,0,0,0.45);font-family:system-ui,sans-serif;font-size:12px"></div>');
+    var $header = $('<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid #334155"><strong style="color:#10b981;font-size:13px">⚡ Autollenado Nicole (' + plansList.length + ')</strong><button id="nicoleClosePanel" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:15px">✕</button></div>');
+    $panel.append($header);
+    $panel.append('<div style="color:#94a3b8;font-size:11px;margin-bottom:8px">Haz clic en una planta para llenar todo el formulario al instante:</div>');
+    var $list = $('<div style="display:flex;flex-direction:column;gap:5px;max-height:72vh;overflow-y:auto"></div>');
+    plansList.forEach(function(cfg, idx) {
+        var $btn = $('<button type="button" style="text-align:left;background:#334155;color:#f8fafc;border:1px solid #475569;border-radius:7px;padding:7px 9px;cursor:pointer;font-size:11.5px;transition:all 0.15s"><b>' + (idx + 1) + '. ' + cfg.name + '</b><br><span style="color:#94a3b8;font-size:10.5px">Cód: ' + cfg.webCodes.join(',') + ' · ' + Object.keys(cfg.workers).length + ' téc.</span></button>');
+        $btn.on('click', function() {
+            $list.find('button').css({'border-color': '#475569', 'background': '#334155'});
+            $(this).css({'border-color': '#10b981', 'background': '#064e3b'});
+            executeLindleyAutofill(cfg);
+        });
+        $list.append($btn);
+    });
+    $panel.append($list);
+    $('body').append($panel);
+    $('#nicoleClosePanel').on('click', function() { $('#nicoleSuperPanel').remove(); });
+})();`;
+    copyTextToClipboard(script, `🪄 Super-Panel con los ${plans.length} planes copiado. Pégalo 1 vez en la consola (F12) de Arca Continental`);
+}
+
+// --- ACCIONES Y MODALES DE PLANES, TÉCNICOS Y MATRICES ---
+async function syncLindleyOCsFromDB() {
+    const res = await api(eel.sync_lindley_ocs_from_db);
+    if (res && res.ok) {
+        showToast(`🔄 ${res.plans_synced} planes sincronizados con las últimas OCs de la Base de Datos`);
+        navigate('work');
+    } else {
+        showToast('Error al sincronizar OCs');
+    }
+}
+
+async function togglePlanCompleted(planId, periodKey) {
+    const res = await api(eel.mark_lindley_plan_completed, planId, periodKey);
+    if (res && res.ok) {
+        showToast(res.completed ? '✅ Plan marcado como subido este mes' : 'Plan marcado como pendiente');
+        navigate('work');
+    }
+}
+
+async function toggleLindleyPlanMonth(planId, activeVal) {
+    const res = await api(eel.toggle_lindley_plan_active, planId, activeVal);
+    if (res && res.ok) {
+        showToast(activeVal ? '▶️ Plan activado para este mes' : '⏸ Plan pausado para este mes');
+        navigate('work');
+    }
+}
+
+function showEditLindleyPlanModal(planId) {
+    const plans = (_lindleyAutoCache && _lindleyAutoCache.plans) || [];
+    const p = plans.find(x => x.id === planId);
+    if (!p) return;
+
+    const groups = ['PUCUSANA', 'MEGAS Y ZARATE', 'IQUITOS', 'TRUJILLO', 'AREQUIPA', 'CUSCO'];
+    const matrices = [
+        { val: 'GENERAL_PLANTAS', label: 'GENERAL_PLANTAS (Plantas Generales)' },
+        { val: 'VEND_FUMIGACION_EQUIPOS', label: 'VEND_FUMIGACION_EQUIPOS (Vendomática Equipos)' },
+        { val: 'VEND_DESRATIZACION', label: 'VEND_DESRATIZACION (Vendomática Desratización)' },
+    ];
+    const emergSedes = ['LIMA', 'IQUITOS', 'TRUJILLO', 'AREQUIPA', 'CUSCO', 'VEND_EQUIPOS', 'VEND_PLANTA'];
+
+    const html = `<form id="modalForm">
+        <div class="form-row">
+            <div class="form-group"><label>Nombre del Plan / Planta *</label><input class="form-control" name="name" value="${esc(p.name)}"></div>
+            <div class="form-group"><label>Hacer este mes</label>
+                <select class="form-control" name="is_active_month">
+                    <option value="1" ${Number(p.is_active_month) === 1 ? 'selected' : ''}>SI (Activo este mes)</option>
+                    <option value="0" ${Number(p.is_active_month) !== 1 ? 'selected' : ''}>NO (Pausado este mes)</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Código(s) Web (#tblC)</label><input class="form-control" name="web_codes" value="${esc(p.web_codes)}" placeholder="Ej: 358, 359"></div>
+            <div class="form-group"><label>Nombre Localidad Web</label><input class="form-control" name="web_localities" value="${esc(p.web_localities)}"></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Nombre Contratante</label><input class="form-control" name="contact_name" value="${esc(p.contact_name || '')}"></div>
+            <div class="form-group"><label>Correo Contratante (1 solo correo)</label><input class="form-control" name="contact_email" value="${esc(p.contact_email || '')}"></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group">
+                <label>Última OC automática en BD: <strong>${esc(p.auto_oc_label || 'Ninguna')}</strong></label>
+                <input class="form-control" name="oc_override" value="${esc(p.oc_override || '')}" placeholder="Dejar vacío para usar siempre la última OC de la BD">
+            </div>
+            <div class="form-group">
+                <label>ID(s) Sede en BD (client_sites)</label>
+                <input class="form-control" name="client_site_ids" value="${esc(p.client_site_ids || '')}" placeholder="Ej: 3 o 15,16">
+            </div>
+        </div>
+        <div class="form-group">
+            <label>Texto de Actividad (se concatena después de "OC XXXXX: ")</label>
+            <textarea class="form-control" name="activity_text" rows="2">${esc(p.activity_text || '')}</textarea>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Grupo de Personal</label>
+                <select class="form-control" name="tech_group">
+                    ${groups.map(g => `<option value="${g}" ${p.tech_group === g ? 'selected' : ''}>${g}</option>`).join('')}
+                </select>
+            </div>
+            <div class="form-group"><label>Tipo de Matriz (#tbl1..#tbl4)</label>
+                <select class="form-control" name="matrix_type">
+                    ${matrices.map(m => `<option value="${m.val}" ${p.matrix_type === m.val ? 'selected' : ''}>${m.label}</option>`).join('')}
+                </select>
+            </div>
+            <div class="form-group"><label>Sede Emergencia (#tbl2)</label>
+                <select class="form-control" name="emerg_sede">
+                    ${emergSedes.map(s => `<option value="${s}" ${p.emerg_sede === s ? 'selected' : ''}>${s}</option>`).join('')}
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Usa Químicos</label>
+                <select class="form-control" name="use_chemicals">
+                    <option value="1" ${Number(p.use_chemicals) === 1 ? 'selected' : ''}>SI</option>
+                    <option value="0" ${Number(p.use_chemicals) !== 1 ? 'selected' : ''}>NO</option>
+                </select>
+            </div>
+            <div class="form-group"><label>IDs Químicos Web (1799=DC4060, 2012=EXQUAT50, 1621=GEL, 1623=RODENT.)</label>
+                <input class="form-control" name="chemical_ids" value="${esc(p.chemical_ids || '')}">
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Usa Equipos / Maquinaria</label>
+                <select class="form-control" name="use_machinery">
+                    <option value="1" ${Number(p.use_machinery) === 1 ? 'selected' : ''}>SI</option>
+                    <option value="0" ${Number(p.use_machinery) !== 1 ? 'selected' : ''}>NO</option>
+                </select>
+            </div>
+            <div class="form-group"><label>IDs Maquinaria Web (11707=Mochila Aspersora, 11708=Termonebulizador)</label>
+                <input class="form-control" name="machinery_ids" value="${esc(p.machinery_ids || '')}">
+            </div>
+        </div>
+    </form>`;
+
+    openModal(`Editar Plan — ${p.name}`, html);
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('modalForm'));
+        const data = {
+            name: f.get('name'),
+            is_active_month: f.get('is_active_month') === '1',
+            web_codes: f.get('web_codes'),
+            web_localities: f.get('web_localities'),
+            contact_name: f.get('contact_name'),
+            contact_email: f.get('contact_email'),
+            oc_override: f.get('oc_override'),
+            client_site_ids: f.get('client_site_ids'),
+            activity_text: f.get('activity_text'),
+            tech_group: f.get('tech_group'),
+            matrix_type: f.get('matrix_type'),
+            emerg_sede: f.get('emerg_sede'),
+            use_chemicals: f.get('use_chemicals') === '1',
+            chemical_ids: f.get('chemical_ids'),
+            use_vehicles: false,
+            use_machinery: f.get('use_machinery') === '1',
+            machinery_ids: f.get('machinery_ids'),
+        };
+        const res = await api(eel.update_lindley_plan, p.id, data);
+        if (res && res.ok) {
+            showToast('Plan actualizado');
+            closeModal();
+            navigate('work');
+        } else {
+            showToast('Error al actualizar plan');
+        }
+    };
+}
+
+async function quickToggleLindleyTech(techId, field, nextVal) {
+    const res = await api(eel.toggle_lindley_tech_field, techId, field, nextVal);
+    if (res && res.ok) {
+        navigate('work');
+    } else {
+        showToast('Error al actualizar permiso');
+    }
+}
+
+function showLindleyTechModal(techId) {
+    const techs = (_lindleyAutoCache && _lindleyAutoCache.technicians) || [];
+    const t = techId ? techs.find(x => x.id === techId) : null;
+    const groups = ['PUCUSANA', 'MEGAS Y ZARATE', 'IQUITOS', 'TRUJILLO', 'AREQUIPA', 'CUSCO'];
+    const sinoOpts = (val) => `<option value="SI" ${val === 'SI' ? 'selected' : ''}>SI</option><option value="NO" ${val !== 'SI' ? 'selected' : ''}>NO</option>`;
+
+    const html = `<form id="modalForm">
+        <div class="form-row">
+            <div class="form-group"><label>Grupo / Planta *</label>
+                <select class="form-control" name="tech_group">
+                    ${groups.map(g => `<option value="${g}" ${(t ? t.tech_group : (state.lindleyTechGroupFilter !== 'TODOS' ? state.lindleyTechGroupFilter : 'MEGAS Y ZARATE')) === g ? 'selected' : ''}>${g}</option>`).join('')}
+                </select>
+            </div>
+            <div class="form-group"><label>Activo en este grupo</label>
+                <select class="form-control" name="is_active">
+                    <option value="1" ${!t || Number(t.is_active) === 1 ? 'selected' : ''}>SI</option>
+                    <option value="0" ${t && Number(t.is_active) !== 1 ? 'selected' : ''}>NO</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Nombre Corto *</label><input class="form-control" name="short_name" value="${esc(t ? t.short_name : '')}" placeholder="Ej: Bryan Medina"></div>
+            <div class="form-group"><label>DNI (Cédula en Web) *</label><input class="form-control" name="dni" value="${esc(t ? t.dni : '')}" placeholder="Ej: 76510020"></div>
+        </div>
+        <div class="form-group"><label>Nombre Completo en Plataforma Arca</label><input class="form-control" name="web_full_name" value="${esc(t ? t.web_full_name : '')}" placeholder="Ej: MEDINA OLIVA BRYAN RUBEN"></div>
+        <div class="form-row">
+            <div class="form-group"><label>Altura</label><select class="form-control" name="altura">${sinoOpts(t ? t.altura : 'NO')}</select></div>
+            <div class="form-group"><label>Confinado</label><select class="form-control" name="confinado">${sinoOpts(t ? t.confinado : 'NO')}</select></div>
+            <div class="form-group"><label>Calor</label><select class="form-control" name="calor">${sinoOpts(t ? t.calor : 'NO')}</select></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Químicos</label><select class="form-control" name="quimicos">${sinoOpts(t ? t.quimicos : 'SI')}</select></div>
+            <div class="form-group"><label>Obra Civil</label><select class="form-control" name="obra_civil">${sinoOpts(t ? t.obra_civil : 'NO')}</select></div>
+            <div class="form-group"><label>Eléctrico / LOTO</label><select class="form-control" name="electrico_loto">${sinoOpts(t ? t.electrico_loto : 'NO')}</select></div>
+        </div>
+        <div class="form-group"><label>Notas</label><input class="form-control" name="notes" value="${esc(t ? t.notes : '')}"></div>
+    </form>`;
+
+    openModal(t ? 'Editar Técnico en Grupo' : 'Añadir Técnico a Grupo', html);
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('modalForm'));
+        const data = {
+            tech_group: f.get('tech_group'),
+            is_active: f.get('is_active') === '1',
+            short_name: f.get('short_name'),
+            dni: f.get('dni'),
+            web_full_name: f.get('web_full_name'),
+            altura: f.get('altura'),
+            confinado: f.get('confinado'),
+            calor: f.get('calor'),
+            quimicos: f.get('quimicos'),
+            obra_civil: f.get('obra_civil'),
+            electrico_loto: f.get('electrico_loto'),
+            notes: f.get('notes'),
+        };
+        if (!data.short_name || !data.dni) {
+            showToast('Nombre y DNI son obligatorios');
+            return;
+        }
+        const res = t ? await api(eel.update_lindley_technician, t.id, data) : await api(eel.create_lindley_technician, data);
+        if (res && res.ok) {
+            showToast(t ? 'Técnico actualizado' : 'Técnico añadido');
+            closeModal();
+            navigate('work');
+        } else {
+            showToast('Error al guardar técnico');
+        }
+    };
+}
+
+async function deleteLindleyTech(techId) {
+    if (!confirm('¿Quitar este técnico de este grupo de planta?')) return;
+    await api(eel.delete_lindley_technician, techId);
+    showToast('Eliminado');
+    navigate('work');
+}
+
+function showLindleyMatrixRowModal(rowId, defaultMatrixType) {
+    const rows = (_lindleyAutoCache && _lindleyAutoCache.matrix_rows) || [];
+    const r = rowId ? rows.find(x => x.id === rowId) : null;
+    const mType = r ? r.matrix_type : (defaultMatrixType || 'GENERAL_PLANTAS');
+
+    const html = `<form id="modalForm">
+        <div class="form-row">
+            <div class="form-group"><label>Matriz *</label>
+                <select class="form-control" name="matrix_type">
+                    <option value="GENERAL_PLANTAS" ${mType === 'GENERAL_PLANTAS' ? 'selected' : ''}>GENERAL_PLANTAS</option>
+                    <option value="VEND_FUMIGACION_EQUIPOS" ${mType === 'VEND_FUMIGACION_EQUIPOS' ? 'selected' : ''}>VEND_FUMIGACION_EQUIPOS</option>
+                    <option value="VEND_DESRATIZACION" ${mType === 'VEND_DESRATIZACION' ? 'selected' : ''}>VEND_DESRATIZACION</option>
+                </select>
+            </div>
+            <div class="form-group"><label>Sección Web *</label>
+                <select class="form-control" name="section_type">
+                    <option value="DPR" ${!r || r.section_type === 'DPR' ? 'selected' : ''}>1. Peligros y Riesgos (#tbl1)</option>
+                    <option value="PNE" ${r && r.section_type === 'PNE' ? 'selected' : ''}>2. Emergencia (#tbl2)</option>
+                    <option value="DIA" ${r && r.section_type === 'DIA' ? 'selected' : ''}>3. Impactos Ambientales (#tbl3)</option>
+                    <option value="DCI" ${r && r.section_type === 'DCI' ? 'selected' : ''}>4. Calidad e Inocuidad (#tbl4)</option>
+                </select>
+            </div>
+            <div class="form-group"><label>Aplica a Sede</label>
+                <select class="form-control" name="sede_filter">
+                    ${['TODAS', 'LIMA', 'IQUITOS', 'TRUJILLO', 'AREQUIPA', 'CUSCO', 'VEND_EQUIPOS', 'VEND_PLANTA'].map(s => `<option value="${s}" ${(r ? r.sede_filter : 'TODAS') === s ? 'selected' : ''}>${s}</option>`).join('')}
+                </select>
+            </div>
+        </div>
+        <div class="form-group"><label>Columna 1 (Actividad del trabajo / Nombre responsable) *</label><input class="form-control" name="col1" value="${esc(r ? r.col1 : '')}"></div>
+        <div class="form-group"><label>Columna 2 (Riesgo potencial / Número contacto / Impacto) *</label><input class="form-control" name="col2" value="${esc(r ? r.col2 : '')}"></div>
+        <div class="form-group"><label>Columna 3 (Medidas de control / Pasos en caso de emergencia) *</label><textarea class="form-control" name="col3" rows="3">${esc(r ? r.col3 : '')}</textarea></div>
+    </form>`;
+
+    openModal(r ? 'Editar Fila de Matriz' : 'Nueva Fila de Matriz', html);
+    document.getElementById('modalSave').onclick = async () => {
+        const f = new FormData(document.getElementById('modalForm'));
+        const data = {
+            matrix_type: f.get('matrix_type'),
+            section_type: f.get('section_type'),
+            sede_filter: f.get('sede_filter'),
+            col1: f.get('col1'),
+            col2: f.get('col2'),
+            col3: f.get('col3'),
+        };
+        if (!data.col1 || !data.col2 || !data.col3) {
+            showToast('Completa las 3 columnas');
+            return;
+        }
+        const res = r ? await api(eel.update_lindley_matrix_row, r.id, data) : await api(eel.create_lindley_matrix_row, data);
+        if (res && res.ok) {
+            showToast(r ? 'Fila actualizada' : 'Fila agregada');
+            closeModal();
+            navigate('work');
+        } else {
+            showToast('Error al guardar fila');
+        }
+    };
+}
+
+async function deleteLindleyMatrixRow(rowId) {
+    if (!confirm('¿Eliminar esta fila de la matriz?')) return;
+    await api(eel.delete_lindley_matrix_row, rowId);
+    showToast('Fila eliminada');
     navigate('work');
 }
 

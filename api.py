@@ -3387,6 +3387,419 @@ def get_lindley_validation(year=None, month=None):
     finally:
         conn.close()
 
+LINDLEY_CHEMICALS_CATALOG = [
+    {'id': '1799', 'name': 'DC 4060', 'expiry': '2027-05-15', 'status': 'VIGENTE'},
+    {'id': '2012', 'name': 'EXQUAT 50', 'expiry': '2027-07-19', 'status': 'VIGENTE'},
+    {'id': '1621', 'name': 'GEL CUCARACHICIDA', 'expiry': '2027-09-05', 'status': 'VIGENTE'},
+    {'id': '1623', 'name': 'RODENTICIDA', 'expiry': '2027-04-23', 'status': 'VIGENTE'},
+]
+
+LINDLEY_MACHINERY_CATALOG = [
+    {'id': '11707', 'name': 'MOCHILA ASPERSORA', 'expiry': '2026-09-05', 'status': 'ACTIVO'},
+    {'id': '11708', 'name': 'TERMONEBULIZADOR', 'expiry': '2025-04-04', 'status': 'ACTIVO'},
+    {'id': '12016', 'name': 'ESCALERA TIJERAL', 'expiry': '2026-11-05', 'status': 'OPCIONAL'},
+]
+
+
+@eel.expose
+def get_lindley_automation_data(year=None, month=None):
+    """
+    Devuelve toda la configuración de automatización de Planes de Trabajo Arca Continental Lindley:
+    - Los 12 planes (con cruce automático de la última OC registrada en `purchase_orders` para cada sede).
+    - Matriz de técnicos y sus 6 permisos de riesgo (Altura, Confinado, Calor, Químicos, Obra Civil, Eléctrico/LOTO),
+      cruzados con el semáforo de documentos (EMO, MATPEL, Inducción).
+    - Filas de matrices (#tbl1 Peligros/Riesgos, #tbl2 Emergencia, #tbl3 Ambiental, #tbl4 Calidad/Inocuidad)
+      para Plantas Generales, Vendomática Equipos y Vendomática Desratización.
+    """
+    import calendar
+    val_data = get_lindley_validation(year, month)
+    year = val_data['year']
+    month = val_data['month']
+    val_by_dni = {}
+    for emp in val_data.get('employees', []):
+        dni_key = (emp.get('document_number') or '').strip()
+        if dni_key:
+            val_by_dni[dni_key] = emp
+
+    now_d = local_date()
+    last_day = calendar.monthrange(year, month)[1]
+    first_day_d = date(year, month, 1)
+    last_day_d = date(year, month, last_day)
+    if first_day_d < now_d <= last_day_d:
+        default_start = now_d.isoformat()
+    else:
+        default_start = first_day_d.isoformat()
+    default_end = last_day_d.isoformat()
+    period_key = f"{year}-{month:02d}"
+
+    conn = get_connection()
+    try:
+        plans_rows = [dict(r) for r in conn.execute("SELECT * FROM lindley_plans ORDER BY sort_order ASC, id ASC").fetchall()]
+        techs_rows = [dict(r) for r in conn.execute("SELECT * FROM lindley_technicians ORDER BY sort_order ASC, id ASC").fetchall()]
+        matrix_rows = [dict(r) for r in conn.execute("SELECT * FROM lindley_matrix_rows ORDER BY sort_order ASC, id ASC").fetchall()]
+
+        for t in techs_rows:
+            dni_clean = (t.get('dni') or '').strip()
+            emp_val = val_by_dni.get(dni_clean)
+            if emp_val:
+                t['doc_overall'] = emp_val['overall']
+                t['doc_issues'] = emp_val['issues']
+                t['docs'] = emp_val['docs']
+            else:
+                t['doc_overall'] = 'unlinked'
+                t['doc_issues'] = []
+                t['docs'] = {}
+
+        chem_map = {c['id']: c['name'] for c in LINDLEY_CHEMICALS_CATALOG}
+        mach_map = {m['id']: m['name'] for m in LINDLEY_MACHINERY_CATALOG}
+
+        for p in plans_rows:
+            raw_sids = [s.strip() for s in (p.get('client_site_ids') or '').split(',') if s.strip().isdigit()]
+            detected_ocs = []
+            detected_details = []
+            for sid_str in raw_sids:
+                sid = int(sid_str)
+                po_row = conn.execute("""
+                    SELECT po.oc_number, po.year, po.month, po.issue_date, po.amount,
+                           cs.nombre_cliente, cs.sede_cliente
+                    FROM purchase_orders po
+                    LEFT JOIN client_sites cs ON cs.id = po.client_site_id
+                    WHERE po.client_site_id = ? AND po.oc_number IS NOT NULL AND TRIM(po.oc_number) != ''
+                    ORDER BY po.year DESC, po.month DESC, po.issue_date DESC, po.id DESC
+                    LIMIT 1
+                """, (sid,)).fetchone()
+                if po_row:
+                    oc_num = po_row['oc_number'].strip()
+                    if oc_num not in detected_ocs:
+                        detected_ocs.append(oc_num)
+                    detected_details.append({
+                        'site_id': sid,
+                        'oc_number': oc_num,
+                        'year': po_row['year'],
+                        'month': po_row['month'],
+                        'issue_date': po_row['issue_date'],
+                        'site_name': po_row['sede_cliente'] or po_row['nombre_cliente'] or f"Sede #{sid}",
+                    })
+
+            auto_oc_label = ' / '.join([f"OC {oc}" for oc in detected_ocs]) if detected_ocs else ''
+            override = (p.get('oc_override') or '').strip()
+            if override:
+                effective_oc = override if override.upper().startswith('OC') else f"OC {override}"
+                oc_source = 'manual'
+            else:
+                effective_oc = auto_oc_label
+                oc_source = 'db' if detected_ocs else 'none'
+
+            act_txt = (p.get('activity_text') or '').strip()
+            if effective_oc:
+                full_desc = f"{effective_oc}: {act_txt}" if act_txt else effective_oc
+            else:
+                full_desc = act_txt
+
+            p['detected_ocs'] = detected_ocs
+            p['detected_oc_details'] = detected_details
+            p['auto_oc_label'] = auto_oc_label
+            p['effective_oc'] = effective_oc
+            p['oc_source'] = oc_source
+            p['full_description'] = full_desc
+            p['is_completed_for_period'] = (p.get('last_completed_month') == period_key)
+
+            group_techs = [t for t in techs_rows if t['tech_group'] == p['tech_group'] and int(t.get('is_active') or 0) == 1]
+            p['assigned_technicians'] = group_techs
+
+            c_ids = [x.strip() for x in (p.get('chemical_ids') or '').split(',') if x.strip()]
+            m_ids = [x.strip() for x in (p.get('machinery_ids') or '').split(',') if x.strip()]
+            p['chemical_list'] = [{'id': cid, 'name': chem_map.get(cid, cid)} for cid in c_ids] if p.get('use_chemicals') else []
+            p['machinery_list'] = [{'id': mid, 'name': mach_map.get(mid, mid)} for mid in m_ids] if p.get('use_machinery') else []
+
+            mtype = p['matrix_type']
+            esede = p['emerg_sede']
+            p['dpr_rows'] = [
+                {'col1': r['col1'], 'col2': r['col2'], 'col3': r['col3']}
+                for r in matrix_rows
+                if r['matrix_type'] == mtype and r['section_type'] == 'DPR' and r['sede_filter'] in ('TODAS', esede)
+            ]
+            p['pne_rows'] = [
+                {'col1': r['col1'], 'col2': r['col2'], 'col3': r['col3']}
+                for r in matrix_rows
+                if r['matrix_type'] == mtype and r['section_type'] == 'PNE' and r['sede_filter'] in ('TODAS', esede)
+            ]
+            p['dia_rows'] = [
+                {'col1': r['col1'], 'col2': r['col2'], 'col3': r['col3']}
+                for r in matrix_rows
+                if r['matrix_type'] == mtype and r['section_type'] == 'DIA' and r['sede_filter'] in ('TODAS', esede)
+            ]
+            p['dci_rows'] = [
+                {'col1': r['col1'], 'col2': r['col2'], 'col3': r['col3']}
+                for r in matrix_rows
+                if r['matrix_type'] == mtype and r['section_type'] == 'DCI' and r['sede_filter'] in ('TODAS', esede)
+            ]
+
+        return {
+            'ok': True,
+            'year': year,
+            'month': month,
+            'period_key': period_key,
+            'default_start_date': default_start,
+            'default_end_date': default_end,
+            'plans': plans_rows,
+            'technicians': techs_rows,
+            'matrix_rows': matrix_rows,
+            'chemicals_catalog': LINDLEY_CHEMICALS_CATALOG,
+            'machinery_catalog': LINDLEY_MACHINERY_CATALOG,
+            'validation': val_data,
+        }
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def update_lindley_plan(plan_id, data):
+    conn = get_connection()
+    try:
+        conn.execute("""
+            UPDATE lindley_plans
+            SET name=?, is_active_month=?, web_codes=?, web_localities=?, tech_group=?,
+                matrix_type=?, emerg_sede=?, contact_name=?, contact_email=?,
+                client_site_ids=?, oc_override=?, activity_text=?,
+                use_chemicals=?, chemical_ids=?, use_vehicles=?, use_machinery=?, machinery_ids=?
+            WHERE id=?
+        """, (
+            data.get('name', '').strip(),
+            1 if data.get('is_active_month') else 0,
+            data.get('web_codes', '').strip(),
+            data.get('web_localities', '').strip(),
+            data.get('tech_group', 'MEGAS Y ZARATE').strip(),
+            data.get('matrix_type', 'GENERAL_PLANTAS').strip(),
+            data.get('emerg_sede', 'LIMA').strip(),
+            data.get('contact_name', '').strip(),
+            data.get('contact_email', '').strip(),
+            data.get('client_site_ids', '').strip(),
+            data.get('oc_override', '').strip(),
+            data.get('activity_text', '').strip(),
+            1 if data.get('use_chemicals', True) else 0,
+            data.get('chemical_ids', '1799,2012,1621,1623').strip(),
+            1 if data.get('use_vehicles', False) else 0,
+            1 if data.get('use_machinery', False) else 0,
+            data.get('machinery_ids', '').strip(),
+            int(plan_id)
+        ))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def toggle_lindley_plan_active(plan_id, is_active_month):
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE lindley_plans SET is_active_month=? WHERE id=?", (1 if is_active_month else 0, int(plan_id)))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def mark_lindley_plan_completed(plan_id, period_key):
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT last_completed_month FROM lindley_plans WHERE id=?", (int(plan_id),)).fetchone()
+        new_val = '' if (row and row['last_completed_month'] == period_key) else period_key
+        conn.execute("UPDATE lindley_plans SET last_completed_month=? WHERE id=?", (new_val, int(plan_id)))
+        conn.commit()
+        return {'ok': True, 'completed': bool(new_val)}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def sync_lindley_ocs_from_db():
+    """
+    Limpia cualquier override manual de OC para que todos los planes usen siempre la última OC
+    de la tabla `purchase_orders`, y devuelve el resumen de las OCs detectadas.
+    """
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE lindley_plans SET oc_override = ''")
+        conn.commit()
+    except Exception as e:
+        conn.close()
+        return {'ok': False, 'error': str(e)}
+    conn.close()
+    data = get_lindley_automation_data()
+    return {
+        'ok': True,
+        'plans_synced': len(data.get('plans', [])),
+        'plans': data.get('plans', []),
+    }
+
+
+@eel.expose
+def toggle_lindley_tech_field(tech_id, field, value):
+    allowed = {'is_active', 'altura', 'confinado', 'calor', 'quimicos', 'obra_civil', 'electrico_loto'}
+    if field not in allowed:
+        return {'ok': False, 'error': 'Campo no permitido'}
+    conn = get_connection()
+    try:
+        if field == 'is_active':
+            val = 1 if (value in (1, True, '1', 'SI', 'true')) else 0
+        else:
+            val = 'SI' if str(value).upper() in ('SI', 'S', '1', 'TRUE') else 'NO'
+        conn.execute(f"UPDATE lindley_technicians SET {field}=? WHERE id=?", (val, int(tech_id)))
+        conn.commit()
+        return {'ok': True, 'value': val}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def create_lindley_technician(data):
+    conn = get_connection()
+    try:
+        cur = conn.execute("""
+            INSERT INTO lindley_technicians (
+                tech_group, short_name, dni, web_full_name, is_active,
+                altura, confinado, calor, quimicos, obra_civil, electrico_loto, notes, sort_order
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 99)
+        """, (
+            data.get('tech_group', 'MEGAS Y ZARATE').strip(),
+            data.get('short_name', '').strip(),
+            data.get('dni', '').strip(),
+            data.get('web_full_name', '').strip().upper(),
+            1 if data.get('is_active', True) else 0,
+            'SI' if data.get('altura') == 'SI' else 'NO',
+            'SI' if data.get('confinado') == 'SI' else 'NO',
+            'SI' if data.get('calor') == 'SI' else 'NO',
+            'SI' if data.get('quimicos', 'SI') == 'SI' else 'NO',
+            'SI' if data.get('obra_civil') == 'SI' else 'NO',
+            'SI' if data.get('electrico_loto') == 'SI' else 'NO',
+            data.get('notes', '').strip()
+        ))
+        conn.commit()
+        return {'ok': True, 'id': cur.lastrowid}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def update_lindley_technician(tech_id, data):
+    conn = get_connection()
+    try:
+        conn.execute("""
+            UPDATE lindley_technicians
+            SET tech_group=?, short_name=?, dni=?, web_full_name=?, is_active=?,
+                altura=?, confinado=?, calor=?, quimicos=?, obra_civil=?, electrico_loto=?, notes=?
+            WHERE id=?
+        """, (
+            data.get('tech_group', 'MEGAS Y ZARATE').strip(),
+            data.get('short_name', '').strip(),
+            data.get('dni', '').strip(),
+            data.get('web_full_name', '').strip().upper(),
+            1 if data.get('is_active', True) else 0,
+            'SI' if data.get('altura') == 'SI' else 'NO',
+            'SI' if data.get('confinado') == 'SI' else 'NO',
+            'SI' if data.get('calor') == 'SI' else 'NO',
+            'SI' if data.get('quimicos', 'SI') == 'SI' else 'NO',
+            'SI' if data.get('obra_civil') == 'SI' else 'NO',
+            'SI' if data.get('electrico_loto') == 'SI' else 'NO',
+            data.get('notes', '').strip(),
+            int(tech_id)
+        ))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def delete_lindley_technician(tech_id):
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM lindley_technicians WHERE id=?", (int(tech_id),))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def create_lindley_matrix_row(data):
+    conn = get_connection()
+    try:
+        cur = conn.execute("""
+            INSERT INTO lindley_matrix_rows (matrix_type, section_type, sede_filter, col1, col2, col3, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?, 99)
+        """, (
+            data.get('matrix_type', 'GENERAL_PLANTAS').strip(),
+            data.get('section_type', 'DPR').strip(),
+            data.get('sede_filter', 'TODAS').strip(),
+            data.get('col1', '').strip(),
+            data.get('col2', '').strip(),
+            data.get('col3', '').strip(),
+        ))
+        conn.commit()
+        return {'ok': True, 'id': cur.lastrowid}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def update_lindley_matrix_row(row_id, data):
+    conn = get_connection()
+    try:
+        conn.execute("""
+            UPDATE lindley_matrix_rows
+            SET matrix_type=?, section_type=?, sede_filter=?, col1=?, col2=?, col3=?
+            WHERE id=?
+        """, (
+            data.get('matrix_type', 'GENERAL_PLANTAS').strip(),
+            data.get('section_type', 'DPR').strip(),
+            data.get('sede_filter', 'TODAS').strip(),
+            data.get('col1', '').strip(),
+            data.get('col2', '').strip(),
+            data.get('col3', '').strip(),
+            int(row_id)
+        ))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def delete_lindley_matrix_row(row_id):
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM lindley_matrix_rows WHERE id=?", (int(row_id),))
+        conn.commit()
+        return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
 # ===================== WORKOUT / ENTRENAMIENTO =====================
 
 @eel.expose

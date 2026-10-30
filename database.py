@@ -1673,6 +1673,133 @@ def apply_cleanups_and_seeds(conn):
         except Exception as e:
             print("[sync_desfase_regular_2026_v1] Error:", e)
 
+    # 15. Configure San Miguel Industrias Pet & Iberoamericana as regular clients (sync_regular_smi_ibero_2026_v1)
+    seed_smi_ibero = conn.execute("SELECT value FROM config WHERE key='sync_regular_smi_ibero_2026_v1'").fetchone()
+    if not seed_smi_ibero:
+        try:
+            # 1. Update clients is_regular = 1
+            conn.execute("UPDATE clients SET is_regular = 1 WHERE business_name LIKE '%MIGUEL%' OR business_name LIKE '%IBEROAMERICANA%' OR ruc IN ('20513320915', '20508061201')")
+
+            # 2. Ensure sites exist
+            # SMI
+            smi_client = conn.execute("SELECT id FROM clients WHERE ruc = '20513320915' OR business_name LIKE '%MIGUEL%'").fetchone()
+            if smi_client:
+                smi_cid = smi_client[0]
+                smi_site = conn.execute("SELECT id FROM client_sites WHERE client_id = ?", (smi_cid,)).fetchone()
+                if not smi_site:
+                    cur = conn.execute("""
+                        INSERT INTO client_sites (client_id, nombre_cliente, sede_cliente, distrito, is_regular, monthly_fee, servicios, is_active, periodicity)
+                        VALUES (?, 'SAN MIGUEL INDUSTRIAS PET - PLANTA ARGENTINA', 'PLANTA ARGENTINA', 'LIMA', 1, 8765.0, 'Servicio de Saneamiento y Manejo Integrado de Plagas', 1, 'mensual')
+                    """, (smi_cid,))
+                    smi_site_id = cur.lastrowid
+                else:
+                    smi_site_id = smi_site[0]
+                    conn.execute("UPDATE client_sites SET is_regular = 1, is_active = 1 WHERE id = ?", (smi_site_id,))
+            else:
+                smi_site_id = None
+
+            # IBEROAMERICANA
+            ibero_client = conn.execute("SELECT id FROM clients WHERE ruc = '20508061201' OR business_name LIKE '%IBEROAMERICANA%'").fetchone()
+            if ibero_client:
+                ibero_cid = ibero_client[0]
+                ibero_site = conn.execute("SELECT id FROM client_sites WHERE client_id = ?", (ibero_cid,)).fetchone()
+                if not ibero_site:
+                    cur = conn.execute("""
+                        INSERT INTO client_sites (client_id, nombre_cliente, sede_cliente, distrito, is_regular, monthly_fee, servicios, is_active, periodicity)
+                        VALUES (?, 'IBEROAMERICANA - PLANTA ARGENTINA', 'PLANTA ARGENTINA', 'LIMA', 1, 2550.0, 'Servicio de Saneamiento y Manejo Integrado de Plagas', 1, 'mensual')
+                    """, (ibero_cid,))
+                    ibero_site_id = cur.lastrowid
+                else:
+                    ibero_site_id = ibero_site[0]
+                    conn.execute("UPDATE client_sites SET is_regular = 1, is_active = 1 WHERE id = ?", (ibero_site_id,))
+            else:
+                ibero_site_id = None
+
+            # 3. Link invoices to sites, OCs, and correct month_billed
+            if smi_site_id and smi_cid:
+                smi_inv_updates = [
+                    ('1556', None, 4),
+                    ('1559', '4900064667', 4),
+                    ('1560', '4900064669', 4),
+                    ('1561', '4900064668', 4),
+                    ('1562', '4900064670', 4),
+                    ('1563', '4900064671', 4),
+                    ('1564', '4900064672', 4),
+                    ('1622', '4900065654', 5),
+                    ('1722', '4900067891', 7),
+                    ('1865', '4900066752', 6), # HES 30/06/2026
+                    ('1868', '4900069100', 8), # HES 28/08/2026
+                    ('1870', '4900070360', 9), # HES 29/09/2026
+                ]
+                for num, oc, m in smi_inv_updates:
+                    conn.execute("""
+                        UPDATE invoices 
+                        SET client_site_id = ?, purchase_order = COALESCE(?, purchase_order), month_billed = ?
+                        WHERE number = ? AND client_id = ? AND year_billed = 2026
+                    """, (smi_site_id, oc, m, num, smi_cid))
+
+            if ibero_site_id and ibero_cid:
+                ibero_inv_updates = [
+                    ('1570', '4900064666', 4), # HES 29/04/2026
+                    ('1623', '4900065653', 5),
+                    ('1721', '4900067890', 7),
+                    ('1866', '4900066750', 6), # HES 30/06/2026
+                    ('1867', '4900069101', 8), # HES 28/08/2026
+                    ('1869', '4900070361', 9), # HES 29/09/2026
+                ]
+                for num, oc, m in ibero_inv_updates:
+                    conn.execute("""
+                        UPDATE invoices 
+                        SET client_site_id = ?, purchase_order = COALESCE(?, purchase_order), month_billed = ?
+                        WHERE number = ? AND client_id = ? AND year_billed = 2026
+                    """, (ibero_site_id, oc, m, num, ibero_cid))
+
+            # 4. Ensure purchase orders exist
+            pos = []
+            if smi_site_id and smi_cid:
+                pos.extend([
+                    (smi_cid, smi_site_id, 2026, 4, '4900064667', 1020.0, 'invoiced', 'Abril 2026'),
+                    (smi_cid, smi_site_id, 2026, 4, '4900064669', 1020.0, 'invoiced', 'Abril 2026'),
+                    (smi_cid, smi_site_id, 2026, 4, '4900064668', 510.0, 'invoiced', 'Abril 2026'),
+                    (smi_cid, smi_site_id, 2026, 4, '4900064670', 1020.0, 'invoiced', 'Abril 2026'),
+                    (smi_cid, smi_site_id, 2026, 4, '4900064671', 1360.0, 'invoiced', 'Abril 2026'),
+                    (smi_cid, smi_site_id, 2026, 4, '4900064672', 3750.0, 'invoiced', 'Abril 2026'),
+                    (smi_cid, smi_site_id, 2026, 5, '4900065654', 8480.0, 'invoiced', 'Mayo 2026'),
+                    (smi_cid, smi_site_id, 2026, 6, '4900066752', 7680.0, 'invoiced', 'Junio 2026 (HES 30/06)'),
+                    (smi_cid, smi_site_id, 2026, 7, '4900067891', 9000.0, 'invoiced', 'Julio 2026'),
+                    (smi_cid, smi_site_id, 2026, 8, '4900069100', 9765.0, 'invoiced', 'Agosto 2026 (HES 28/08)'),
+                    (smi_cid, smi_site_id, 2026, 9, '4900070360', 8765.0, 'invoiced', 'Setiembre 2026 (HES 29/09)'),
+                ])
+            if ibero_site_id and ibero_cid:
+                pos.extend([
+                    (ibero_cid, ibero_site_id, 2026, 4, '4900064666', 2550.0, 'invoiced', 'Abril 2026 (HES 29/04)'),
+                    (ibero_cid, ibero_site_id, 2026, 5, '4900065653', 2570.0, 'invoiced', 'Mayo 2026'),
+                    (ibero_cid, ibero_site_id, 2026, 6, '4900066750', 2570.0, 'invoiced', 'Junio 2026 (HES 30/06)'),
+                    (ibero_cid, ibero_site_id, 2026, 7, '4900067890', 2550.0, 'invoiced', 'Julio 2026'),
+                    (ibero_cid, ibero_site_id, 2026, 8, '4900069101', 3315.0, 'invoiced', 'Agosto 2026 (HES 28/08)'),
+                    (ibero_cid, ibero_site_id, 2026, 9, '4900070361', 2955.0, 'invoiced', 'Setiembre 2026 (HES 29/09)'),
+                ])
+
+            for cid, sid, yr, m, oc, amt, st, nt in pos:
+                existing = conn.execute("SELECT id FROM purchase_orders WHERE oc_number = ? AND year = ?", (oc, yr)).fetchone()
+                if not existing:
+                    conn.execute("""
+                        INSERT INTO purchase_orders (client_id, client_site_id, year, month, oc_number, amount, status, notes)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (cid, sid, yr, m, oc, amt, st, nt))
+                else:
+                    conn.execute("""
+                        UPDATE purchase_orders 
+                        SET client_id = ?, client_site_id = ?, month = ?, amount = ?, status = ?, notes = ?
+                        WHERE id = ?
+                    """, (cid, sid, m, amt, st, nt, existing[0]))
+
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('sync_regular_smi_ibero_2026_v1', '1')")
+            conn.commit()
+            print("[sync_regular_smi_ibero_2026_v1] Successfully added San Miguel and Iberoamericana as regular clients.")
+        except Exception as e:
+            print("[sync_regular_smi_ibero_2026_v1] Error:", e)
+
 
 
 def seed_default_workouts(conn):

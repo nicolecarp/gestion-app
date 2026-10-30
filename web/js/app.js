@@ -200,6 +200,62 @@ function startReloadPoller() {
     }, 5000);
 }
 
+// ===== UI STATE PRESERVATION (SCROLL & FOCUS) =====
+function captureContainerUIState(el) {
+    if (!el) return null;
+    const scrollY = window.scrollY;
+    const tableScrolls = Array.from(el.querySelectorAll('.table-wrap')).map(tw => ({
+        top: tw.scrollTop,
+        left: tw.scrollLeft
+    }));
+    let activeInput = null;
+    const ae = document.activeElement;
+    if (ae && el.contains(ae) && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) {
+        activeInput = {
+            id: ae.id || '',
+            placeholder: ae.getAttribute('placeholder') || '',
+            name: ae.getAttribute('name') || '',
+            selStart: typeof ae.selectionStart === 'number' ? ae.selectionStart : null,
+            selEnd: typeof ae.selectionEnd === 'number' ? ae.selectionEnd : null
+        };
+    }
+    return { scrollY, tableScrolls, activeInput };
+}
+
+function restoreContainerUIState(el, snap) {
+    if (!el || !snap) return;
+    const wraps = el.querySelectorAll('.table-wrap');
+    snap.tableScrolls.forEach((sc, idx) => {
+        if (wraps[idx]) {
+            wraps[idx].scrollTop = sc.top;
+            wraps[idx].scrollLeft = sc.left;
+        }
+    });
+    if (snap.activeInput) {
+        let target = null;
+        if (snap.activeInput.id) {
+            target = el.querySelector('#' + CSS.escape(snap.activeInput.id));
+        }
+        if (!target && snap.activeInput.placeholder) {
+            target = Array.from(el.querySelectorAll('input, textarea')).find(
+                inp => inp.getAttribute('placeholder') === snap.activeInput.placeholder
+            );
+        }
+        if (!target && snap.activeInput.name) {
+            target = el.querySelector(`[name="${CSS.escape(snap.activeInput.name)}"]`);
+        }
+        if (target) {
+            target.focus({ preventScroll: true });
+            try {
+                if (snap.activeInput.selStart !== null && typeof target.setSelectionRange === 'function') {
+                    target.setSelectionRange(snap.activeInput.selStart, snap.activeInput.selEnd);
+                }
+            } catch (_) {}
+        }
+    }
+    window.scrollTo(0, snap.scrollY);
+}
+
 // ===== NAVIGATION =====
 async function navigate(view) {
     if (view === 'health') {
@@ -207,14 +263,14 @@ async function navigate(view) {
         view = 'personal';
     }
     const isSameView = (state.view === view);
-    const savedScrollY = window.scrollY;
+    const el = document.getElementById('view-' + view);
+    if (!el) return;
+    const uiSnap = isSameView ? captureContainerUIState(el) : null;
     state.view = view;
     document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
     const link = document.querySelector(`.nav-link[data-view="${view}"]`);
     if (link) link.classList.add('active');
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    const el = document.getElementById('view-' + view);
-    if (!el) return;
     el.classList.add('active');
     // Only replace with "Cargando..." if the view is currently empty, preventing scroll jumps
     if (!isSameView && !el.innerHTML.trim()) {
@@ -232,8 +288,8 @@ async function navigate(view) {
             case 'print3d': await renderCosplays(el); break;
             case 'settings': await renderSettings(el); break;
         }
-        if (isSameView) {
-            window.scrollTo(0, savedScrollY);
+        if (isSameView && uiSnap) {
+            restoreContainerUIState(el, uiSnap);
         } else {
             window.scrollTo(0, 0);
         }
@@ -653,14 +709,16 @@ async function renderDashboard(el) {
             </div>
         </div>
         <div class="two-col">
-            <div>
+            <div id="dashCalendarMount">
                 ${buildCalendar(events)}
             </div>
             <div style="display:flex;flex-direction:column;gap:14px">
                 <div id="dashWeatherMount">
                     ${buildWeatherWidgetHtml(state.weatherData)}
                 </div>
-                ${buildDashboardHabits(habits || [])}
+                <div id="dashHabitsMount">
+                    ${buildDashboardHabits(habits || [])}
+                </div>
                 ${buildUpcomingTasks(tasks, stats)}
             </div>
         </div>
@@ -679,7 +737,7 @@ function buildDashboardHabits(habitList) {
     for (const h of habitList) {
         const done = Boolean(h.done_today);
         html += `<div class="habit-item" style="padding:6px 0">
-            <div class="habit-check${done ? ' done' : ''}" onclick="toggleHabitFromDash(${h.id})"></div>
+            <div class="habit-check${done ? ' done' : ''}" onclick="toggleHabitFromDash(${h.id}, this)"></div>
             <div class="habit-name">${esc(h.name)}</div>
             <div class="habit-streak">🔥 ${h.streak || 0}d</div>
         </div>`;
@@ -688,9 +746,19 @@ function buildDashboardHabits(habitList) {
     return html;
 }
 
-async function toggleHabitFromDash(id) {
+async function toggleHabitFromDash(id, checkEl) {
+    if (checkEl) {
+        const isNowDone = !checkEl.classList.contains('done');
+        checkEl.classList.toggle('done', isNowDone);
+        const streakEl = checkEl.parentElement?.querySelector('.habit-streak');
+        if (streakEl) {
+            const cur = parseInt((streakEl.textContent || '').replace(/\D+/g, ''), 10) || 0;
+            const next = Math.max(0, cur + (isNowDone ? 1 : -1));
+            streakEl.textContent = `🔥 ${next}d`;
+        }
+    }
     await api(eel.toggle_habit_today, id);
-    navigate('dashboard');
+    if (!checkEl) navigate('dashboard');
 }
 window.toggleHabitFromDash = toggleHabitFromDash;
 
@@ -796,10 +864,16 @@ function buildUpcomingTasks(tasks, stats) {
     return html;
 }
 
-function calMove(dir) {
+async function calMove(dir) {
     state.cal.month += dir;
     if (state.cal.month > 12) { state.cal.month = 1; state.cal.year++; }
     if (state.cal.month < 1) { state.cal.month = 12; state.cal.year--; }
+    const mount = document.getElementById('dashCalendarMount');
+    if (mount && state.view === 'dashboard') {
+        const events = await api(eel.get_calendar_events, state.cal.year, state.cal.month);
+        mount.innerHTML = buildCalendar(events);
+        return;
+    }
     navigate('dashboard');
 }
 
@@ -833,21 +907,10 @@ async function showDayEvents(year, month, day) {
 }
 
 // ===================== WORK =====================
-async function renderWork(el) {
-    const tabs = ['tasks','clients','matrix','invoices','calculadora','cotizaciones','services','dailycontrol','employees','documents','reimbursements','overtime','lindley'];
-    const labels = ['Tareas','Clientes','Matriz Mensual','Facturas','Calculadora IGV','Cotizaciones','Servicios','Control','Empleados','Documentos','Reembolsos','Días extra','Lindley'];
-
-    let html = `<div class="page-header">
-        <div><h1>Trabajo</h1><div class="subtitle">Control de gestión</div></div>
-    </div>
-    <div class="subnav">`;
-    tabs.forEach(t => {
-        html += `<button class="subnav-item${state.workTab === t ? ' active' : ''}" onclick="switchWorkTab('${t}')">${labels[tabs.indexOf(t)]}</button>`;
-    });
-    html += '</div><div id="workContent"></div>';
-    el.innerHTML = html;
-
-    const content = el.querySelector('#workContent');
+async function renderWorkTabContent(content) {
+    if (!content) content = document.getElementById('workContent');
+    if (!content) return navigate('work');
+    const snap = captureContainerUIState(content);
     switch (state.workTab) {
         case 'tasks': await renderWorkTasks(content); break;
         case 'clients': await renderWorkClients(content); break;
@@ -863,10 +926,38 @@ async function renderWork(el) {
         case 'lindley': await renderWorkLindley(content); break;
         case 'cotizaciones': await renderWorkQuotes(content); break;
     }
+    restoreContainerUIState(content, snap);
 }
 
-function switchWorkTab(tab) {
+async function renderWork(el) {
+    const tabs = ['tasks','clients','matrix','invoices','calculadora','cotizaciones','services','dailycontrol','employees','documents','reimbursements','overtime','lindley'];
+    const labels = ['Tareas','Clientes','Matriz Mensual','Facturas','Calculadora IGV','Cotizaciones','Servicios','Control','Empleados','Documentos','Reembolsos','Días extra','Lindley'];
+
+    let html = `<div class="page-header">
+        <div><h1>Trabajo</h1><div class="subtitle">Control de gestión</div></div>
+    </div>
+    <div class="subnav" id="workSubnav">`;
+    tabs.forEach(t => {
+        html += `<button class="subnav-item${state.workTab === t ? ' active' : ''}" data-tab="${t}" onclick="switchWorkTab('${t}')">${labels[tabs.indexOf(t)]}</button>`;
+    });
+    html += '</div><div id="workContent"></div>';
+    el.innerHTML = html;
+
+    const content = el.querySelector('#workContent');
+    await renderWorkTabContent(content);
+}
+
+async function switchWorkTab(tab) {
     state.workTab = tab;
+    const content = document.getElementById('workContent');
+    const subnav = document.getElementById('workSubnav');
+    if (state.view === 'work' && content && subnav) {
+        subnav.querySelectorAll('.subnav-item').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.tab === tab);
+        });
+        await renderWorkTabContent(content);
+        return;
+    }
     navigate('work');
 }
 
@@ -1111,7 +1202,7 @@ function toggleEmpresaExpand(clientId) {
     const cur = state.expandedEmpresas[clientId] !== false;
     state.expandedEmpresas[clientId] = !cur;
     const content = document.getElementById('workContent');
-    if (content) renderWorkMatrix(content);
+    if (content) paintWorkMatrix(content);
 }
 
 function expandAllEmpresas(expand) {
@@ -1125,7 +1216,7 @@ function expandAllEmpresas(expand) {
         if (s.client_id) state.expandedEmpresas[s.client_id] = expand;
     }
     const content = document.getElementById('workContent');
-    if (content) renderWorkMatrix(content);
+    if (content) paintWorkMatrix(content);
 }
 
 function onSearchMatrixMain(val) {
@@ -1139,17 +1230,18 @@ function onSearchMatrixMain(val) {
         }
     }
     const content = document.getElementById('workContent');
-    if (content) renderWorkMatrix(content);
+    if (content) paintWorkMatrix(content);
 }
 
 function clearMatrixSearch() {
     state.matrixSearch = '';
     state.matrixOcSearch = '';
     const content = document.getElementById('workContent');
-    if (content) renderWorkMatrix(content);
+    if (content) paintWorkMatrix(content);
 }
 
-async function renderWorkMatrix(el) {
+async function renderWorkMatrix(el, forceFetch = true) {
+    if (!el || el.id === 'view-work') el = document.getElementById('workContent') || el;
     state.matrixYear = state.matrixYear || (new Date().getFullYear() || 2026);
     state.matrixMonthFilter = state.matrixMonthFilter || 'all';
     state.matrixPeriodicityFilter = state.matrixPeriodicityFilter || 'all';
@@ -1160,16 +1252,25 @@ async function renderWorkMatrix(el) {
     state.matrixSearch = state.matrixSearch || '';
     state.expandedEmpresas = state.expandedEmpresas || {};
 
-    const [data, sitesGrouped, clients] = await Promise.all([
-        api(eel.get_monthly_billing, state.matrixYear),
-        api(eel.get_client_sites_grouped),
-        api(eel.get_clients)
-    ]);
+    if (forceFetch || !state.matrixData || state.matrixData.year !== state.matrixYear) {
+        const [data, sitesGrouped, clients] = await Promise.all([
+            api(eel.get_monthly_billing, state.matrixYear),
+            api(eel.get_client_sites_grouped),
+            api(eel.get_clients)
+        ]);
+        state.matrixData = data || { year: state.matrixYear, clients: [], sites: [], invoices: [], orders: [] };
+        state.allSites = sitesGrouped || [];
+        state.allClients = clients || [];
+    }
+    paintWorkMatrix(el);
+}
 
-    const resData = data || { year: state.matrixYear, clients: [], sites: [], invoices: [], orders: [] };
-    state.matrixData = resData;
-    state.allSites = sitesGrouped || [];
-    state.allClients = clients || [];
+function paintWorkMatrix(el) {
+    if (!el || el.id === 'view-work') el = document.getElementById('workContent') || el;
+    if (!el) return;
+    const uiSnap = captureContainerUIState(el);
+    const resData = state.matrixData || { year: state.matrixYear, clients: [], sites: [], invoices: [], orders: [] };
+    const clients = state.allClients || [];
 
     const allSites = resData.sites || [];
     const invoices = resData.invoices || [];
@@ -2065,6 +2166,7 @@ async function renderWorkMatrix(el) {
     html += `</div>`;
 
     el.innerHTML = html;
+    restoreContainerUIState(el, uiSnap);
 }
 
 // Helper to calculate due date avoiding timezone rollovers
@@ -2251,8 +2353,8 @@ async function saveQuickBillOc(e, poId) {
         }
         showToast(`✓ Factura ${series}-${number} registrada`);
         closeModal();
-        const elView = document.getElementById('view-work');
-        if (elView) renderWorkMatrix(elView);
+        const content = document.getElementById('workContent') || document.getElementById('view-work');
+        if (content) renderWorkMatrix(content, true);
     } else {
         showToast(res?.error || 'Error al guardar la factura');
     }
@@ -2345,8 +2447,8 @@ async function showEditSiteModal(siteId) {
         if (res && res.ok) {
             showToast('Sede actualizada');
             closeModal();
-            const workView = document.getElementById('view-work');
-            if (workView) renderWorkMatrix(workView);
+            const content = document.getElementById('workContent') || document.getElementById('view-work');
+            if (content) renderWorkMatrix(content, true);
         } else {
             showToast(res && res.error ? res.error : 'Error al guardar');
         }
@@ -2356,7 +2458,9 @@ async function showEditSiteModal(siteId) {
 
 function changeMatrixYear(year) {
     state.matrixYear = parseInt(year) || 2026;
-    navigate('work');
+    const content = document.getElementById('workContent');
+    if (content) renderWorkMatrix(content, true);
+    else navigate('work');
 }
 
 function changeMatrixMonth(month) {
@@ -2369,44 +2473,43 @@ function changeMatrixMonth(month) {
         state.matrixOcMonthFilter = String(m);
     }
     const content = document.getElementById('workContent');
-    if (content) renderWorkMatrix(content);
+    if (content) paintWorkMatrix(content);
 }
-
 
 function filterMatrixPeriodicity(per) {
     state.matrixPeriodicityFilter = per;
     const content = document.getElementById('workContent');
-    if (content) renderWorkMatrix(content);
+    if (content) paintWorkMatrix(content);
 }
 
 function filterMatrixOcStatus(status) {
     state.matrixOcStatusFilter = status;
     const content = document.getElementById('workContent');
-    if (content) renderWorkMatrix(content);
+    if (content) paintWorkMatrix(content);
 }
 
 function filterMatrixOcPeriodicity(per) {
     state.matrixOcPeriodicityFilter = per;
     const content = document.getElementById('workContent');
-    if (content) renderWorkMatrix(content);
+    if (content) paintWorkMatrix(content);
 }
 
 function filterMatrixOcMonth(month) {
     state.matrixOcMonthFilter = month;
     const content = document.getElementById('workContent');
-    if (content) renderWorkMatrix(content);
+    if (content) paintWorkMatrix(content);
 }
 
 function onSearchMatrixOc(val) {
     state.matrixOcSearch = val;
     state.matrixSearch = val;
     const content = document.getElementById('workContent');
-    if (content) renderWorkMatrix(content);
+    if (content) paintWorkMatrix(content);
 }
 
 function filterMatrixOc() {
     const content = document.getElementById('workContent');
-    if (content) renderWorkMatrix(content);
+    if (content) paintWorkMatrix(content);
 }
 
 function handleMatrixCellOc(siteId, clientId, month, year, poId) {
@@ -2808,7 +2911,7 @@ async function savePurchaseOrderForm(e, poId) {
     if (res && res.ok) {
         showToast(poId ? 'OC actualizada' : 'OC registrada exitosamente');
         closeModal();
-        navigate('work');
+        await renderWorkTabContent();
     } else {
         showToast(res?.error || 'Error al guardar la OC');
     }
@@ -2819,7 +2922,7 @@ async function deletePurchaseOrder(id) {
     const res = await api(eel.delete_purchase_order, id);
     if (res && res.ok) {
         showToast('Orden de compra eliminada');
-        navigate('work');
+        await renderWorkTabContent();
     } else {
         showToast(res?.error || 'Error al eliminar');
     }
@@ -2830,15 +2933,27 @@ async function deletePurchaseOrder(id) {
 
 function toggleInvoiceSort() {
     state.invoiceSort = state.invoiceSort === 'asc' ? 'desc' : 'asc';
-    const elView = document.getElementById('view-work');
-    if (elView) renderWorkInvoices(elView);
+    const content = document.getElementById('workContent');
+    if (content && state.invoicesList) {
+        paintWorkInvoices(content);
+    } else if (content) {
+        renderWorkInvoices(content);
+    }
 }
 
-async function renderWorkInvoices(el) {
-    const data = await api(eel.get_monthly_billing) || { sites: [], invoices: [] };
-    const allInvoices = await api(eel.get_invoices) || [];
-    const sites = await api(eel.get_client_sites_grouped) || [];
-    const clients = await api(eel.get_clients) || [];
+async function renderWorkInvoices(el, forceFetch = true) {
+    if (!el || el.id === 'view-work') el = document.getElementById('workContent') || el;
+    if (forceFetch || !state.invoicesList) {
+        state.invoicesList = await api(eel.get_invoices) || [];
+    }
+    paintWorkInvoices(el);
+}
+
+function paintWorkInvoices(el) {
+    if (!el || el.id === 'view-work') el = document.getElementById('workContent') || el;
+    if (!el) return;
+    const uiSnap = captureContainerUIState(el);
+    const allInvoices = [...(state.invoicesList || [])];
 
     state.invoiceStatusFilter = state.invoiceStatusFilter || 'all';
     state.invoiceSort = state.invoiceSort || 'desc';
@@ -2867,21 +2982,7 @@ async function renderWorkInvoices(el) {
     });
     const totAnulado = anuladas.reduce((acc, x) => acc + (x.total || 0), 0);
 
-    // Lookup: siteId-month-year
-    const invMap = {};
-    for (const inv of (data.invoices || [])) {
-        const key = inv.client_site_id + '-' + (inv.month_billed||0) + '-' + (inv.year_billed||0);
-        if (!invMap[key]) invMap[key] = [];
-        invMap[key].push(inv);
-    }
-
-    // Last 12 months for matrix
-    const months = [];
-    const now = new Date();
-    for (let i = 11; i >= 0; i--) {
-        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        months.push({ m: d.getMonth()+1, y: d.getFullYear(), label: d.toLocaleString('es', { month:'short', year:'2-digit' }) });
-    }
+    // (Unused legacy lookup removed for performance)
 
     let html = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
@@ -3038,6 +3139,7 @@ async function renderWorkInvoices(el) {
     </div>`;
     
     el.innerHTML = html;
+    restoreContainerUIState(el, uiSnap);
     if (state.invoiceStatusFilter && state.invoiceStatusFilter !== 'all') {
         filterInvoicesTable(document.getElementById('invoiceSearchInput')?.value || '');
     }
@@ -3285,10 +3387,10 @@ function showInvoiceModal(inv) {
             if (res && res.ok) {
                 showToast(inv ? 'Factura actualizada' : 'Factura registrada');
                 closeModal();
-                const elView = document.getElementById('view-work');
-                if (elView) {
-                    if (state.workTab === 'invoices') await renderWorkInvoices(elView);
-                    else await renderWorkMatrix(elView);
+                const content = document.getElementById('workContent');
+                if (content) {
+                    if (state.workTab === 'invoices') await renderWorkInvoices(content, true);
+                    else await renderWorkMatrix(content, true);
                 }
             } else {
                 showToast(res?.error || 'Error al guardar');
@@ -3360,12 +3462,12 @@ async function deleteInvoice(id, label) {
     if (res && res.ok) {
         showToast(`✓ Factura ${label || ''} eliminada correctamente`);
         closeModal();
-        const elView = document.getElementById('view-work');
-        if (elView) {
+        const content = document.getElementById('workContent');
+        if (content) {
             if (state.workTab === 'invoices') {
-                await renderWorkInvoices(elView);
+                await renderWorkInvoices(content, true);
             } else {
-                await renderWorkMatrix(elView);
+                await renderWorkMatrix(content, true);
             }
         }
     } else {
@@ -4668,8 +4770,39 @@ async function deleteOvertime(id) {
 
 // --- WORK LINDLEY (AUTOMATIZACIÓN DE PLANES DE TRABAJO ARCA CONTINENTAL + AUTO-OC) ---
 let _lindleyAutoCache = null;
+let _lindleyContactsCache = null;
+let _lindleyFormsCache = null;
+let _lindleyCacheKey = '';
 
-async function renderWorkLindley(el) {
+async function renderWorkLindley(el, forceFetch = true) {
+    if (!el || el.id === 'view-work') el = document.getElementById('workContent') || el;
+    const now = new Date();
+    const curMonth = now.getMonth() + 1;
+    const curYear = now.getFullYear();
+    const nextMonth = curMonth === 12 ? 1 : curMonth + 1;
+    const nextYear = curMonth === 12 ? curYear + 1 : curYear;
+    const valMonth = state.lindleyMonth || nextMonth;
+    const valYear = state.lindleyYear || nextYear;
+    const reqKey = `${valYear}-${valMonth}`;
+
+    if (forceFetch || !_lindleyAutoCache || _lindleyCacheKey !== reqKey) {
+        const [autoData, contacts, forms] = await Promise.all([
+            api(eel.get_lindley_automation_data, valYear, valMonth),
+            api(eel.get_lindley_contacts),
+            api(eel.get_lindley_forms),
+        ]);
+        _lindleyAutoCache = autoData || { plans: [], technicians: [], matrix_rows: [], validation: { employees: [] } };
+        _lindleyContactsCache = contacts || [];
+        _lindleyFormsCache = forms || [];
+        _lindleyCacheKey = reqKey;
+    }
+    paintWorkLindley(el);
+}
+
+function paintWorkLindley(el) {
+    if (!el || el.id === 'view-work') el = document.getElementById('workContent') || el;
+    if (!el) return;
+    const uiSnap = captureContainerUIState(el);
     const now = new Date();
     const curMonth = now.getMonth() + 1;
     const curYear = now.getFullYear();
@@ -4679,13 +4812,8 @@ async function renderWorkLindley(el) {
     const valYear = state.lindleyYear || nextYear;
     const subTab = state.lindleySubTab || 'planes';
     const showPaused = !!state.lindleyShowPaused;
-
-    const [autoData, contacts, forms] = await Promise.all([
-        api(eel.get_lindley_automation_data, valYear, valMonth),
-        api(eel.get_lindley_contacts),
-        api(eel.get_lindley_forms),
-    ]);
-    _lindleyAutoCache = autoData || { plans: [], technicians: [], matrix_rows: [], validation: { employees: [] } };
+    const contacts = _lindleyContactsCache || [];
+    const forms = _lindleyFormsCache || [];
 
     const plans = _lindleyAutoCache.plans || [];
     const techs = _lindleyAutoCache.technicians || [];
@@ -4766,11 +4894,14 @@ async function renderWorkLindley(el) {
     }
 
     el.innerHTML = html;
+    restoreContainerUIState(el, uiSnap);
 }
 
 function setLindleySubTab(tab) {
     state.lindleySubTab = tab;
-    navigate('work');
+    const content = document.getElementById('workContent');
+    if (content && _lindleyAutoCache) paintWorkLindley(content);
+    else navigate('work');
 }
 
 function changeLindleyValPeriod(month, year) {
@@ -4778,7 +4909,9 @@ function changeLindleyValPeriod(month, year) {
     state.lindleyYear = parseInt(year);
     state.lindleyStartDate = null;
     state.lindleyEndDate = null;
-    navigate('work');
+    const content = document.getElementById('workContent');
+    if (content) renderWorkLindley(content, true);
+    else navigate('work');
 }
 
 function renderLindleyPlanesSubTab(plans, activePlans, pausedPlans, showPaused, periodKey, monthName, yearNum) {
@@ -4790,7 +4923,7 @@ function renderLindleyPlanesSubTab(plans, activePlans, pausedPlans, showPaused, 
             💡 <strong>¿Cómo usarlo?</strong> En la web de Arca Continental abre <em>Formulario de trabajo</em>, haz clic en <strong>⚡ Copiar Autollenado</strong> en la planta que quieras (o usa el <strong>🪄 Super-Panel</strong>), pégalo en la consola (<code>F12</code> → <em>Console</em> → <code>Ctrl+V</code>) y en <strong>0.5 segundos</strong> verás todo marcado frente a tus ojos listo para darle a <strong>Aceptar</strong>.
         </div>
         <div style="display:flex;gap:8px;align-items:center">
-            <button class="btn btn-ghost btn-sm" onclick="state.lindleyShowPaused=!state.lindleyShowPaused;navigate('work')">
+            <button class="btn btn-ghost btn-sm" onclick="state.lindleyShowPaused=!state.lindleyShowPaused;paintWorkLindley()">
                 ${showPaused ? '🙈 Ocultar pausados este mes' : `👁️ Ver pausados este mes (${pausedPlans.length}: Arequipa / Cusco)`}
             </button>
         </div>
@@ -4959,7 +5092,7 @@ function renderLindleyTecnicosSubTab(techs) {
                 </div>
             </div>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                <select class="form-control" style="width:190px;padding:6px 10px;font-size:0.8rem" onchange="state.lindleyTechGroupFilter=this.value;navigate('work')">
+                <select class="form-control" style="width:190px;padding:6px 10px;font-size:0.8rem" onchange="state.lindleyTechGroupFilter=this.value;paintWorkLindley()">
                     ${groups.map(g => `<option value="${g}" ${groupFilter === g ? 'selected' : ''}>Grupo: ${g}</option>`).join('')}
                 </select>
                 <button class="btn btn-primary btn-sm" onclick="showLindleyTechModal(null)">+ Añadir Técnico a Grupo</button>
@@ -5051,7 +5184,7 @@ function renderLindleyMatricesSubTab(matrixRows) {
                 </div>
             </div>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                <select class="form-control" style="width:270px;padding:6px 10px;font-size:0.8rem" onchange="state.lindleyMatrixFilter=this.value;navigate('work')">
+                <select class="form-control" style="width:270px;padding:6px 10px;font-size:0.8rem" onchange="state.lindleyMatrixFilter=this.value;paintWorkLindley()">
                     <option value="GENERAL_PLANTAS" ${mFilter === 'GENERAL_PLANTAS' ? 'selected' : ''}>🏭 Plantas Generales (Lima, Iquitos, Trujillo, AQP, Cusco)</option>
                     <option value="VEND_FUMIGACION_EQUIPOS" ${mFilter === 'VEND_FUMIGACION_EQUIPOS' ? 'selected' : ''}>🧊 Vendomática — Fumigación de Equipos</option>
                     <option value="VEND_DESRATIZACION" ${mFilter === 'VEND_DESRATIZACION' ? 'selected' : ''}>🐀 Vendomática — Desratización (Control Roedores)</option>
@@ -5634,11 +5767,18 @@ function showEditLindleyPlanModal(planId) {
 }
 
 async function quickToggleLindleyTech(techId, field, nextVal) {
+    if (_lindleyAutoCache && Array.isArray(_lindleyAutoCache.technicians)) {
+        const tech = _lindleyAutoCache.technicians.find(t => t.id === techId);
+        if (tech) {
+            if (field === 'is_active') tech.is_active = (nextVal === 'SI' || nextVal === 1 || nextVal === true) ? 1 : 0;
+            else tech[field] = nextVal;
+            paintWorkLindley();
+        }
+    }
     const res = await api(eel.toggle_lindley_tech_field, techId, field, nextVal);
-    if (res && res.ok) {
-        navigate('work');
-    } else {
+    if (!res || !res.ok) {
         showToast('Error al actualizar permiso');
+        await renderWorkLindley(null, true);
     }
 }
 
@@ -6100,6 +6240,24 @@ async function renderUniversity(el) {
 function switchUniTab(t) {
     state.uniTab = t;
     const uniEl = document.getElementById('view-university');
+    const tabContainer = document.getElementById('uniTabContent');
+    if (uniEl && tabContainer && window.__uniSubjects) {
+        uniEl.querySelectorAll('.subnav-item').forEach(btn => {
+            const isActive = (t === 'schedule' && btn.textContent.includes('Cursada')) ||
+                             (t === 'mesh' && btn.textContent.includes('Malla'));
+            btn.classList.toggle('active', isActive);
+        });
+        const actionsEl = uniEl.querySelector('.page-actions');
+        if (actionsEl) {
+            actionsEl.innerHTML = t === 'schedule' ? '<button class="btn btn-primary" onclick="showSubjectForm()">+ Materia</button>' : '';
+        }
+        if (t === 'mesh') {
+            renderUniversityMesh(tabContainer);
+        } else {
+            renderUniversitySchedule(tabContainer, window.__uniSubjects, window.__uniExams || [], window.__uniAssignments || []);
+        }
+        return;
+    }
     if (uniEl) renderUniversity(uniEl);
 }
 
@@ -7196,8 +7354,10 @@ async function renderPersonal(el) {
         state.estradiolStock = (e2StockRaw !== null && e2StockRaw !== undefined && e2StockRaw !== '') ? parseInt(e2StockRaw) : null;
         state.nextLabDate = nextLabRaw || '';
 
+        state.lastInjectionsList = injections || [];
+        state.lastEstradiolProj = proj || {};
         if (tab === 'injections') {
-            renderHealthInjections(content, injections || [], proj || {});
+            renderHealthInjections(content, state.lastInjectionsList, state.lastEstradiolProj);
         } else {
             renderHealthMeasurements(content, measurements || [], state.measurementGoals);
         }
@@ -8501,6 +8661,7 @@ async function renderPersonalProgress(el) {
         api(eel.get_habit_logs, now.getFullYear())
     ]);
     const prog = progRes || { exercises: [], series: {} };
+    state.workoutProgressData = prog;
     const history = historyRes || [];
     const tasks = (allTasks || []).filter(t => t.status !== 'completed');
     const habitList = habitsRes || [];
@@ -8653,11 +8814,21 @@ function editWorkoutSessionDate(sessionId, currentDate) {
 
 function changeWorkoutProgressEx(exName) {
     state.progressExercise = exName;
+    if (state.workoutProgressData && document.getElementById('workoutProgressChart')) {
+        const metric = state.progressMetric || 'max_weight';
+        drawWorkoutProgressChart(state.workoutProgressData.series[exName] || [], metric, exName);
+        return;
+    }
     navigate('personal');
 }
 
 function changeWorkoutProgressMetric(m) {
     state.progressMetric = m;
+    if (state.workoutProgressData && document.getElementById('workoutProgressChart')) {
+        const exName = state.progressExercise || '';
+        drawWorkoutProgressChart(state.workoutProgressData.series[exName] || [], m, exName);
+        return;
+    }
     navigate('personal');
 }
 
@@ -9138,6 +9309,18 @@ function drawEstradiolChartFull(ctx, dpr, filteredDays, data, max, min, count, f
 
 function setEstradiolRange(days) {
     state.estradiolRange = days;
+    const rangeBtns = document.getElementById('estradiolRangeBtns');
+    if (rangeBtns && state.lastEstradiolProj && document.getElementById('estradiolChart')) {
+        const ranges = [
+            {days:30,label:'1 mes'}, {days:90,label:'3 meses'},
+            {days:180,label:'6 meses'}, {days:365,label:'1 año'}, {days:0,label:'Todo'}
+        ];
+        rangeBtns.innerHTML = ranges.map(r =>
+            '<button class="btn btn-ghost btn-sm chart-range-btn'+(state.estradiolRange===r.days?' active':'')+'" onclick="setEstradiolRange('+r.days+')">'+r.label+'</button>'
+        ).join('');
+        drawEstradiolChart(state.lastEstradiolProj);
+        return;
+    }
     navigate('health');
 }
 
@@ -9145,15 +9328,21 @@ async function adjustEstradiolStock(delta) {
     const cur = (state.estradiolStock !== null && !isNaN(state.estradiolStock)) ? state.estradiolStock : 0;
     const next = Math.max(0, cur + delta);
     state.estradiolStock = next;
+    const content = document.getElementById('personalContent');
+    if (content && state.lastInjectionsList && state.lastEstradiolProj) {
+        renderHealthInjections(content, state.lastInjectionsList, state.lastEstradiolProj);
+    }
     await api(eel.set_config, 'estradiol_stock', String(next));
-    navigate('health');
 }
 
 async function saveNextLabDate(val) {
     state.nextLabDate = val || '';
     await api(eel.set_config, 'next_lab_date', state.nextLabDate);
     showToast('Fecha de laboratorio guardada');
-    navigate('health');
+    const content = document.getElementById('personalContent');
+    if (content && state.lastInjectionsList && state.lastEstradiolProj) {
+        renderHealthInjections(content, state.lastInjectionsList, state.lastEstradiolProj);
+    }
 }
 
 // --- HEALTH: MEASUREMENTS WITH QUICK-ADD, GOALS & CHART ---
@@ -11023,6 +11212,7 @@ async function renderFinance(el) {
     </div>
     <div id="financeContent"></div>`;
 
+    state.financeSummary = summary;
     el.innerHTML = html;
     const content = el.querySelector('#financeContent');
 
@@ -11035,8 +11225,25 @@ async function renderFinance(el) {
     else if (tab === 'cuentas') renderFinanceCuentas(content, summary);
 }
 
-function switchFinanceTab(tab) {
+async function switchFinanceTab(tab) {
     state.financeTab = tab;
+    const viewEl = document.getElementById('view-finance');
+    const content = document.getElementById('financeContent');
+    if (state.view === 'finance' && viewEl && content && state.financeSummary) {
+        viewEl.querySelectorAll('.subnav .subnav-item').forEach(btn => {
+            const oc = btn.getAttribute('onclick') || '';
+            btn.classList.toggle('active', oc.includes(`'${tab}'`));
+        });
+        const summary = state.financeSummary;
+        if (tab === 'resumen') renderFinanceResumen(content, summary);
+        else if (tab === 'movimientos') renderFinanceMovimientos(content, summary);
+        else if (tab === 'fijos') await renderFinanceFijos(content, summary);
+        else if (tab === 'deudas') await renderFinanceDeudas(content, summary);
+        else if (tab === 'sueldos') await renderFinanceSueldos(content, summary);
+        else if (tab === 'meta') renderFinanceMeta(content, summary);
+        else if (tab === 'cuentas') renderFinanceCuentas(content, summary);
+        return;
+    }
     navigate('finance');
 }
 
@@ -11048,11 +11255,21 @@ function changeFinancePeriod(month, year) {
 
 function filterFinanceTxType(type) {
     state.financeFilterType = type;
+    const content = document.getElementById('financeContent');
+    if (content && state.financeSummary && state.financeTab === 'movimientos') {
+        renderFinanceMovimientos(content, state.financeSummary);
+        return;
+    }
     navigate('finance');
 }
 
 function filterFinanceTxAccount(accId) {
     state.financeFilterAccount = accId;
+    const content = document.getElementById('financeContent');
+    if (content && state.financeSummary && state.financeTab === 'movimientos') {
+        renderFinanceMovimientos(content, state.financeSummary);
+        return;
+    }
     navigate('finance');
 }
 

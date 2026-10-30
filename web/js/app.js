@@ -5308,15 +5308,13 @@ function buildLindleyCoreExecutorSource() {
                 if (typeof SetDataGrid4 === 'function') SetDataGrid4();
             });
 
-            // 8. No tocamos el botón Aceptar: Arca lo deshabilita si hay documentos de empresa vencidos.
-            var btnBlocked = $('#btnGrabar2').is(':disabled');
-            var blockedMsg = btnBlocked ? '<br><b style="color:#fecaca">⚠️ El botón Aceptar está deshabilitado por Arca (revisa documentos de empresa vencidos).</b>' : '';
-
+            // 8. JAMÁS se toca ni se hace clic en el botón Aceptar: el envío es 100% manual por ti tras revisar.
             $('#nicoleAutofillBanner').remove();
             $('#myModal .modal-body').first().prepend(
                 '<div id="nicoleAutofillBanner" style="background:#065f46;color:#fff;padding:10px 14px;border-radius:8px;margin-bottom:12px;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,0.18)">' +
                 '<strong>✨ Autollenado Nicole completado: ' + cfg.name + '</strong><br>' +
-                'Localidades: <b>' + (matchedLocs.join(', ') || 'ninguna') + '</b> · Técnicos: <b>' + matchedWorkers + '</b> · Químicos: <b>' + matchedChems + '</b> · Equipos: <b>' + (cfg.useMachinery ? matchedMach : 'NO') + '</b> · Fechas: <b>' + cfg.startDate + ' → ' + cfg.endDate + '</b>' + blockedMsg +
+                'Localidades: <b>' + (matchedLocs.join(', ') || 'ninguna') + '</b> · Técnicos: <b>' + matchedWorkers + '</b> · Químicos: <b>' + matchedChems + '</b> · Equipos: <b>' + (cfg.useMachinery ? matchedMach : 'NO') + '</b> · Fechas: <b>' + cfg.startDate + ' → ' + cfg.endDate + '</b><br>' +
+                '<span style="color:#d1fae5">👉 Revisa que todo esté correcto y haz clic tú misma en el botón verde <b>Aceptar</b>.</span>' +
                 '</div>'
             );
         }

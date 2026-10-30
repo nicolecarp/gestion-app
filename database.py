@@ -679,6 +679,7 @@ def init_db():
             col3 TEXT NOT NULL,
             sort_order INTEGER DEFAULT 0
         )""",
+        "UPDATE lindley_matrix_rows SET col2 = 'Exposicion de Insecticida / Desinfectante' WHERE matrix_type = 'VEND_FUMIGACION_EQUIPOS' AND col2 = 'Exposicion de Insecticida / Gel'",
     ]:
         try:
             conn.execute(stmt)
@@ -1953,7 +1954,7 @@ def apply_cleanups_and_seeds(conn):
                 # VEND_FUMIGACION_EQUIPOS
                 ('VEND_FUMIGACION_EQUIPOS', 'DPR', 'TODAS', 'Inspeccion de Ambientes / Equipos', 'Exposicion al ruido mayor a 85 dbs', 'Capacitacion de uso correcto de protectores auditivos (tapones y orejeras)', 25),
                 ('VEND_FUMIGACION_EQUIPOS', 'DPR', 'TODAS', 'Inspeccion de Ambientes / Equipos', 'Caidas en superficies desniveladas', 'Transitar por areas seguras, respetar las señalizaciones, Uso de casco y Zapatos antideslizantes.', 26),
-                ('VEND_FUMIGACION_EQUIPOS', 'DPR', 'TODAS', 'Fumigacion de Equipos', 'Exposicion de Insecticida / Gel', 'Capacitacion y entrenamiento de puesto de trabajo, supervision constante, uso de EPPs, respirador media cara con filtro contra gases, guantes de nitrilo.', 27),
+                ('VEND_FUMIGACION_EQUIPOS', 'DPR', 'TODAS', 'Fumigacion de Equipos', 'Exposicion de Insecticida / Desinfectante', 'Capacitacion y entrenamiento de puesto de trabajo, supervision constante, uso de EPPs, respirador media cara con filtro contra gases, guantes de nitrilo.', 27),
                 ('VEND_FUMIGACION_EQUIPOS', 'DPR', 'TODAS', 'Fumigacion de Equipos', 'Golpes por equipos', 'Capacitacion y entrenamiento de puesto de trabajo, Check list de equipos, Inspeccion pre uso de epps, Guantes de seguridad.', 28),
                 ('VEND_FUMIGACION_EQUIPOS', 'PNE', 'TODAS', 'Dany Rios German', '943576167', 'Paralizar el trabajo, Delimitar el area de trabajo, Reportar al dueño de area y area de Seguridad, topico, Estabilizar al paciente, trasladarlo al centro de salud mas cercano, realizar investigacion de accidentes.', 29),
                 ('VEND_FUMIGACION_EQUIPOS', 'DIA', 'TODAS', 'Fumigacion de Equipos', 'Derrame de insumos', 'Traslado en contenedor hermetico', 30),

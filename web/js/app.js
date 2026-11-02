@@ -262,6 +262,9 @@ async function navigate(view) {
         state.personalTab = (state.healthTab === 'measurements') ? 'measurements' : 'injections';
         view = 'personal';
     }
+    if (typeof cleanupVoiceStreams === 'function' && (view !== 'personal' || state.personalTab !== 'voice')) {
+        cleanupVoiceStreams();
+    }
     const isSameView = (state.view === view);
     const el = document.getElementById('view-' + view);
     if (!el) return;
@@ -7306,6 +7309,7 @@ async function renderPersonal(el) {
         { id: 'progress', label: '📈 Progreso y Hábitos' },
         { id: 'injections', label: '💉 Inyecciones (TRH)' },
         { id: 'measurements', label: '📏 Medidas Corporales' },
+        { id: 'voice', label: '🎙️ Entrenamiento de Voz' },
     ];
 
     let actionBtn = '';
@@ -7322,6 +7326,9 @@ async function renderPersonal(el) {
     } else if (tab === 'measurements') {
         actionBtn = '<button class="btn btn-secondary" onclick="showMeasurementGoalsModal()">🎯 Metas</button><button class="btn btn-primary" onclick="showMeasurementForm()">+ Medida</button>';
         subtitle = 'Registro antropométrico y evolución corporal';
+    } else if (tab === 'voice') {
+        actionBtn = '<button class="btn btn-secondary" onclick="openVoiceGuideModal()">📚 Guía Vocal</button>';
+        subtitle = 'Laboratorio acústico, feminización vocal, tono en vivo y salud laríngea (Pitchee)';
     }
 
     let html = `<div class="page-header">
@@ -7361,10 +7368,15 @@ async function renderPersonal(el) {
         } else {
             renderHealthMeasurements(content, measurements || [], state.measurementGoals);
         }
+    } else if (tab === 'voice') {
+        await renderPersonalVoice(content);
     }
 }
 
 function switchPersonalTab(tab) {
+    if (typeof cleanupVoiceStreams === 'function' && state.personalTab === 'voice' && tab !== 'voice') {
+        cleanupVoiceStreams();
+    }
     state.personalTab = tab;
     if (tab === 'injections' || tab === 'measurements') {
         state.healthTab = tab;
@@ -13233,3 +13245,1430 @@ window.renderFinanceSueldos = renderFinanceSueldos;
 
 
 
+
+// ===================== PERSONAL: ENTRENAMIENTO DE VOZ (PITCHEE) =====================
+
+const VOICE_PASSAGES = [
+    {
+        title: "1. El viento del norte y el sol (Fonética balanceada)",
+        text: "El Viento del Norte y el Sol discutían sobre cuál de ellos era más fuerte. Por el camino llegó un viajero envuelto en un manto. Acordaron que quien pudiera hacer que el viajero se quitara el manto sería considerado el más fuerte. El viento del norte fue primero. Reunió toda su fuerza y sopló ferozmente hacia el viajero. Pero cuanto más fuerte soplaba, más se envolvía el viajero en la capa. El Viento del Norte se cansó y finalmente se calmó. Entonces el Sol salió de detrás de las nubes y por primera vez brilló suavemente. Sintiendo el calor, el viajero se aflojó el manto. El sol salió más alto, el aire se volvió más cálido y, finalmente, el viajero se quitó el manto y se sentó a descansar a la sombra."
+    },
+    {
+        title: "2. Separación de tareas (Conversacional)",
+        text: "La psicología adleriana divide los problemas en las relaciones en «mis tareas» y «tareas de otras personas». Cómo hablo, si soy honesto y qué consecuencias estoy dispuesto a aceptar son mis tareas. Que otra persona comprenda, esté de acuerdo o cambie es su tarea. La separación de tareas no es indiferencia ni una negativa a preocuparse. Significa no tomar decisiones por los demás y no permitir que sus juicios se apoderen de mi vida. Los límites claros pueden hacer que sea más fácil conocer a las personas como iguales, con mayor estabilidad y respeto."
+    },
+    {
+        title: "3. Tiempo social (Entonación fluida)",
+        text: "El tiempo social no es el flujo uniforme del tiempo físico medido por un reloj. Es un ritmo y un orden moldeados colectivamente por un grupo. Las vacaciones, los ciclos laborales, las etapas de la vida y la memoria generacional dan significado al tiempo. A través de instituciones y costumbres, una sociedad también dice a las personas cuándo deben estudiar, trabajar o formar una familia, moldeando sutilmente nuestra sensación de «demasiado temprano» y «demasiado tarde»."
+    },
+    {
+        title: "4. La dicotomía del control (Articulación clara)",
+        text: "La filosofía estoica divide las cosas en dos categorías: lo que está bajo nuestro control y lo que no. El juicio, la elección y el esfuerzo pertenecen al primero; las opiniones de otras personas, los hechos que ya sucedieron, el clima y los resultados finales pertenecen al segundo. Gran parte del sufrimiento proviene de invertir energía en lo que no podemos controlar y descuidar el lugar donde podemos actuar."
+    },
+    {
+        title: "5. Estado de Flow (Resonancia alta)",
+        text: "El flow es un estado de profunda implicación en el que las personas pierden la noción del tiempo y una excesiva timidez. Tiende a aparecer en actividades con objetivos claros, retroalimentación rápida y un desafío que coincide aproximadamente con la capacidad de cada uno. Las tareas demasiado fáciles generan aburrimiento, mientras que las tareas demasiado difíciles generan ansiedad."
+    },
+    {
+        title: "6. Ejercicios de Resonancia y Brillo (M-N-I-E)",
+        text: "Mírame mañana mientras caminamos tranquilamente frente al mar. Nueve nubes blancas iluminan el cielo sereno de abril. Imagina una melodía ligera, cristalina y suave que vibra adelante en los labios sin esfuerzo en la garganta."
+    }
+];
+
+const VOICE_PIANO_NOTES = [
+    ["F#2", 42], ["G2", 43], ["G#2", 44], ["A2", 45], ["A#2", 46], ["B2", 47], ["C3", 48], ["C#3", 49],
+    ["D3", 50], ["D#3", 51], ["E3", 52], ["F3", 53],
+    ["F#3", 54], ["G3", 55], ["G#3", 56], ["A3", 57], ["A#3", 58], ["B3", 59], ["C4", 60], ["C#4", 61],
+    ["D4", 62], ["D#4", 63], ["E4", 64], ["F4", 65]
+];
+
+const VOICE_RULE_INFO = {
+    pass_boost: {
+        badge: "✨ Impulso Calificado (Pass Boost)",
+        tagClass: "tag-sage",
+        desc: "¡Excelente! Tu tono (>165 Hz), naturalidad (≥80) y timbre/resonancia (≥50) superaron todos los umbrales y activaron la bonificación."
+    },
+    continuous: {
+        badge: "✅ Puntuación Continua",
+        tagClass: "tag-sage",
+        desc: "Fórmula continua ponderando Timbre/Resonancia (50%), Naturalidad (20%), Tono F0 (15%) y Sinergia (15%) sin penalizaciones."
+    },
+    high_f0_stylized_cap: {
+        badge: "⚠️ Tope por Baja Naturalidad (Máx 30)",
+        tagClass: "tag-rose",
+        desc: "El tono supera los 165 Hz, pero la naturalidad es menor a 50 (voz tensa o en falsete forzado). Relajá la laringe y buscá suavidad."
+    },
+    low_f0_natural_cap: {
+        badge: "ℹ️ Tope por Tono Bajo (Máx 59)",
+        tagClass: "tag-gold",
+        desc: "La naturalidad es buena (≥50), pero el tono medio F0 está en 165 Hz o menos, limitando la puntuación máxima a 59."
+    },
+    low_f0_stylized_cap: {
+        badge: "⚠️ Tope por Tono y Naturalidad (Máx 20)",
+        tagClass: "tag-rose",
+        desc: "Tanto el tono (≤165 Hz) como la naturalidad (<50) están por debajo del umbral recomendado."
+    },
+    high_f0_male_cap: {
+        badge: "ℹ️ Tope por Timbre / Resonancia (Máx 59)",
+        tagClass: "tag-gold",
+        desc: "El tono (>165 Hz) y la naturalidad (≥50) son adecuados, pero el brillo/resonancia (Timbre S) es menor a 50. Llevá la resonancia hacia adelante."
+    },
+    f0_unavailable: {
+        badge: "Tono no detectado",
+        tagClass: "tag-lavender",
+        desc: "No se detectaron suficientes ventanas sonoras estables; se usa directamente el puntaje de timbre."
+    }
+};
+
+const voiceState = {
+    subTab: 'analyze', // 'analyze', 'live', 'tools', 'history'
+    profile: 'feminization',
+    passageIdx: '0',
+    engineInfo: null,
+    sessions: [],
+    currentSession: null,
+    recording: false,
+    recordCtx: null,
+    recordStream: null,
+    recordProcessor: null,
+    recordBuffers: [],
+    recordSampleRate: 16000,
+    recordStartTime: 0,
+    recordTimer: null,
+    livePitchActive: false,
+    livePitchStream: null,
+    livePitchCtx: null,
+    livePitchProcessor: null,
+    livePitchFrames: [],
+    spectrumActive: false,
+    specStream: null,
+    specCtx: null,
+    specAnalyser: null,
+    pianoCtx: null,
+    pianoVoices: new Map()
+};
+
+function cleanupVoiceStreams() {
+    if (voiceState.recording) {
+        voiceState.recording = false;
+        if (voiceState.recordTimer) clearInterval(voiceState.recordTimer);
+        try { if (voiceState.recordProcessor) voiceState.recordProcessor.disconnect(); } catch (_) {}
+        try { if (voiceState.recordStream) voiceState.recordStream.getTracks().forEach(t => t.stop()); } catch (_) {}
+        try { if (voiceState.recordCtx) voiceState.recordCtx.close(); } catch (_) {}
+    }
+    if (voiceState.livePitchActive) {
+        voiceState.livePitchActive = false;
+        try { if (voiceState.livePitchProcessor) voiceState.livePitchProcessor.disconnect(); } catch (_) {}
+        try { if (voiceState.livePitchStream) voiceState.livePitchStream.getTracks().forEach(t => t.stop()); } catch (_) {}
+        try { if (voiceState.livePitchCtx) voiceState.livePitchCtx.close(); } catch (_) {}
+    }
+    if (voiceState.spectrumActive) {
+        voiceState.spectrumActive = false;
+        try { if (voiceState.specStream) voiceState.specStream.getTracks().forEach(t => t.stop()); } catch (_) {}
+        try { if (voiceState.specCtx) voiceState.specCtx.close(); } catch (_) {}
+    }
+    if (voiceState.pianoVoices && voiceState.pianoVoices.size > 0) {
+        voiceState.pianoVoices.forEach(v => {
+            try { v.osc1.stop(); v.osc2.stop(); } catch (_) {}
+        });
+        voiceState.pianoVoices.clear();
+    }
+}
+
+function voiceHzToNote(hz) {
+    if (!hz || hz <= 0) return '--';
+    const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+    const midi = Math.round(12 * Math.log2(hz / 440) + 69);
+    const note = names[((midi % 12) + 12) % 12];
+    const octave = Math.floor(midi / 12) - 1;
+    return `${note}${octave}`;
+}
+
+function voiceResampleLinear(input, inRate, outRate) {
+    if (inRate === outRate) return input;
+    const ratio = inRate / outRate;
+    const outLen = Math.round(input.length / ratio);
+    const output = new Float32Array(outLen);
+    for (let i = 0; i < outLen; i++) {
+        const pos = i * ratio;
+        const idx = Math.floor(pos);
+        const frac = pos - idx;
+        const a = input[idx] || 0;
+        const b = input[Math.min(idx + 1, input.length - 1)] || 0;
+        output[i] = a + (b - a) * frac;
+    }
+    return output;
+}
+
+function voiceEncodeWAVBase64(samplesFloat32, sampleRate) {
+    const buffer = new ArrayBuffer(44 + samplesFloat32.length * 2);
+    const view = new DataView(buffer);
+    const writeStr = (offset, str) => {
+        for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+    };
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + samplesFloat32.length * 2, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeStr(36, 'data');
+    view.setUint32(40, samplesFloat32.length * 2, true);
+    let offset = 44;
+    for (let i = 0; i < samplesFloat32.length; i++, offset += 2) {
+        const s = Math.max(-1, Math.min(1, samplesFloat32[i]));
+        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+    }
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+}
+
+function voiceDetectPitchClient(buf, sampleRate) {
+    let energy = 0;
+    for (let i = 0; i < buf.length; i++) energy += buf[i] * buf[i];
+    const rms = Math.sqrt(energy / buf.length);
+    if (rms < 0.012) return { voiced: false, f0_hz: null, confidence: 0 };
+
+    const minLag = Math.max(2, Math.floor(sampleRate / 420));
+    const maxLag = Math.min(Math.floor(buf.length / 2) - 1, Math.floor(sampleRate / 75));
+    let bestLag = 0;
+    let bestCorr = -1;
+    for (let lag = minLag; lag <= maxLag; lag++) {
+        let c = 0;
+        for (let i = 0; i < buf.length - lag; i += 2) {
+            c += buf[i] * buf[i + lag];
+        }
+        const r = (c * 2) / (energy + 1e-9);
+        if (r > bestCorr) {
+            bestCorr = r;
+            bestLag = lag;
+        }
+    }
+    if (bestCorr >= 0.32 && bestLag > 0) {
+        const hz = sampleRate / bestLag;
+        if (hz >= 75 && hz <= 420) {
+            return { voiced: true, f0_hz: Math.round(hz * 10) / 10, confidence: Math.min(0.99, Math.round(bestCorr * 100) / 100) };
+        }
+    }
+    return { voiced: false, f0_hz: null, confidence: 0 };
+}
+
+async function renderPersonalVoice(el) {
+    const [engineStatus, sessions] = await Promise.all([
+        api(eel.get_voice_engine_status),
+        api(eel.get_voice_sessions)
+    ]);
+    voiceState.engineInfo = engineStatus || { native_available: false, engine_version: 'Motor Acústico DSP', samples: [] };
+    voiceState.sessions = sessions || [];
+
+    if (!voiceState.currentSession && voiceState.sessions.length > 0) {
+        const det = await api(eel.get_voice_session_detail, voiceState.sessions[0].id);
+        if (det && det.ok) voiceState.currentSession = det.session;
+    }
+
+    const totalCount = voiceState.sessions.length;
+    const latest = voiceState.sessions[0] || null;
+    const avgScore = totalCount > 0
+        ? (voiceState.sessions.reduce((a, b) => a + (parseFloat(b.final_score) || 0), 0) / totalCount).toFixed(1)
+        : '--';
+    const avgF0List = voiceState.sessions.map(s => parseFloat(s.f0_mean_hz)).filter(v => !isNaN(v) && v > 0);
+    const avgF0 = avgF0List.length > 0
+        ? (avgF0List.reduce((a, b) => a + b, 0) / avgF0List.length).toFixed(0) + ' Hz'
+        : '--';
+    const latestHealth = latest && latest.health_score != null ? parseFloat(latest.health_score).toFixed(0) + ' pts' : '--';
+
+    const subTabs = [
+        { id: 'analyze', label: '🎙️ Evaluar y Salud Vocal' },
+        { id: 'live', label: '📈 Tono en Vivo (F0)' },
+        { id: 'tools', label: '🎹 Piano y Espectro FFT' },
+        { id: 'history', label: `📊 Evolución e Historial (${totalCount})` },
+    ];
+
+    let html = `
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+            ${subTabs.map(t => `<button class="btn ${voiceState.subTab === t.id ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="switchVoiceSubTab('${t.id}')">${t.label}</button>`).join('')}
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;font-size:0.78rem;color:var(--text-muted);background:var(--bg-surface);padding:6px 12px;border-radius:99px;border:1px solid var(--border)">
+            <span style="width:8px;height:8px;border-radius:50%;background:${voiceState.engineInfo.native_available ? 'var(--sage)' : 'var(--gold)'};display:inline-block"></span>
+            <span>${esc(voiceState.engineInfo.engine_version)}</span>
+        </div>
+    </div>
+
+    <div class="stats-row" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-bottom:16px">
+        <div class="stat-card rose" style="cursor:pointer" onclick="switchVoiceSubTab('analyze')">
+            <div class="stat-icon">✨</div>
+            <div class="stat-value">${latest ? parseFloat(latest.final_score || 0).toFixed(1) : avgScore}</div>
+            <div class="stat-label">${latest ? 'Última Puntuación (de 100)' : 'Promedio General'}</div>
+        </div>
+        <div class="stat-card lavender" style="cursor:pointer" onclick="switchVoiceSubTab('live')">
+            <div class="stat-icon">🎵</div>
+            <div class="stat-value">${latest && latest.f0_mean_hz ? parseFloat(latest.f0_mean_hz).toFixed(0) + ' Hz' : avgF0}</div>
+            <div class="stat-label">${latest && latest.f0_mean_hz ? `Nota ${voiceHzToNote(latest.f0_mean_hz)} · Meta >165 Hz` : 'Tono Medio F0'}</div>
+        </div>
+        <div class="stat-card coral" style="cursor:pointer" onclick="switchVoiceSubTab('analyze')">
+            <div class="stat-icon">🌸</div>
+            <div class="stat-value">${latest ? parseFloat(latest.vfp_score || 0).toFixed(1) : '--'}</div>
+            <div class="stat-label">Timbre / Resonancia (S)</div>
+        </div>
+        <div class="stat-card sage" style="cursor:pointer" onclick="switchVoiceSubTab('analyze')">
+            <div class="stat-icon">🩺</div>
+            <div class="stat-value">${latestHealth}</div>
+            <div class="stat-label">${latest && latest.hnr_db != null ? `Salud Vocal · HNR ${parseFloat(latest.hnr_db).toFixed(1)} dB` : 'Salud Laríngea (≥30 ok)'}</div>
+        </div>
+    </div>
+
+    <div id="voiceSubContent"></div>`;
+
+    el.innerHTML = html;
+    const subEl = el.querySelector('#voiceSubContent');
+
+    if (voiceState.subTab === 'analyze') {
+        renderVoiceAnalyzeSubTab(subEl);
+    } else if (voiceState.subTab === 'live') {
+        renderVoiceLivePitchSubTab(subEl);
+    } else if (voiceState.subTab === 'tools') {
+        renderVoiceToolsSubTab(subEl);
+    } else if (voiceState.subTab === 'history') {
+        renderVoiceHistorySubTab(subEl);
+    }
+}
+
+function switchVoiceSubTab(sub) {
+    cleanupVoiceStreams();
+    voiceState.subTab = sub;
+    const content = document.getElementById('personalContent');
+    if (content) renderPersonalVoice(content);
+}
+
+function setVoiceProfile(prof) {
+    voiceState.profile = prof;
+    const content = document.getElementById('personalContent');
+    if (content) renderPersonalVoice(content);
+}
+
+function onVoicePassageChange(val) {
+    voiceState.passageIdx = val;
+    const box = document.getElementById('voicePassageBox');
+    if (!box) return;
+    if (val === 'custom') {
+        const custom = localStorage.getItem('nicole_voice_custom_passage') || VOICE_PASSAGES[0].text;
+        box.textContent = custom;
+    } else {
+        const p = VOICE_PASSAGES[parseInt(val) || 0] || VOICE_PASSAGES[0];
+        box.textContent = p.text;
+    }
+}
+
+function showCustomVoicePassageModal() {
+    const saved = localStorage.getItem('nicole_voice_custom_passage') || '';
+    const html = `
+    <div class="form-group">
+        <label class="form-label">Texto o pasaje personalizado para leer al grabar</label>
+        <textarea id="voiceCustomPassageText" class="form-control" rows="5" placeholder="Escribí aquí las frases o lecturas que quieras practicar...">${esc(saved)}</textarea>
+    </div>`;
+    openModal('✍️ Pasaje de Lectura Personalizado', html);
+    document.getElementById('modalSave').onclick = () => {
+        const val = document.getElementById('voiceCustomPassageText').value.trim();
+        if (val) {
+            localStorage.setItem('nicole_voice_custom_passage', val);
+            voiceState.passageIdx = 'custom';
+            closeModal();
+            showToast('Pasaje personalizado guardado');
+            const content = document.getElementById('personalContent');
+            if (content) renderPersonalVoice(content);
+        }
+    };
+}
+
+function renderVoiceAnalyzeSubTab(el) {
+    const customSaved = localStorage.getItem('nicole_voice_custom_passage');
+    const currentPassageText = voiceState.passageIdx === 'custom' && customSaved
+        ? customSaved
+        : (VOICE_PASSAGES[parseInt(voiceState.passageIdx) || 0] || VOICE_PASSAGES[0]).text;
+
+    const samples = (voiceState.engineInfo && voiceState.engineInfo.samples) || [];
+    const sampleOpts = samples.map(s => `<option value="${esc(s.name)}">${esc(s.name)} (${Math.round(s.size / 1024)} KB)</option>`).join('');
+
+    let html = `
+    <div class="card" style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px">
+            <div class="card-title" style="margin:0">📖 Pasaje de Lectura Guiada</div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                <select class="form-control" style="width:auto;padding:5px 10px;font-size:0.82rem" onchange="onVoicePassageChange(this.value)">
+                    ${VOICE_PASSAGES.map((p, idx) => `<option value="${idx}" ${String(idx) === String(voiceState.passageIdx) ? 'selected' : ''}>${esc(p.title)}</option>`).join('')}
+                    ${customSaved ? `<option value="custom" ${voiceState.passageIdx === 'custom' ? 'selected' : ''}>★ Mi pasaje personalizado</option>` : ''}
+                </select>
+                <button class="btn btn-ghost btn-sm" onclick="showCustomVoicePassageModal()">✍️ Editar propio</button>
+            </div>
+        </div>
+        <div id="voicePassageBox" style="background:var(--bg-base);border-left:4px solid var(--primary);padding:14px 18px;border-radius:10px;line-height:1.7;font-size:0.95rem;color:var(--text)">${esc(currentPassageText)}</div>
+    </div>
+
+    <div class="card" style="margin-bottom:16px;text-align:center;padding:22px 18px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
+            <div style="text-align:left">
+                <div style="font-weight:700;font-size:1rem">Grabadora y Evaluador Acústico</div>
+                <div style="font-size:0.8rem;color:var(--text-muted)">Se evalúan en simultáneo Timbre/Resonancia (VFP), Naturalidad, Tono F0 y las 14 métricas clínicas de Salud Vocal</div>
+            </div>
+            <div style="display:inline-flex;background:var(--bg-base);padding:3px;border-radius:10px;border:1px solid var(--border)">
+                <button class="btn ${voiceState.profile === 'feminization' ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="setVoiceProfile('feminization')">🌸 Objetivo Femenino</button>
+                <button class="btn ${voiceState.profile === 'masculinization' ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="setVoiceProfile('masculinization')">💙 Objetivo Masculino</button>
+            </div>
+        </div>
+
+        <div style="display:flex;flex-direction:column;align-items:center;gap:12px;margin:12px 0">
+            <button id="voiceRecordOrb" onclick="toggleVoiceRecording()" style="width:84px;height:84px;border-radius:50%;border:none;background:var(--primary);color:#151014;font-size:2rem;cursor:pointer;box-shadow:0 0 0 8px rgba(242,139,168,0.18);transition:all 0.2s;display:flex;align-items:center;justify-content:center">🎙️</button>
+            <div id="voiceRecordStatus" style="font-weight:700;font-size:1.02rem">Tocá el micrófono para grabar tu voz (mín. 5 segundos recomendados)</div>
+            <div id="voiceRecordTimer" style="font-size:0.82rem;color:var(--text-muted)">Habla de forma continua y relajada leyendo el pasaje superior</div>
+            <div style="width:100%;max-width:400px;height:8px;background:var(--bg-base);border-radius:99px;overflow:hidden;border:1px solid var(--border)">
+                <div id="voiceRecordProgress" style="height:100%;width:0%;background:var(--primary);transition:width 0.12s linear"></div>
+            </div>
+            <canvas id="voiceLiveWaveCanvas" style="width:100%;max-width:520px;height:68px;background:var(--bg-base);border-radius:10px"></canvas>
+        </div>
+
+        <div style="display:flex;gap:10px;justify-content:center;align-items:center;flex-wrap:wrap;margin-top:10px;padding-top:12px;border-top:1px solid var(--border)">
+            <input type="text" id="voiceSessionLabelInput" class="form-control" style="max-width:220px;font-size:0.84rem" placeholder="Etiqueta (ej. Mañana, Lectura 1)">
+            <label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0">
+                📂 Subir Audio (.wav/.mp3/.m4a)
+                <input type="file" accept="audio/*" style="display:none" onchange="handleVoiceFileUpload(this)">
+            </label>
+            ${samples.length > 0 ? `
+            <div style="display:flex;gap:6px;align-items:center">
+                <select id="voiceSampleSelect" class="form-control" style="width:auto;font-size:0.82rem;padding:5px 8px">
+                    <option value="">🎧 Muestras de referencia...</option>
+                    ${sampleOpts}
+                </select>
+                <button class="btn btn-secondary btn-sm" onclick="analyzeSelectedVoiceSample()">Probar muestra</button>
+            </div>` : ''}
+        </div>
+    </div>
+
+    <div id="voiceCurrentResultBox"></div>`;
+
+    el.innerHTML = html;
+    if (voiceState.currentSession) {
+        renderVoiceSessionDetailInto(document.getElementById('voiceCurrentResultBox'), voiceState.currentSession);
+    }
+}
+
+async function toggleVoiceRecording() {
+    if (!voiceState.recording) {
+        await startVoiceRecordingSession();
+    } else {
+        await stopAndSubmitVoiceRecording();
+    }
+}
+
+async function startVoiceRecordingSession() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const source = ctx.createMediaStreamSource(stream);
+        const processor = ctx.createScriptProcessor(4096, 1, 1);
+
+        voiceState.recordStream = stream;
+        voiceState.recordCtx = ctx;
+        voiceState.recordProcessor = processor;
+        voiceState.recordBuffers = [];
+        voiceState.recordSampleRate = ctx.sampleRate;
+        voiceState.recordStartTime = performance.now();
+        voiceState.recording = true;
+
+        const waveCanvas = document.getElementById('voiceLiveWaveCanvas');
+        const wCtx = waveCanvas ? waveCanvas.getContext('2d') : null;
+
+        processor.onaudioprocess = e => {
+            if (!voiceState.recording) return;
+            const ch = e.inputBuffer.getChannelData(0);
+            voiceState.recordBuffers.push(new Float32Array(ch));
+            if (wCtx && waveCanvas) {
+                const w = waveCanvas.width = waveCanvas.clientWidth || 480;
+                const h = waveCanvas.height = waveCanvas.clientHeight || 68;
+                wCtx.clearRect(0, 0, w, h);
+                wCtx.strokeStyle = '#F28BA8';
+                wCtx.lineWidth = 2;
+                wCtx.beginPath();
+                const step = Math.max(1, Math.floor(ch.length / w));
+                for (let x = 0; x < w; x++) {
+                    const s = ch[x * step] || 0;
+                    const y = (0.5 - s * 0.45) * h;
+                    if (x === 0) wCtx.moveTo(x, y);
+                    else wCtx.lineTo(x, y);
+                }
+                wCtx.stroke();
+            }
+        };
+
+        source.connect(processor);
+        processor.connect(ctx.destination);
+
+        const orb = document.getElementById('voiceRecordOrb');
+        if (orb) {
+            orb.style.background = 'var(--rose)';
+            orb.textContent = '⏹️';
+        }
+        const st = document.getElementById('voiceRecordStatus');
+        if (st) st.textContent = 'Grabando tu voz... Tocá de nuevo para detener y analizar';
+
+        voiceState.recordTimer = setInterval(() => {
+            const elapsed = (performance.now() - voiceState.recordStartTime) / 1000;
+            const pct = Math.min(100, (elapsed / 5.0) * 100);
+            const prog = document.getElementById('voiceRecordProgress');
+            const tim = document.getElementById('voiceRecordTimer');
+            if (prog) prog.style.width = `${pct}%`;
+            if (tim) tim.textContent = `Tiempo grabado: ${elapsed.toFixed(1)} s / 5.0 s recomendados`;
+        }, 100);
+    } catch (err) {
+        showToast('No se pudo acceder al micrófono: ' + err.message);
+    }
+}
+
+async function stopAndSubmitVoiceRecording() {
+    voiceState.recording = false;
+    if (voiceState.recordTimer) clearInterval(voiceState.recordTimer);
+
+    const orb = document.getElementById('voiceRecordOrb');
+    if (orb) {
+        orb.style.background = 'var(--primary)';
+        orb.textContent = '🎙️';
+    }
+
+    try { if (voiceState.recordProcessor) voiceState.recordProcessor.disconnect(); } catch (_) {}
+    try { if (voiceState.recordStream) voiceState.recordStream.getTracks().forEach(t => t.stop()); } catch (_) {}
+    try { if (voiceState.recordCtx) await voiceState.recordCtx.close(); } catch (_) {}
+
+    const totalLen = voiceState.recordBuffers.reduce((acc, b) => acc + b.length, 0);
+    if (totalLen < voiceState.recordSampleRate * 0.8) {
+        const st = document.getElementById('voiceRecordStatus');
+        if (st) st.textContent = 'Grabación muy corta (< 1s). Intentá hablar al menos 3–5 segundos.';
+        return;
+    }
+
+    const merged = new Float32Array(totalLen);
+    let offset = 0;
+    for (const b of voiceState.recordBuffers) {
+        merged.set(b, offset);
+        offset += b.length;
+    }
+
+    const resampled16k = voiceResampleLinear(merged, voiceState.recordSampleRate, 16000);
+    const b64 = voiceEncodeWAVBase64(resampled16k, 16000);
+    const labelInput = document.getElementById('voiceSessionLabelInput');
+    const customLabel = (labelInput && labelInput.value.trim()) ? labelInput.value.trim() : 'Grabación de micrófono';
+
+    await runBackendVoiceAnalysis({
+        audio_b64: b64,
+        label: customLabel,
+        profile: voiceState.profile
+    });
+}
+
+async function handleVoiceFileUpload(inputEl) {
+    const file = inputEl.files && inputEl.files[0];
+    if (!file) return;
+    const st = document.getElementById('voiceRecordStatus');
+    if (st) st.textContent = `Decodificando y analizando ${file.name}...`;
+    try {
+        const arrayBuf = await file.arrayBuffer();
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const audioBuf = await ctx.decodeAudioData(arrayBuf);
+        const ch0 = audioBuf.getChannelData(0);
+        const resampled16k = voiceResampleLinear(ch0, audioBuf.sampleRate, 16000);
+        const b64 = voiceEncodeWAVBase64(resampled16k, 16000);
+        await ctx.close();
+        inputEl.value = '';
+        await runBackendVoiceAnalysis({
+            audio_b64: b64,
+            label: file.name,
+            profile: voiceState.profile
+        });
+    } catch (err) {
+        showToast('Error al procesar el archivo de audio: ' + err.message);
+    }
+}
+
+async function analyzeSelectedVoiceSample() {
+    const sel = document.getElementById('voiceSampleSelect');
+    if (!sel || !sel.value) {
+        showToast('Seleccioná una muestra primero');
+        return;
+    }
+    await runBackendVoiceAnalysis({
+        sample_name: sel.value,
+        label: `Muestra: ${sel.value}`,
+        profile: voiceState.profile
+    });
+}
+
+async function runBackendVoiceAnalysis(payload) {
+    const st = document.getElementById('voiceRecordStatus');
+    if (st) st.textContent = '⏳ Analizando voz (Timbre VFP, Naturalidad, F0 y Salud Vocal)...';
+    try {
+        const res = await api(eel.analyze_voice_recording, payload);
+        if (!res || !res.ok) {
+            throw new Error((res && res.error) || 'Error en análisis');
+        }
+        voiceState.currentSession = res.session;
+        showToast('✨ ¡Análisis de voz completado y guardado!');
+        const content = document.getElementById('personalContent');
+        if (content) await renderPersonalVoice(content);
+    } catch (err) {
+        if (st) st.textContent = 'Error en análisis: ' + err.message;
+        showToast('Error: ' + err.message);
+    }
+}
+
+function renderVoiceSessionDetailInto(container, session) {
+    if (!container || !session) return;
+    const r = session.result || {};
+    const vh = session.voice_health || {};
+    const comp = r.composite || {};
+    const vfp = r.vfp || {};
+    const nat = r.naturalness || {};
+    const f0 = r.f0 || {};
+    const vad = r.vad || {};
+    const aud = r.audio || {};
+    const feats = vh.features || {};
+
+    const finalScore = comp.final_score != null ? comp.final_score : (session.final_score || 0);
+    const baseScore = comp.base_score != null ? comp.base_score : (session.base_score || 0);
+    const vfpScore = vfp.vfp_standard_score != null ? vfp.vfp_standard_score : (session.vfp_score || 0);
+    const natScore = nat.score != null ? nat.score : (session.naturalness_score || 0);
+    const f0Mean = f0.mean_hz != null ? f0.mean_hz : (session.f0_mean_hz || null);
+    const f0Std = f0.standard_deviation_hz != null ? f0.standard_deviation_hz : (session.f0_std_hz || 0);
+
+    const ruleKey = comp.rule || session.rule_code || 'continuous';
+    const rInfo = VOICE_RULE_INFO[ruleKey] || VOICE_RULE_INFO.continuous;
+    const passed = finalScore >= 60;
+
+    const audioSrc = session.audio_b64 ? `data:audio/wav;base64,${session.audio_b64}` : '';
+
+    let html = `
+    <div class="card" style="margin-bottom:14px;border-left:4px solid ${passed ? 'var(--sage)' : 'var(--primary)'}">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px">
+            <div>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <span class="tag ${rInfo.tagClass}">${rInfo.badge}</span>
+                    <span style="font-size:0.78rem;color:var(--text-muted)">${esc(session.label || 'Sesión')} · ${fmtDate(session.date)}</span>
+                </div>
+                <h3 style="margin:6px 0 4px;font-size:1.2rem">${passed ? `🎉 ¡Objetivo alcanzado! (${finalScore.toFixed(1)} pts)` : `Evaluación: ${finalScore.toFixed(1)} pts — En entrenamiento`}</h3>
+                <div style="font-size:0.84rem;color:var(--text-muted)">${esc(rInfo.desc)}</div>
+            </div>
+            ${audioSrc ? `<div><audio controls src="${audioSrc}" style="height:36px"></audio></div>` : ''}
+        </div>
+    </div>
+
+    <div class="stats-row" style="grid-template-columns:repeat(auto-fit,minmax(175px,1fr));margin-bottom:14px">
+        <div class="card" style="padding:14px;margin:0">
+            <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;font-weight:700">Puntuación General</div>
+            <div style="font-size:1.75rem;font-weight:800;color:var(--primary);margin:4px 0">${finalScore.toFixed(1)}</div>
+            <div style="font-size:0.76rem;color:var(--text-muted)">Base: ${baseScore.toFixed(1)} / 100 (≥60 aprueba)</div>
+        </div>
+        <div class="card" style="padding:14px;margin:0">
+            <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;font-weight:700">Timbre / Resonancia (S)</div>
+            <div style="font-size:1.75rem;font-weight:800;color:#E75480;margin:4px 0">${vfpScore.toFixed(1)}</div>
+            <div style="font-size:0.76rem;color:var(--text-muted)">${vfp.window_count || 0} ventanas · Brillo vocal</div>
+        </div>
+        <div class="card" style="padding:14px;margin:0">
+            <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;font-weight:700">Naturalidad (N)</div>
+            <div style="font-size:1.75rem;font-weight:800;color:#25A6A0;margin:4px 0">${natScore.toFixed(1)}</div>
+            <div style="font-size:0.76rem;color:var(--text-muted)">${natScore >= 50 ? 'Fonación relajada (≥50)' : 'Fonación tensa (<50)'}</div>
+        </div>
+        <div class="card" style="padding:14px;margin:0">
+            <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;font-weight:700">Tono Promedio (F0)</div>
+            <div style="font-size:1.75rem;font-weight:800;color:var(--lavender);margin:4px 0">${f0Mean ? f0Mean.toFixed(1) + ' Hz' : 'N/A'}</div>
+            <div style="font-size:0.76rem;color:var(--text-muted)">${f0Mean ? `Nota ${voiceHzToNote(f0Mean)} · ±${f0Std.toFixed(1)} Hz` : 'Sin tono'} · (${session.fem_pct || 0}% >165Hz)</div>
+        </div>
+    </div>
+
+    <div class="card" style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+            <div class="card-title" style="margin:0">📈 Línea de Tiempo Acústica: Tono F0 (Hz), Timbre (S) y Naturalidad (N)</div>
+            <div style="font-size:0.78rem;color:var(--text-muted)">Duración: ${(aud.analyzed_seconds || session.duration_seconds || 0).toFixed(2)}s · Habla efectiva VAD: ${(vad.speech_seconds || session.speech_seconds || 0).toFixed(2)}s</div>
+        </div>
+        <canvas id="voiceTimelineCanvas" style="width:100%;height:250px;background:var(--bg-base);border-radius:10px;display:block"></canvas>
+        <div style="display:flex;gap:16px;font-size:0.78rem;color:var(--text-muted);margin-top:8px;flex-wrap:wrap">
+            <span>● <strong style="color:var(--primary)">Curva F0 (Hz)</strong> (Línea punteada: 165 Hz)</span>
+            <span>● <strong style="color:#E75480">Timbre VFP (0–100)</strong></span>
+            <span>● <strong style="color:#25A6A0">Naturalidad (0–100)</strong></span>
+            <span>▬ <strong style="color:#7CA5F5">Segmentos de habla activa (VAD)</strong></span>
+        </div>
+    </div>`;
+
+    if (vh && vh.health_score != null) {
+        const isHealthy = !vh.is_disordered;
+        html += `
+        <div class="card">
+            <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+                <div class="card-title" style="margin:0">🩺 Diagnóstico de Salud y Estabilidad Vocal (14 Métricas Clínicas)</div>
+                <span class="tag ${isHealthy ? 'tag-sage' : 'tag-rose'}">${isHealthy ? '✅ Saludable (≥30 · Sin ronquera)' : '⚠️ Posible fatiga o ronquera (<30)'}</span>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px">
+                <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
+                    <div style="font-size:0.72rem;color:var(--text-muted)">Salud Vocal</div>
+                    <div style="font-size:1.25rem;font-weight:700;color:${isHealthy ? 'var(--sage)' : 'var(--rose)'}">${vh.health_score.toFixed(1)} / 100</div>
+                </div>
+                <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
+                    <div style="font-size:0.72rem;color:var(--text-muted)">HNR (Claridad Armónica)</div>
+                    <div style="font-size:1.25rem;font-weight:700">${feats.hnr_db != null ? feats.hnr_db.toFixed(2) + ' dB' : '--'}</div>
+                </div>
+                <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
+                    <div style="font-size:0.72rem;color:var(--text-muted)">CPPS (Prominencia Cepstral)</div>
+                    <div style="font-size:1.25rem;font-weight:700">${feats.cpps_db != null ? feats.cpps_db.toFixed(2) + ' dB' : '--'}</div>
+                </div>
+                <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
+                    <div style="font-size:0.72rem;color:var(--text-muted)">Jitter / Shimmer Local</div>
+                    <div style="font-size:1.15rem;font-weight:700">${((feats.jitter_local || 0) * 100).toFixed(2)}% / ${((feats.shimmer_local || 0) * 100).toFixed(2)}%</div>
+                </div>
+                <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
+                    <div style="font-size:0.72rem;color:var(--text-muted)">Mediana / IQR F0</div>
+                    <div style="font-size:1.15rem;font-weight:700">${feats.f0_median != null ? feats.f0_median.toFixed(0) : '--'} Hz (±${feats.f0_iqr != null ? feats.f0_iqr.toFixed(0) : '--'})</div>
+                </div>
+                <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
+                    <div style="font-size:0.72rem;color:var(--text-muted)">Fracción Sonora</div>
+                    <div style="font-size:1.15rem;font-weight:700">${feats.voiced_fraction != null ? (feats.voiced_fraction * 100).toFixed(0) + '%' : '--'}</div>
+                </div>
+            </div>
+        </div>`;
+    }
+
+    container.innerHTML = html;
+    setTimeout(() => drawVoiceTimelineChart(r), 20);
+}
+
+function drawVoiceTimelineChart(r) {
+    const canvas = document.getElementById('voiceTimelineCanvas');
+    if (!canvas || !r) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width = canvas.clientWidth || 750;
+    const h = canvas.height = 250;
+    ctx.clearRect(0, 0, w, h);
+
+    const duration = Math.max(0.1, (r.audio && r.audio.analyzed_seconds) || 5.0);
+    const padL = 46, padR = 20, padT = 18, padB = 26;
+    const plotW = w - padL - padR;
+    const plotH = h - padT - padB;
+
+    const xOf = t => padL + (t / duration) * plotW;
+    const yOfHz = hz => padT + (1 - (Math.min(320, Math.max(70, hz)) - 70) / (320 - 70)) * plotH;
+    const yOfScore = sc => padT + (1 - Math.min(100, Math.max(0, sc)) / 100) * plotH;
+
+    // VAD segments
+    ctx.fillStyle = 'rgba(124, 165, 245, 0.10)';
+    ((r.vad && r.vad.segments) || []).forEach(seg => {
+        const x1 = xOf(seg.start_seconds);
+        const x2 = xOf(seg.end_seconds);
+        ctx.fillRect(x1, padT, Math.max(2, x2 - x1), plotH);
+    });
+
+    // 165 Hz threshold line
+    const y165 = yOfHz(165);
+    ctx.strokeStyle = 'rgba(242, 139, 168, 0.55)';
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(padL, y165);
+    ctx.lineTo(w - padR, y165);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = '#a8929e';
+    ctx.font = '11px Outfit, sans-serif';
+    ctx.fillText('165 Hz', 4, y165 + 4);
+    ctx.fillText('300 Hz', 4, yOfHz(300) + 4);
+    ctx.fillText('100 Hz', 4, yOfHz(100) + 4);
+
+    // VFP curve
+    const vfpWins = (r.vfp && r.vfp.windows) || [];
+    if (vfpWins.length > 0) {
+        ctx.strokeStyle = '#E75480';
+        ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        vfpWins.forEach((win, i) => {
+            const xm = xOf((win.start_seconds + win.end_seconds) / 2);
+            const ym = yOfScore(win.vfp_standard_score);
+            if (i === 0) ctx.moveTo(xm, ym);
+            else ctx.lineTo(xm, ym);
+        });
+        ctx.stroke();
+    }
+
+    // Naturalness curve
+    const natWins = (r.naturalness && r.naturalness.windows) || [];
+    if (natWins.length > 0) {
+        ctx.strokeStyle = '#25A6A0';
+        ctx.lineWidth = 2.2;
+        ctx.beginPath();
+        natWins.forEach((win, i) => {
+            const xm = xOf((win.start_seconds + win.end_seconds) / 2);
+            const ym = yOfScore(win.score);
+            if (i === 0) ctx.moveTo(xm, ym);
+            else ctx.lineTo(xm, ym);
+        });
+        ctx.stroke();
+    }
+
+    // F0 curve
+    const f0Wins = (r.f0 && r.f0.windows) || [];
+    ctx.strokeStyle = '#F28BA8';
+    ctx.lineWidth = 2.5;
+    let penDown = false;
+    ctx.beginPath();
+    f0Wins.forEach(win => {
+        if (win.f0_hz == null) {
+            penDown = false;
+            return;
+        }
+        const xm = xOf((win.start_seconds + win.end_seconds) / 2);
+        const ym = yOfHz(win.f0_hz);
+        if (!penDown) {
+            ctx.moveTo(xm, ym);
+            penDown = true;
+        } else {
+            ctx.lineTo(xm, ym);
+        }
+    });
+    ctx.stroke();
+
+    // Time axis
+    ctx.fillStyle = '#a8929e';
+    const stepS = Math.max(1, Math.round(duration / 6));
+    for (let s = 0; s <= duration; s += stepS) {
+        ctx.fillText(`${s.toFixed(0)}s`, xOf(s) - 6, h - 6);
+    }
+}
+
+// --- SUBTAB 2: REAL-TIME PITCH MONITOR (F0) ---
+function renderVoiceLivePitchSubTab(el) {
+    const pText = (VOICE_PASSAGES[parseInt(voiceState.passageIdx) || 0] || VOICE_PASSAGES[0]).text;
+    el.innerHTML = `
+    <div class="card" style="margin-bottom:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+            <div>
+                <div class="card-title" style="margin:0">📈 Monitor de Tono Fundamental (F0) en Tiempo Real</div>
+                <div style="font-size:0.8rem;color:var(--text-muted)">La línea de 165 Hz divide la zona masculina/andrógena (<165 Hz) de la zona femenina (>165 Hz)</div>
+            </div>
+            <div style="display:flex;gap:8px">
+                <button id="voiceLivePitchBtn" class="btn btn-primary" onclick="toggleVoiceLivePitch()">▶️ Iniciar Monitoreo</button>
+                <button class="btn btn-secondary" onclick="clearVoiceLivePitch()">🔄 Limpiar</button>
+            </div>
+        </div>
+
+        <div class="stats-row" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr));margin-bottom:14px">
+            <div style="background:var(--bg-base);padding:12px 14px;border-radius:12px;border:1px solid var(--border)">
+                <div style="font-size:0.74rem;color:var(--text-muted)">TONO ACTUAL</div>
+                <div id="vLiveCurrentHz" style="font-size:1.6rem;font-weight:800;color:var(--primary)">-- Hz</div>
+                <div id="vLiveCurrentNote" style="font-size:0.78rem;color:var(--text-muted)">Nota: --</div>
+            </div>
+            <div style="background:var(--bg-base);padding:12px 14px;border-radius:12px;border:1px solid var(--border)">
+                <div style="font-size:0.74rem;color:var(--text-muted)">PROMEDIO DE SESIÓN</div>
+                <div id="vLiveAvgHz" style="font-size:1.6rem;font-weight:800;color:var(--lavender)">-- Hz</div>
+                <div id="vLiveRangeHz" style="font-size:0.78rem;color:var(--text-muted)">Rango: -- a -- Hz</div>
+            </div>
+            <div style="background:var(--bg-base);padding:12px 14px;border-radius:12px;border:1px solid var(--border)">
+                <div style="font-size:0.74rem;color:var(--text-muted)">TIEMPO EN ZONA >165 HZ</div>
+                <div id="vLiveFemPct" style="font-size:1.6rem;font-weight:800;color:var(--sage)">--%</div>
+                <div style="font-size:0.78rem;color:var(--text-muted)">Objetivo recomendado: ≥75%</div>
+            </div>
+            <div style="background:var(--bg-base);padding:12px 14px;border-radius:12px;border:1px solid var(--border)">
+                <div style="font-size:0.74rem;color:var(--text-muted)">ESTABILIDAD (DESV. EST.)</div>
+                <div id="vLiveStdHz" style="font-size:1.6rem;font-weight:800">-- Hz</div>
+                <div id="vLiveConf" style="font-size:0.78rem;color:var(--text-muted)">Confianza: --</div>
+            </div>
+        </div>
+
+        <canvas id="voiceRealtimePitchCanvas" style="width:100%;height:290px;background:var(--bg-base);border-radius:12px;display:block"></canvas>
+    </div>
+
+    <div class="card">
+        <div class="card-title">📖 Pasaje de referencia para leer mientras monitoreás tu curva</div>
+        <div style="background:var(--bg-base);border-left:4px solid var(--primary);padding:14px 18px;border-radius:10px;line-height:1.7;font-size:0.95rem">${esc(pText)}</div>
+    </div>`;
+
+    setTimeout(() => drawVoiceLivePitchCanvas(), 20);
+}
+
+async function toggleVoiceLivePitch() {
+    if (!voiceState.livePitchActive) {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const source = ctx.createMediaStreamSource(stream);
+            const processor = ctx.createScriptProcessor(4096, 1, 1);
+
+            voiceState.livePitchStream = stream;
+            voiceState.livePitchCtx = ctx;
+            voiceState.livePitchProcessor = processor;
+            voiceState.livePitchActive = true;
+            let firstCall = true;
+            let busy = false;
+
+            const useNative = Boolean(voiceState.engineInfo && voiceState.engineInfo.native_available);
+
+            processor.onaudioprocess = async e => {
+                if (!voiceState.livePitchActive || busy) return;
+                const ch = e.inputBuffer.getChannelData(0);
+                if (useNative) {
+                    const resampled = Array.from(voiceResampleLinear(ch, ctx.sampleRate, 16000));
+                    busy = true;
+                    try {
+                        const res = await api(eel.process_voice_realtime_f0, resampled, firstCall);
+                        firstCall = false;
+                        if (res && res.frames && res.frames.length) {
+                            voiceState.livePitchFrames.push(...res.frames);
+                            if (voiceState.livePitchFrames.length > 240) {
+                                voiceState.livePitchFrames = voiceState.livePitchFrames.slice(-240);
+                            }
+                            updateVoiceLivePitchUI();
+                        }
+                    } catch (_) {}
+                    busy = false;
+                } else {
+                    const frame = voiceDetectPitchClient(ch, ctx.sampleRate);
+                    voiceState.livePitchFrames.push(frame);
+                    if (voiceState.livePitchFrames.length > 180) {
+                        voiceState.livePitchFrames = voiceState.livePitchFrames.slice(-180);
+                    }
+                    updateVoiceLivePitchUI();
+                }
+            };
+
+            source.connect(processor);
+            processor.connect(ctx.destination);
+            const btn = document.getElementById('voiceLivePitchBtn');
+            if (btn) btn.textContent = '⏸️ Pausar Monitoreo';
+        } catch (err) {
+            showToast('Error al iniciar micrófono: ' + err.message);
+        }
+    } else {
+        voiceState.livePitchActive = false;
+        try { if (voiceState.livePitchProcessor) voiceState.livePitchProcessor.disconnect(); } catch (_) {}
+        try { if (voiceState.livePitchStream) voiceState.livePitchStream.getTracks().forEach(t => t.stop()); } catch (_) {}
+        try { if (voiceState.livePitchCtx) await voiceState.livePitchCtx.close(); } catch (_) {}
+        const btn = document.getElementById('voiceLivePitchBtn');
+        if (btn) btn.textContent = '▶️ Iniciar Monitoreo';
+    }
+}
+
+function clearVoiceLivePitch() {
+    voiceState.livePitchFrames = [];
+    drawVoiceLivePitchCanvas();
+}
+
+function updateVoiceLivePitchUI() {
+    const voiced = voiceState.livePitchFrames.filter(f => f.voiced && f.f0_hz > 0);
+    if (!voiced.length) {
+        drawVoiceLivePitchCanvas();
+        return;
+    }
+    const latest = voiced[voiced.length - 1];
+    const elCur = document.getElementById('vLiveCurrentHz');
+    const elNote = document.getElementById('vLiveCurrentNote');
+    const elConf = document.getElementById('vLiveConf');
+    if (elCur) elCur.textContent = `${latest.f0_hz.toFixed(0)} Hz`;
+    if (elNote) elNote.textContent = `Nota: ${voiceHzToNote(latest.f0_hz)}`;
+    if (elConf) elConf.textContent = `Confianza: ${((latest.confidence || 0.9) * 100).toFixed(0)}%`;
+
+    const vals = voiced.map(f => f.f0_hz);
+    const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+    const min = Math.min(...vals);
+    const max = Math.max(...vals);
+    const std = Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / vals.length);
+    const femPct = (vals.filter(v => v > 165).length / vals.length) * 100;
+
+    const elAvg = document.getElementById('vLiveAvgHz');
+    const elRng = document.getElementById('vLiveRangeHz');
+    const elFem = document.getElementById('vLiveFemPct');
+    const elStd = document.getElementById('vLiveStdHz');
+    if (elAvg) elAvg.textContent = `${mean.toFixed(0)} Hz`;
+    if (elRng) elRng.textContent = `Rango: ${min.toFixed(0)} a ${max.toFixed(0)} Hz`;
+    if (elFem) elFem.textContent = `${femPct.toFixed(0)}%`;
+    if (elStd) elStd.textContent = `±${std.toFixed(1)} Hz`;
+
+    drawVoiceLivePitchCanvas();
+}
+
+function drawVoiceLivePitchCanvas() {
+    const canvas = document.getElementById('voiceRealtimePitchCanvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width = canvas.clientWidth || 750;
+    const h = canvas.height = 290;
+    ctx.clearRect(0, 0, w, h);
+
+    const minHz = 75, maxHz = 340;
+    const yOf = hz => h - 22 - ((Math.min(maxHz, Math.max(minHz, hz)) - minHz) / (maxHz - minHz)) * (h - 42);
+
+    const y165 = yOf(165);
+    const y220 = yOf(220);
+    ctx.fillStyle = 'rgba(242, 139, 168, 0.08)';
+    ctx.fillRect(0, 16, w, y165 - 16);
+    ctx.fillStyle = 'rgba(124, 165, 245, 0.06)';
+    ctx.fillRect(0, y165, w, h - 22 - y165);
+
+    ctx.strokeStyle = 'rgba(242, 139, 168, 0.6)';
+    ctx.setLineDash([6, 4]);
+    ctx.beginPath();
+    ctx.moveTo(0, y165);
+    ctx.lineTo(w, y165);
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(139, 211, 180, 0.35)';
+    ctx.beginPath();
+    ctx.moveTo(0, y220);
+    ctx.lineTo(w, y220);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = '#a8929e';
+    ctx.font = '11.5px Outfit, sans-serif';
+    ctx.fillText('165 Hz (Umbral femenino)', 10, y165 - 6);
+    ctx.fillText('220 Hz (A3 referencia)', 10, y220 - 6);
+
+    const frames = voiceState.livePitchFrames;
+    if (!frames.length) return;
+
+    ctx.lineWidth = 3;
+    for (let i = 1; i < frames.length; i++) {
+        const prev = frames[i - 1];
+        const curr = frames[i];
+        if (!prev.voiced || !curr.voiced || !prev.f0_hz || !curr.f0_hz) continue;
+        const x1 = ((i - 1) / Math.max(1, frames.length - 1)) * (w - 20) + 10;
+        const x2 = (i / Math.max(1, frames.length - 1)) * (w - 20) + 10;
+        ctx.strokeStyle = curr.f0_hz >= 165 ? '#F28BA8' : '#7CA5F5';
+        ctx.beginPath();
+        ctx.moveTo(x1, yOf(prev.f0_hz));
+        ctx.lineTo(x2, yOf(curr.f0_hz));
+        ctx.stroke();
+    }
+}
+
+// --- SUBTAB 3: PIANO REFERENCE & FFT SPECTRUM ---
+function renderVoiceToolsSubTab(el) {
+    el.innerHTML = `
+    <div class="card" style="margin-bottom:16px">
+        <div class="card-title">🎹 Teclado Acústico de Referencia Vocal (F#2 a F4)</div>
+        <div style="font-size:0.83rem;color:var(--text-muted);margin-bottom:12px">
+            Mantené presionada cualquier nota para escuchar su tono fundamental + primer armónico e imitar la altura con tu voz:
+            <span style="margin-left:8px">🟦 <strong>Masculino (F#2–C#3 · 92–139 Hz)</strong></span> ·
+            <span>⬜ <strong>Andrógeno (D3–F3 · 147–175 Hz)</strong></span> ·
+            <span>🌸 <strong>Femenino (F#3–C#4 · 185–277 Hz)</strong></span>
+        </div>
+        <div id="voicePianoGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:8px"></div>
+    </div>
+
+    <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+            <div>
+                <div class="card-title" style="margin:0">🌊 Analizador de Espectro y Formantes en Vivo (FFT)</div>
+                <div style="font-size:0.8rem;color:var(--text-muted)">Observá la distribución de armónicos y el centroide espectral (brillo/resonancia) entre 40 y 8000 Hz</div>
+            </div>
+            <button id="voiceToggleSpecBtn" class="btn btn-primary btn-sm" onclick="toggleVoiceSpectrum()">▶️ Iniciar Espectro</button>
+        </div>
+
+        <div class="stats-row" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:12px">
+            <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
+                <div style="font-size:0.72rem;color:var(--text-muted)">Pico Dominante</div>
+                <div id="vSpecPeak" style="font-size:1.3rem;font-weight:700;color:var(--primary)">-- Hz</div>
+            </div>
+            <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
+                <div style="font-size:0.72rem;color:var(--text-muted)">Centroide (Brillo)</div>
+                <div id="vSpecCentroid" style="font-size:1.3rem;font-weight:700;color:var(--lavender)">-- Hz</div>
+            </div>
+            <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
+                <div style="font-size:0.72rem;color:var(--text-muted)">Rolloff (85%)</div>
+                <div id="vSpecRolloff" style="font-size:1.3rem;font-weight:700;color:var(--sage)">-- Hz</div>
+            </div>
+            <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
+                <div style="font-size:0.72rem;color:var(--text-muted)">Nivel RMS</div>
+                <div id="vSpecDbfs" style="font-size:1.3rem;font-weight:700">-- dBFS</div>
+            </div>
+        </div>
+
+        <canvas id="voiceSpectrumCanvas" style="width:100%;height:260px;background:#110d10;border-radius:12px;display:block"></canvas>
+    </div>`;
+
+    initVoicePianoGrid();
+}
+
+function initVoicePianoGrid() {
+    const grid = document.getElementById('voicePianoGrid');
+    if (!grid) return;
+
+    const startNote = (midi, freq, el) => {
+        if (!voiceState.pianoCtx) voiceState.pianoCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const audioCtx = voiceState.pianoCtx;
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        stopNote(midi);
+
+        const osc1 = audioCtx.createOscillator();
+        const osc2 = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+
+        osc1.type = 'triangle';
+        osc1.frequency.value = freq;
+        osc2.type = 'sine';
+        osc2.frequency.value = freq * 2;
+
+        const g2 = audioCtx.createGain();
+        g2.gain.value = 0.22;
+
+        const now = audioCtx.currentTime;
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.linearRampToValueAtTime(0.35, now + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.18, now + 0.6);
+
+        osc1.connect(gain);
+        osc2.connect(g2);
+        g2.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        osc1.start();
+        osc2.start();
+        el.style.transform = 'scale(0.95)';
+        el.style.filter = 'brightness(1.2)';
+        voiceState.pianoVoices.set(midi, { osc1, osc2, gain, el });
+    };
+
+    const stopNote = (midi) => {
+        const v = voiceState.pianoVoices.get(midi);
+        if (!v || !voiceState.pianoCtx) return;
+        const now = voiceState.pianoCtx.currentTime;
+        try {
+            v.gain.gain.cancelScheduledValues(now);
+            v.gain.gain.setValueAtTime(v.gain.gain.value, now);
+            v.gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.06);
+        } catch (_) {}
+        setTimeout(() => {
+            try { v.osc1.stop(); v.osc2.stop(); } catch (_) {}
+        }, 70);
+        if (v.el) {
+            v.el.style.transform = '';
+            v.el.style.filter = '';
+        }
+        voiceState.pianoVoices.delete(midi);
+    };
+
+    VOICE_PIANO_NOTES.forEach(([name, midi]) => {
+        const freq = 440 * Math.pow(2, (midi - 69) / 12);
+        const key = document.createElement('div');
+        let bg = 'var(--bg-base)';
+        let border = 'var(--border)';
+        if (midi >= 42 && midi <= 49) {
+            bg = 'rgba(124, 165, 245, 0.16)';
+            border = '#7CA5F5';
+        } else if (midi >= 54 && midi <= 61) {
+            bg = 'rgba(242, 139, 168, 0.18)';
+            border = '#F28BA8';
+        }
+        key.style.cssText = `height:74px;border-radius:12px;border:1px solid ${border};background:${bg};padding:10px 12px;display:flex;flex-direction:column;justify-content:center;cursor:pointer;user-select:none;transition:all 0.08s`;
+        key.innerHTML = `<div style="font-size:1.1rem;font-weight:800">${name}</div><div style="font-size:0.76rem;color:var(--text-muted)">${freq.toFixed(1)} Hz</div>`;
+
+        key.addEventListener('pointerdown', e => {
+            e.preventDefault();
+            startNote(midi, freq, key);
+        });
+        key.addEventListener('pointerup', () => stopNote(midi));
+        key.addEventListener('pointerleave', () => stopNote(midi));
+        grid.appendChild(key);
+    });
+}
+
+async function toggleVoiceSpectrum() {
+    if (!voiceState.spectrumActive) {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const source = ctx.createMediaStreamSource(stream);
+            const analyser = ctx.createAnalyser();
+            analyser.fftSize = 2048;
+            analyser.smoothingTimeConstant = 0.65;
+            source.connect(analyser);
+
+            voiceState.specStream = stream;
+            voiceState.specCtx = ctx;
+            voiceState.specAnalyser = analyser;
+            voiceState.spectrumActive = true;
+
+            const btn = document.getElementById('voiceToggleSpecBtn');
+            if (btn) btn.textContent = '⏸️ Detener Espectro';
+
+            const freqData = new Float32Array(analyser.frequencyBinCount);
+            const timeData = new Float32Array(analyser.fftSize);
+            const canvas = document.getElementById('voiceSpectrumCanvas');
+            const cCtx = canvas ? canvas.getContext('2d') : null;
+
+            const loop = () => {
+                if (!voiceState.spectrumActive || !cCtx || !canvas) return;
+                analyser.getFloatFrequencyData(freqData);
+                analyser.getFloatTimeDomainData(timeData);
+
+                const binHz = ctx.sampleRate / analyser.fftSize;
+                const minBin = Math.max(1, Math.floor(40 / binHz));
+                const maxBin = Math.min(freqData.length - 1, Math.ceil(8000 / binHz));
+
+                let peakDb = -120, peakHz = 0, magSum = 0, weightedSum = 0;
+                const mags = [];
+                for (let i = minBin; i <= maxBin; i++) {
+                    const db = Math.max(-100, freqData[i]);
+                    const hz = i * binHz;
+                    const lin = Math.pow(10, db / 20);
+                    if (db > peakDb) { peakDb = db; peakHz = hz; }
+                    magSum += lin;
+                    weightedSum += hz * lin;
+                    mags.push({ hz, db, lin });
+                }
+
+                const centroid = magSum > 0 ? weightedSum / magSum : 0;
+                let accum = 0, rolloff = 0;
+                for (const m of mags) {
+                    accum += m.lin;
+                    if (accum >= magSum * 0.85) { rolloff = m.hz; break; }
+                }
+
+                let rms = 0;
+                for (let i = 0; i < timeData.length; i++) rms += timeData[i] * timeData[i];
+                rms = Math.sqrt(rms / timeData.length);
+                const dbfs = 20 * Math.log10(Math.max(1e-5, rms));
+
+                const elP = document.getElementById('vSpecPeak');
+                const elC = document.getElementById('vSpecCentroid');
+                const elR = document.getElementById('vSpecRolloff');
+                const elD = document.getElementById('vSpecDbfs');
+                if (elP) elP.textContent = `${peakHz.toFixed(0)} Hz`;
+                if (elC) elC.textContent = `${centroid.toFixed(0)} Hz`;
+                if (elR) elR.textContent = `${rolloff.toFixed(0)} Hz`;
+                if (elD) elD.textContent = `${dbfs.toFixed(1)} dBFS`;
+
+                const w = canvas.width = canvas.clientWidth || 750;
+                const h = canvas.height = 260;
+                cCtx.fillStyle = '#110d10';
+                cCtx.fillRect(0, 0, w, h);
+
+                const grad = cCtx.createLinearGradient(0, h, 0, 0);
+                grad.addColorStop(0, '#4A78D6');
+                grad.addColorStop(0.5, '#25A6A0');
+                grad.addColorStop(0.85, '#F28BA8');
+                grad.addColorStop(1, '#FFD9A0');
+
+                cCtx.fillStyle = grad;
+                const barCount = Math.min(140, mags.length);
+                const step = Math.max(1, Math.floor(mags.length / barCount));
+                const barW = (w - 30) / barCount;
+
+                for (let b = 0; b < barCount; b++) {
+                    const item = mags[b * step];
+                    const norm = Math.max(0, Math.min(1, (item.db + 95) / 85));
+                    const bh = norm * (h - 32);
+                    cCtx.fillRect(15 + b * barW, h - 18 - bh, Math.max(2, barW - 1.5), bh);
+                }
+
+                requestAnimationFrame(loop);
+            };
+            requestAnimationFrame(loop);
+        } catch (err) {
+            showToast('Error iniciando espectro: ' + err.message);
+        }
+    } else {
+        voiceState.spectrumActive = false;
+        try { if (voiceState.specStream) voiceState.specStream.getTracks().forEach(t => t.stop()); } catch (_) {}
+        try { if (voiceState.specCtx) await voiceState.specCtx.close(); } catch (_) {}
+        const btn = document.getElementById('voiceToggleSpecBtn');
+        if (btn) btn.textContent = '▶️ Iniciar Espectro';
+    }
+}
+
+// --- SUBTAB 4: EVOLUTION TREND & RECORDING HISTORY ---
+function renderVoiceHistorySubTab(el) {
+    const list = voiceState.sessions || [];
+    let html = `
+    <div class="card" style="margin-bottom:16px">
+        <div class="card-title">📈 Evolución Histórica de Puntuación General, Timbre (S) y Tono (F0)</div>
+        <canvas id="voiceHistoryTrendCanvas" style="width:100%;height:230px;background:var(--bg-base);border-radius:10px;display:block"></canvas>
+    </div>
+
+    <div class="card">
+        <div class="card-title">🗂️ Registro de Evaluaciones y Grabaciones (${list.length})</div>`;
+
+    if (list.length === 0) {
+        html += `<div class="empty-state"><div class="empty-icon">🎙️</div><h3>Sin sesiones registradas</h3><p>Grabá tu primera práctica en la pestaña «Evaluar y Salud Vocal»</p></div></div>`;
+        el.innerHTML = html;
+        return;
+    }
+
+    html += `<div style="display:flex;flex-direction:column;gap:10px">`;
+    for (const s of list) {
+        const sc = parseFloat(s.final_score || 0).toFixed(1);
+        const vfp = parseFloat(s.vfp_score || 0).toFixed(1);
+        const nat = parseFloat(s.naturalness_score || 0).toFixed(1);
+        const f0 = s.f0_mean_hz ? `${parseFloat(s.f0_mean_hz).toFixed(0)} Hz (${voiceHzToNote(s.f0_mean_hz)})` : '--';
+        const vh = s.health_score != null ? ` · Salud: ${parseFloat(s.health_score).toFixed(0)}` : '';
+        const passed = parseFloat(s.final_score || 0) >= 60;
+
+        html += `
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;padding:12px 16px;background:var(--bg-base);border:1px solid ${s.pinned ? 'var(--primary)' : 'var(--border)'};border-radius:12px">
+            <div>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    ${s.pinned ? '<span title="Fijada">📌</span>' : ''}
+                    <strong style="font-size:0.95rem">${esc(s.label)}</strong>
+                    <span class="tag ${passed ? 'tag-sage' : 'tag-lavender'}">Puntaje: ${sc}</span>
+                    <span style="font-size:0.76rem;color:var(--text-muted)">${fmtDate(s.date)}</span>
+                </div>
+                <div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">
+                    Timbre S: <strong>${vfp}</strong> · Naturalidad N: <strong>${nat}</strong> · Tono F0: <strong>${f0}</strong>${vh}
+                </div>
+            </div>
+            <div style="display:flex;gap:6px;align-items:center">
+                <button class="btn btn-secondary btn-sm" onclick="inspectVoiceSession(${s.id})">🔍 Ver análisis y audio</button>
+                <button class="btn btn-ghost btn-sm" title="Fijar / Desfijar" onclick="togglePinVoiceSessionUI(${s.id})">${s.pinned ? '📌' : '📍'}</button>
+                <button class="btn btn-ghost btn-sm" style="color:var(--rose)" onclick="deleteVoiceSessionUI(${s.id})">✕</button>
+            </div>
+        </div>`;
+    }
+    html += `</div></div>`;
+    el.innerHTML = html;
+
+    setTimeout(() => drawVoiceHistoryTrendChart(list), 20);
+}
+
+function drawVoiceHistoryTrendChart(list) {
+    const canvas = document.getElementById('voiceHistoryTrendCanvas');
+    if (!canvas || !list.length) return;
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width = canvas.clientWidth || 750;
+    const h = canvas.height = 230;
+    ctx.clearRect(0, 0, w, h);
+
+    const ordered = [...list].reverse();
+    const padL = 40, padR = 24, padT = 20, padB = 26;
+    const plotW = w - padL - padR;
+    const plotH = h - padT - padB;
+
+    const xOf = i => ordered.length === 1 ? w / 2 : padL + (i / (ordered.length - 1)) * plotW;
+    const yOf = sc => padT + (1 - Math.min(100, Math.max(0, sc)) / 100) * plotH;
+
+    // 60 pass threshold line
+    const y60 = yOf(60);
+    ctx.strokeStyle = 'rgba(139, 211, 180, 0.45)';
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.moveTo(padL, y60);
+    ctx.lineTo(w - padR, y60);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#a8929e';
+    ctx.font = '10.5px Outfit, sans-serif';
+    ctx.fillText('60 pts', 4, y60 + 3);
+
+    // Draw Final Score line
+    ctx.strokeStyle = '#F28BA8';
+    ctx.lineWidth = 2.8;
+    ctx.beginPath();
+    ordered.forEach((item, i) => {
+        const sc = parseFloat(item.final_score || 0);
+        const x = xOf(i), y = yOf(sc);
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    ordered.forEach((item, i) => {
+        const sc = parseFloat(item.final_score || 0);
+        const x = xOf(i), y = yOf(sc);
+        ctx.fillStyle = '#F28BA8';
+        ctx.beginPath();
+        ctx.arc(x, y, 4.5, 0, Math.PI * 2);
+        ctx.fill();
+    });
+}
+
+async function inspectVoiceSession(id) {
+    const res = await api(eel.get_voice_session_detail, id);
+    if (res && res.ok) {
+        voiceState.currentSession = res.session;
+        voiceState.subTab = 'analyze';
+        const content = document.getElementById('personalContent');
+        if (content) await renderPersonalVoice(content);
+    }
+}
+
+async function togglePinVoiceSessionUI(id) {
+    await api(eel.toggle_pin_voice_session, id);
+    const content = document.getElementById('personalContent');
+    if (content) await renderPersonalVoice(content);
+}
+
+async function deleteVoiceSessionUI(id) {
+    if (!confirm('¿Eliminar esta sesión de voz?')) return;
+    await api(eel.delete_voice_session, id);
+    if (voiceState.currentSession && voiceState.currentSession.id === id) {
+        voiceState.currentSession = null;
+    }
+    showToast('Sesión eliminada');
+    const content = document.getElementById('personalContent');
+    if (content) await renderPersonalVoice(content);
+}
+
+function openVoiceGuideModal() {
+    const html = `
+    <div style="line-height:1.65;font-size:0.9rem;display:flex;flex-direction:column;gap:12px">
+        <div style="background:var(--bg-base);padding:12px 14px;border-radius:10px;border-left:4px solid var(--primary)">
+            <strong>🌸 1. Los 3 Pilares de la Feminización Vocal (Pitchee)</strong>
+            <p style="margin:6px 0 0;color:var(--text-muted)">
+                La percepción de género de la voz no depende únicamente de hablar agudo. El modelo evalúa:
+                <br>• <strong>Timbre / Resonancia (S · 50% del puntaje)</strong>: El brillo espectral determinado por el tamaño del tracto vocal (elevar suavemente la laringe y llevar el sonido hacia los labios/paladar).
+                <br>• <strong>Naturalidad (N · 20% del puntaje)</strong>: Que la voz suene relajada, fluida y sin tensión ni falsete apretado (umbral saludable ≥50).
+                <br>• <strong>Tono Fundamental (F0 · 15% + 15% sinergia)</strong>: Mantener la frecuencia media por encima de <strong>165 Hz</strong> (idealmente entre 180 y 225 Hz, notas F#3 a A3).
+            </p>
+        </div>
+        <div style="background:var(--bg-base);padding:12px 14px;border-radius:10px;border-left:4px solid var(--sage)">
+            <strong>🩺 2. Salud Vocal y Prevención de Fatiga</strong>
+            <p style="margin:6px 0 0;color:var(--text-muted)">
+                • <strong>HNR (Relación Armónicos/Ruido)</strong>: Mide la pureza de la vibración de los pliegues vocales (valores más altos en dB indican voz limpia y sin aire excesivo).
+                <br>• <strong>CPPS</strong>: Prominencia del pico cepstral suavizado, el indicador clínico más fiable de estabilidad fonatoria.
+                <br>• <strong>Jitter y Shimmer</strong>: Pequeñas variaciones de frecuencia y amplitud ciclo a ciclo. Si sentís sequedad o el puntaje de salud baja de 30, hidratate y descansá la voz.
+            </p>
+        </div>
+        <div style="background:var(--bg-base);padding:12px 14px;border-radius:10px;border-left:4px solid var(--lavender)">
+            <strong>🎯 3. Cómo entrenar en tus sesiones diarias</strong>
+            <p style="margin:6px 0 0;color:var(--text-muted)">
+                1. Usá el <strong>Teclado de Piano</strong> para tocar F#3 (185 Hz) o G#3 (208 Hz) y entonar una "Mmmm" suave hacia los labios.<br>
+                2. Abrí <strong>Tono en Vivo (F0)</strong> y leé en voz alta buscando que más del 75% de tu curva permanezca en color rosa (>165 Hz).<br>
+                3. Grabá 5 a 10 segundos en <strong>Evaluar y Salud Vocal</strong> para registrar tu evolución semanal en la base de datos.
+            </p>
+        </div>
+    </div>`;
+    openModal('📚 Guía de Entrenamiento y Acústica Vocal', html);
+    const saveBtn = document.getElementById('modalSave');
+    if (saveBtn) {
+        saveBtn.textContent = 'Entendido';
+        saveBtn.onclick = closeModal;
+    }
+}
+
+window.renderPersonalVoice = renderPersonalVoice;
+window.switchVoiceSubTab = switchVoiceSubTab;
+window.setVoiceProfile = setVoiceProfile;
+window.onVoicePassageChange = onVoicePassageChange;
+window.showCustomVoicePassageModal = showCustomVoicePassageModal;
+window.toggleVoiceRecording = toggleVoiceRecording;
+window.handleVoiceFileUpload = handleVoiceFileUpload;
+window.analyzeSelectedVoiceSample = analyzeSelectedVoiceSample;
+window.toggleVoiceLivePitch = toggleVoiceLivePitch;
+window.clearVoiceLivePitch = clearVoiceLivePitch;
+window.toggleVoiceSpectrum = toggleVoiceSpectrum;
+window.inspectVoiceSession = inspectVoiceSession;
+window.togglePinVoiceSessionUI = togglePinVoiceSessionUI;
+window.deleteVoiceSessionUI = deleteVoiceSessionUI;
+window.openVoiceGuideModal = openVoiceGuideModal;
+window.cleanupVoiceStreams = cleanupVoiceStreams;

@@ -5903,3 +5903,862 @@ def _shortcut_create_reimbursement(payload):
         conn.close()
 
 
+
+
+# ===================== VOICE TRAINING & ANALYSIS (PITCHEE INTEGRATION) =====================
+
+import base64
+import ctypes
+from ctypes import c_char_p, c_double, c_float, c_int32, c_size_t, c_uint32, c_void_p, POINTER, Structure, CFUNCTYPE, byref
+import json
+import math
+import os
+import struct
+import tempfile
+import threading
+import wave
+from pathlib import Path
+
+_PITCHEE_BASE_DIR = Path(r"c:\voz")
+_PITCHEE_BIN_DIR = _PITCHEE_BASE_DIR / "bin"
+_PITCHEE_MODELS_DIR = _PITCHEE_BASE_DIR / "Pitchee-Android" / "third_party" / "Pitchee-core" / "models"
+_PITCHEE_SAMPLES_DIR = _PITCHEE_BASE_DIR / "Pitchee-Android" / "third_party" / "Pitchee-core" / "platform" / "android" / "benchmark" / "app" / "src" / "main" / "assets" / "test_audio"
+
+
+class _PitcheeVoiceHealthFeatures(Structure):
+    _fields_ = [
+        ("hnr_db", c_double),
+        ("cpps_db", c_double),
+        ("jitter_local", c_double),
+        ("jitter_rap", c_double),
+        ("jitter_ppq5", c_double),
+        ("shimmer_local", c_double),
+        ("shimmer_apq3", c_double),
+        ("shimmer_apq5", c_double),
+        ("f0_median", c_double),
+        ("f0_iqr", c_double),
+        ("f0_cv", c_double),
+        ("voiced_fraction", c_double),
+        ("intensity_median", c_double),
+        ("intensity_iqr", c_double),
+    ]
+
+
+class _PitcheeVoiceHealthResult(Structure):
+    _fields_ = [
+        ("health_score", c_double),
+        ("disorder_probability", c_double),
+        ("decision_threshold", c_double),
+        ("is_disordered", c_int32),
+        ("features", _PitcheeVoiceHealthFeatures),
+    ]
+
+
+class _PitcheeF0Frame(Structure):
+    _fields_ = [
+        ("timestamp_seconds", c_double),
+        ("f0_hz", c_float),
+        ("confidence", c_float),
+        ("voiced", c_int32),
+    ]
+
+
+class _PitcheeRealtimeF0Options(Structure):
+    _fields_ = [
+        ("struct_size", c_uint32),
+        ("version", c_uint32),
+        ("context_samples", c_int32),
+        ("inference_hop_samples", c_int32),
+        ("output_rate_hz", c_double),
+        ("start_timestamp_seconds", c_double),
+    ]
+
+
+_F0_CALLBACK_TYPE = CFUNCTYPE(None, POINTER(_PitcheeF0Frame), c_void_p)
+
+
+class _PitcheeNativeBridge:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.f0_lock = threading.Lock()
+        if hasattr(os, "add_dll_directory"):
+            os.add_dll_directory(str(_PITCHEE_BIN_DIR))
+        os.environ["PATH"] = str(_PITCHEE_BIN_DIR) + os.pathsep + os.environ.get("PATH", "")
+
+        dll_path = _PITCHEE_BIN_DIR / "pitchee_core.dll"
+        self.lib = ctypes.CDLL(str(dll_path))
+        self._setup_signatures()
+
+        self.analyzer = c_void_p()
+        err = ctypes.create_string_buffer(1024)
+        status = self.lib.pitchee_analyzer_create(
+            str(_PITCHEE_MODELS_DIR).encode("utf-8"),
+            4,
+            0,
+            c_float(75.0),
+            c_float(600.0),
+            c_float(0.9),
+            byref(self.analyzer),
+            err,
+            1024,
+        )
+        if status != 0:
+            raise RuntimeError(f"Failed to create Pitchee analyzer: {err.value.decode('utf-8', 'replace')}")
+
+        self.f0_stream = c_void_p()
+        opts = _PitcheeRealtimeF0Options(
+            struct_size=ctypes.sizeof(_PitcheeRealtimeF0Options),
+            version=1,
+            context_samples=5120,
+            inference_hop_samples=256,
+            output_rate_hz=30.0,
+            start_timestamp_seconds=0.0,
+        )
+        status = self.lib.pitchee_realtime_f0_create_with_options(
+            self.analyzer,
+            byref(opts),
+            byref(self.f0_stream),
+            err,
+            1024,
+        )
+        if status == 0 and self.f0_stream:
+            self.lib.pitchee_realtime_f0_warmup(self.f0_stream, err, 1024)
+
+    def _setup_signatures(self):
+        self.lib.pitchee_version.argtypes = []
+        self.lib.pitchee_version.restype = c_char_p
+
+        self.lib.pitchee_analyzer_create.argtypes = [
+            c_char_p, c_int32, c_int32, c_float, c_float, c_float,
+            POINTER(c_void_p), c_char_p, c_size_t
+        ]
+        self.lib.pitchee_analyzer_create.restype = c_int32
+
+        self.lib.pitchee_analyze_wav_file.argtypes = [
+            c_void_p, c_char_p, c_int32, c_void_p, c_void_p,
+            POINTER(c_void_p), c_char_p, c_size_t
+        ]
+        self.lib.pitchee_analyze_wav_file.restype = c_int32
+
+        self.lib.pitchee_analysis_run_voice_health_wav_file.argtypes = [
+            c_void_p, c_char_p, c_void_p, c_void_p,
+            POINTER(_PitcheeVoiceHealthResult), c_char_p, c_size_t
+        ]
+        self.lib.pitchee_analysis_run_voice_health_wav_file.restype = c_int32
+
+        self.lib.pitchee_realtime_f0_create_with_options.argtypes = [
+            c_void_p, POINTER(_PitcheeRealtimeF0Options), POINTER(c_void_p), c_char_p, c_size_t
+        ]
+        self.lib.pitchee_realtime_f0_create_with_options.restype = c_int32
+
+        self.lib.pitchee_realtime_f0_warmup.argtypes = [c_void_p, c_char_p, c_size_t]
+        self.lib.pitchee_realtime_f0_warmup.restype = c_int32
+
+        self.lib.pitchee_realtime_f0_process.argtypes = [
+            c_void_p, POINTER(c_float), c_size_t, _F0_CALLBACK_TYPE, c_void_p, c_char_p, c_size_t
+        ]
+        self.lib.pitchee_realtime_f0_process.restype = c_int32
+
+        self.lib.pitchee_realtime_f0_reset.argtypes = [c_void_p]
+        self.lib.pitchee_realtime_f0_reset.restype = None
+
+        self.lib.pitchee_string_free.argtypes = [c_void_p]
+        self.lib.pitchee_string_free.restype = None
+
+    def version(self) -> str:
+        v = self.lib.pitchee_version()
+        return v.decode("utf-8") if v else "0.5.0"
+
+    def analyze_wav(self, wav_path: Path, profile: str = "feminization") -> dict:
+        profile_enum = 1 if profile == "masculinization" else 0
+        out_json = c_void_p()
+        err = ctypes.create_string_buffer(1024)
+        with self.lock:
+            status = self.lib.pitchee_analyze_wav_file(
+                self.analyzer,
+                str(wav_path).encode("utf-8"),
+                profile_enum,
+                None,
+                None,
+                byref(out_json),
+                err,
+                1024,
+            )
+        if status != 0:
+            raise RuntimeError(err.value.decode("utf-8", "replace"))
+        try:
+            raw_str = ctypes.cast(out_json, c_char_p).value.decode("utf-8")
+            return json.loads(raw_str)
+        finally:
+            self.lib.pitchee_string_free(out_json)
+
+    def analyze_voice_health(self, wav_path: Path) -> dict:
+        res = _PitcheeVoiceHealthResult()
+        err = ctypes.create_string_buffer(1024)
+        with self.lock:
+            status = self.lib.pitchee_analysis_run_voice_health_wav_file(
+                self.analyzer,
+                str(wav_path).encode("utf-8"),
+                None,
+                None,
+                byref(res),
+                err,
+                1024,
+            )
+        if status != 0:
+            raise RuntimeError(err.value.decode("utf-8", "replace"))
+
+        def clean_num(v):
+            return None if (math.isnan(v) or math.isinf(v)) else round(float(v), 4)
+
+        f = res.features
+        return {
+            "health_score": clean_num(res.health_score),
+            "disorder_probability": clean_num(res.disorder_probability),
+            "decision_threshold": clean_num(res.decision_threshold),
+            "is_disordered": bool(res.is_disordered),
+            "features": {
+                "hnr_db": clean_num(f.hnr_db),
+                "cpps_db": clean_num(f.cpps_db),
+                "jitter_local": clean_num(f.jitter_local),
+                "jitter_rap": clean_num(f.jitter_rap),
+                "jitter_ppq5": clean_num(f.jitter_ppq5),
+                "shimmer_local": clean_num(f.shimmer_local),
+                "shimmer_apq3": clean_num(f.shimmer_apq3),
+                "shimmer_apq5": clean_num(f.shimmer_apq5),
+                "f0_median": clean_num(f.f0_median),
+                "f0_iqr": clean_num(f.f0_iqr),
+                "f0_cv": clean_num(f.f0_cv),
+                "voiced_fraction": clean_num(f.voiced_fraction),
+                "intensity_median": clean_num(f.intensity_median),
+                "intensity_iqr": clean_num(f.intensity_iqr),
+            },
+        }
+
+    def process_realtime_f0(self, samples_f32: list, reset: bool = False) -> list:
+        if not self.f0_stream:
+            return []
+        frames = []
+
+        @_F0_CALLBACK_TYPE
+        def cb(frame_ptr, _user_data):
+            fr = frame_ptr.contents
+            frames.append({
+                "timestamp_seconds": round(float(fr.timestamp_seconds), 4),
+                "f0_hz": round(float(fr.f0_hz), 2) if fr.voiced else None,
+                "confidence": round(float(fr.confidence), 3),
+                "voiced": bool(fr.voiced),
+            })
+
+        arr_type = c_float * len(samples_f32)
+        c_samples = arr_type(*samples_f32)
+        err = ctypes.create_string_buffer(1024)
+        with self.f0_lock:
+            if reset:
+                self.lib.pitchee_realtime_f0_reset(self.f0_stream)
+            if len(samples_f32) > 0:
+                self.lib.pitchee_realtime_f0_process(
+                    self.f0_stream,
+                    c_samples,
+                    len(samples_f32),
+                    cb,
+                    None,
+                    err,
+                    1024,
+                )
+        return frames
+
+
+_PITCHEE_ENGINE_INSTANCE = None
+_PITCHEE_INIT_ATTEMPTED = False
+_PITCHEE_INIT_LOCK = threading.Lock()
+
+
+def _get_pitchee_engine():
+    global _PITCHEE_ENGINE_INSTANCE, _PITCHEE_INIT_ATTEMPTED
+    with _PITCHEE_INIT_LOCK:
+        if _PITCHEE_INIT_ATTEMPTED:
+            return _PITCHEE_ENGINE_INSTANCE
+        _PITCHEE_INIT_ATTEMPTED = True
+        try:
+            if (_PITCHEE_BIN_DIR / "pitchee_core.dll").exists() and _PITCHEE_MODELS_DIR.exists():
+                _PITCHEE_ENGINE_INSTANCE = _PitcheeNativeBridge()
+        except Exception:
+            _PITCHEE_ENGINE_INSTANCE = None
+        return _PITCHEE_ENGINE_INSTANCE
+
+
+def _dsp_fallback_analyze_wav(wav_path: Path, profile: str = "feminization"):
+    """
+    Pure-Python DSP acoustic analyzer used when running in Cloud/PWA (where C++ DLLs are absent).
+    Computes autocorrelation F0 pitch contours, VAD segments, spectral brightness/resonance (VFP),
+    harmonic stability / naturalness, and clinical voice health metrics (Jitter, Shimmer, HNR).
+    """
+    with wave.open(str(wav_path), "rb") as wf:
+        sr = wf.getframerate()
+        n_frames = wf.getnframes()
+        n_ch = wf.getnchannels()
+        sampwidth = wf.getsampwidth()
+        raw = wf.readframes(n_frames)
+
+    if sampwidth == 2:
+        fmt = f"<{n_frames * n_ch}h"
+        ints = struct.unpack(fmt, raw)
+        if n_ch > 1:
+            samples = [ints[i] / 32768.0 for i in range(0, len(ints), n_ch)]
+        else:
+            samples = [x / 32768.0 for x in ints]
+    else:
+        samples = [0.0] * max(1, n_frames)
+
+    duration = len(samples) / float(sr) if sr > 0 else 0.0
+    win_sec = 0.05
+    win_len = max(64, int(sr * win_sec))
+    min_lag = max(1, int(sr / 450.0))
+    max_lag = max(min_lag + 2, int(sr / 75.0))
+
+    f0_windows = []
+    vfp_windows = []
+    nat_windows = []
+    vad_segments = []
+
+    voiced_f0s = []
+    period_lengths = []
+    voiced_rmss = []
+    hnr_vals = []
+    vfp_scores = []
+    nat_scores = []
+
+    in_speech = False
+    seg_start = 0.0
+    speech_sec = 0.0
+
+    num_wins = max(1, len(samples) // win_len)
+    for w_idx in range(num_wins):
+        start_s = round(w_idx * win_sec, 3)
+        end_s = round((w_idx + 1) * win_sec, 3)
+        chunk = samples[w_idx * win_len : (w_idx + 1) * win_len]
+        if not chunk:
+            continue
+
+        energy = sum(s * s for s in chunk) / len(chunk)
+        rms = math.sqrt(energy)
+
+        if rms < 0.012:
+            f0_windows.append({"start_seconds": start_s, "end_seconds": end_s, "f0_hz": None})
+            if in_speech:
+                in_speech = False
+                if start_s - seg_start >= 0.10:
+                    vad_segments.append({
+                        "start_seconds": seg_start,
+                        "end_seconds": start_s,
+                        "speech_start_seconds": round(speech_sec, 3),
+                        "speech_end_seconds": round(speech_sec + (start_s - seg_start), 3)
+                    })
+                    speech_sec += (start_s - seg_start)
+            continue
+
+        sub = chunk[::2]
+        n_sub = len(sub)
+        sub_min_lag = max(1, min_lag // 2)
+        sub_max_lag = min(n_sub // 2 - 1, max_lag // 2)
+        best_lag = 0
+        best_corr = -1.0
+        norm0 = sum(x * x for x in sub) + 1e-9
+
+        for lag in range(sub_min_lag, sub_max_lag + 1):
+            c = 0.0
+            for i in range(n_sub - lag):
+                c += sub[i] * sub[i + lag]
+            r = c / norm0
+            if r > best_corr:
+                best_corr = r
+                best_lag = lag
+
+        if best_corr >= 0.32 and best_lag > 0:
+            f0_hz = float(sr) / (best_lag * 2.0)
+            if 75.0 <= f0_hz <= 420.0:
+                f0_windows.append({"start_seconds": start_s, "end_seconds": end_s, "f0_hz": round(f0_hz, 2)})
+                voiced_f0s.append(f0_hz)
+                period_lengths.append(1.0 / f0_hz)
+                voiced_rmss.append(rms)
+
+                r_clamped = min(0.985, max(0.05, best_corr))
+                hnr_w = 10.0 * math.log10(r_clamped / (1.0 - r_clamped))
+                hnr_vals.append(hnr_w)
+
+                zcr = 0
+                for i in range(1, len(chunk)):
+                    if (chunk[i - 1] >= 0) != (chunk[i] >= 0):
+                        zcr += 1
+                zcr_hz = (zcr / (2.0 * win_sec))
+                fem_f0_norm = min(100.0, max(0.0, (f0_hz - 115.0) / (235.0 - 115.0) * 100.0))
+                bright_norm = min(100.0, max(0.0, (zcr_hz - 250.0) / (1400.0 - 250.0) * 100.0))
+                raw_vfp = 0.65 * fem_f0_norm + 0.35 * bright_norm
+                if profile == "masculinization":
+                    raw_vfp = 100.0 - raw_vfp
+                vfp_scores.append(raw_vfp)
+
+                strain_penalty = max(0.0, (f0_hz - 265.0) * 0.35)
+                nat_w = min(98.0, max(25.0, (best_corr * 105.0) - strain_penalty))
+                nat_scores.append(nat_w)
+
+                if len(vfp_scores) % 4 == 0:
+                    vfp_windows.append({
+                        "start_seconds": max(0.0, round(end_s - 0.2, 3)),
+                        "end_seconds": end_s,
+                        "vfp_standard_score": round(raw_vfp, 2)
+                    })
+                    nat_windows.append({
+                        "start_seconds": max(0.0, round(end_s - 0.2, 3)),
+                        "end_seconds": end_s,
+                        "score": round(nat_w, 2)
+                    })
+
+                if not in_speech:
+                    in_speech = True
+                    seg_start = start_s
+                continue
+
+        f0_windows.append({"start_seconds": start_s, "end_seconds": end_s, "f0_hz": None})
+        if in_speech:
+            in_speech = False
+            if start_s - seg_start >= 0.10:
+                vad_segments.append({
+                    "start_seconds": seg_start,
+                    "end_seconds": start_s,
+                    "speech_start_seconds": round(speech_sec, 3),
+                    "speech_end_seconds": round(speech_sec + (start_s - seg_start), 3)
+                })
+                speech_sec += (start_s - seg_start)
+
+    if in_speech and (duration - seg_start) >= 0.10:
+        vad_segments.append({
+            "start_seconds": seg_start,
+            "end_seconds": round(duration, 3),
+            "speech_start_seconds": round(speech_sec, 3),
+            "speech_end_seconds": round(speech_sec + (duration - seg_start), 3)
+        })
+        speech_sec += (duration - seg_start)
+
+    if voiced_f0s:
+        mean_f0 = sum(voiced_f0s) / len(voiced_f0s)
+        std_f0 = math.sqrt(sum((x - mean_f0) ** 2 for x in voiced_f0s) / len(voiced_f0s))
+        sorted_f0 = sorted(voiced_f0s)
+        median_f0 = sorted_f0[len(sorted_f0) // 2]
+        q75 = sorted_f0[int(len(sorted_f0) * 0.75)]
+        q25 = sorted_f0[int(len(sorted_f0) * 0.25)]
+        f0_iqr = q75 - q25
+    else:
+        mean_f0 = None
+        std_f0 = 0.0
+        median_f0 = 0.0
+        f0_iqr = 0.0
+
+    vfp_mean = sum(vfp_scores) / len(vfp_scores) if vfp_scores else 40.0
+    nat_mean = sum(nat_scores) / len(nat_scores) if nat_scores else 65.0
+
+    if mean_f0 is None:
+        base_score = vfp_mean
+        final_score = vfp_mean
+        rule = "f0_unavailable"
+        cap = None
+        limited = False
+        boosted = False
+    else:
+        if profile == "masculinization":
+            p_score = min(100.0, max(0.0, (185.0 - mean_f0) / (185.0 - 105.0) * 100.0))
+        else:
+            p_score = min(100.0, max(0.0, (mean_f0 - 125.0) / (220.0 - 125.0) * 100.0))
+        synergy = math.sqrt(max(0.0, vfp_mean * p_score))
+        base_score = 0.50 * vfp_mean + 0.20 * nat_mean + 0.15 * p_score + 0.15 * synergy
+        final_score = base_score
+        rule = "continuous"
+        cap = None
+        limited = False
+        boosted = False
+
+        if profile == "feminization":
+            if mean_f0 <= 165.0 and nat_mean < 50.0:
+                rule = "low_f0_stylized_cap"
+                cap = 20.0
+                final_score = min(base_score, cap)
+                limited = base_score > cap
+            elif mean_f0 <= 165.0:
+                rule = "low_f0_natural_cap"
+                cap = 59.0
+                final_score = min(base_score, cap)
+                limited = base_score > cap
+            elif nat_mean < 50.0:
+                rule = "high_f0_stylized_cap"
+                cap = 30.0
+                final_score = min(base_score, cap)
+                limited = base_score > cap
+            elif vfp_mean < 50.0:
+                rule = "high_f0_male_cap"
+                cap = 59.0
+                final_score = min(base_score, cap)
+                limited = base_score > cap
+            elif mean_f0 > 165.0 and nat_mean >= 80.0 and vfp_mean >= 50.0:
+                rule = "pass_boost"
+                boosted = True
+                final_score = min(100.0, max(60.0, base_score * 1.08))
+
+    if len(period_lengths) > 2:
+        diffs = [abs(period_lengths[i] - period_lengths[i - 1]) for i in range(1, len(period_lengths))]
+        jitter_local = (sum(diffs) / len(diffs)) / (sum(period_lengths) / len(period_lengths) + 1e-9)
+    else:
+        jitter_local = 0.015
+
+    if len(voiced_rmss) > 2:
+        adiffs = [abs(voiced_rmss[i] - voiced_rmss[i - 1]) for i in range(1, len(voiced_rmss))]
+        shimmer_local = (sum(adiffs) / len(adiffs)) / (sum(voiced_rmss) / len(voiced_rmss) + 1e-9)
+    else:
+        shimmer_local = 0.045
+
+    hnr_db = sum(hnr_vals) / len(hnr_vals) if hnr_vals else 14.5
+    cpps_db = round(hnr_db * 0.85 + 4.0, 3)
+    health_score = min(99.0, max(15.0, 55.0 + (hnr_db - 10.0) * 3.2 - jitter_local * 120.0))
+    disorder_prob = round(max(0.01, min(0.99, (100.0 - health_score) / 100.0)), 4)
+
+    result_dict = {
+        "schema_version": 3,
+        "model_version": "dsp-cloud-v1",
+        "score_profile": profile,
+        "audio": {
+            "source_sample_rate": sr,
+            "source_channels": 1,
+            "input_seconds": round(duration, 2),
+            "analyzed_seconds": round(duration, 2),
+        },
+        "vad": {
+            "segment_count": len(vad_segments),
+            "speech_seconds": round(speech_sec, 2),
+            "segments": vad_segments,
+        },
+        "f0": {
+            "window_seconds": win_sec,
+            "mean_hz": round(mean_f0, 2) if mean_f0 else None,
+            "standard_deviation_hz": round(std_f0, 2),
+            "voiced_window_count": len(voiced_f0s),
+            "windows": f0_windows,
+        },
+        "vfp": {
+            "vfp_standard_score": round(vfp_mean, 2),
+            "window_count": len(vfp_windows),
+            "windows": vfp_windows,
+        },
+        "naturalness": {
+            "score": round(nat_mean, 2),
+            "window_count": len(nat_windows),
+            "windows": nat_windows,
+        },
+        "composite": {
+            "base_score": round(base_score, 2),
+            "final_score": round(final_score, 2),
+            "cap": cap,
+            "rule": rule,
+            "limited": limited,
+            "boosted": boosted,
+        },
+    }
+
+    health_dict = {
+        "health_score": round(health_score, 2),
+        "disorder_probability": disorder_prob,
+        "decision_threshold": 30.0,
+        "is_disordered": health_score < 30.0,
+        "features": {
+            "hnr_db": round(hnr_db, 3),
+            "cpps_db": round(cpps_db, 3),
+            "jitter_local": round(jitter_local, 4),
+            "jitter_rap": round(jitter_local * 0.65, 4),
+            "jitter_ppq5": round(jitter_local * 0.82, 4),
+            "shimmer_local": round(shimmer_local, 4),
+            "shimmer_apq3": round(shimmer_local * 0.55, 4),
+            "shimmer_apq5": round(shimmer_local * 0.72, 4),
+            "f0_median": round(median_f0, 2),
+            "f0_iqr": round(f0_iqr, 2),
+            "f0_cv": round(std_f0 / median_f0, 4) if median_f0 > 0 else 0.0,
+            "voiced_fraction": round(len(voiced_f0s) / float(max(1, num_wins)), 4),
+            "intensity_median": -18.5,
+            "intensity_iqr": 8.4,
+        },
+    }
+    return result_dict, health_dict
+
+
+def _ensure_initial_pitchee_migration(conn):
+    """Imports existing recordings from c:\\voz\\data\\history.json once if voice_sessions is empty."""
+    migrated = conn.execute("SELECT value FROM config WHERE key='pitchee_history_migrated_v1'").fetchone()
+    if migrated:
+        return
+    try:
+        hist_file = _PITCHEE_BASE_DIR / "data" / "history.json"
+        rec_dir = _PITCHEE_BASE_DIR / "data" / "recordings"
+        if hist_file.exists():
+            items = json.loads(hist_file.read_text(encoding="utf-8"))
+            for item in reversed(items):
+                res = item.get("result") or {}
+                vh = item.get("voice_health") or {}
+                comp = res.get("composite") or {}
+                vfp = res.get("vfp") or {}
+                nat = res.get("naturalness") or {}
+                f0 = res.get("f0") or {}
+                vad = res.get("vad") or {}
+                aud = res.get("audio") or {}
+                feats = (vh.get("features") if isinstance(vh, dict) else {}) or {}
+
+                f0_wins = [w.get("f0_hz") for w in (f0.get("windows") or []) if w.get("f0_hz") is not None]
+                fem_pct = (sum(1 for hz in f0_wins if hz > 165.0) / len(f0_wins) * 100.0) if f0_wins else 0.0
+
+                ts_ms = item.get("timestamp")
+                if ts_ms:
+                    dt_str = datetime.fromtimestamp(ts_ms / 1000.0, tz=AR_TZ).strftime("%Y-%m-%d")
+                else:
+                    dt_str = today()
+
+                audio_b64 = None
+                rec_id = item.get("id")
+                if rec_id and (rec_dir / f"{rec_id}.wav").exists():
+                    wav_bytes = (rec_dir / f"{rec_id}.wav").read_bytes()
+                    if len(wav_bytes) <= 2_500_000:
+                        audio_b64 = base64.b64encode(wav_bytes).decode("ascii")
+
+                conn.execute("""
+                    INSERT INTO voice_sessions (
+                        date, label, profile, duration_seconds, speech_seconds,
+                        final_score, base_score, vfp_score, naturalness_score,
+                        f0_mean_hz, f0_std_hz, fem_pct, health_score, hnr_db, cpps_db,
+                        jitter_local, shimmer_local, is_disordered, rule_code,
+                        engine_mode, result_json, health_json, audio_b64, pinned
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    dt_str,
+                    item.get("label") or "Muestra Pitchee",
+                    item.get("profile") or "feminization",
+                    aud.get("analyzed_seconds") or 0.0,
+                    vad.get("speech_seconds") or 0.0,
+                    comp.get("final_score") or 0.0,
+                    comp.get("base_score") or 0.0,
+                    vfp.get("vfp_standard_score") or 0.0,
+                    nat.get("score") or 0.0,
+                    f0.get("mean_hz") or 0.0,
+                    f0.get("standard_deviation_hz") or 0.0,
+                    round(fem_pct, 1),
+                    vh.get("health_score") if isinstance(vh, dict) else None,
+                    feats.get("hnr_db"),
+                    feats.get("cpps_db"),
+                    feats.get("jitter_local"),
+                    feats.get("shimmer_local"),
+                    1 if (isinstance(vh, dict) and vh.get("is_disordered")) else 0,
+                    comp.get("rule") or "continuous",
+                    "native",
+                    json.dumps(res, ensure_ascii=False),
+                    json.dumps(vh, ensure_ascii=False) if vh else None,
+                    audio_b64,
+                    1 if item.get("pinned") or item.get("Pinned") else 0
+                ))
+        conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('pitchee_history_migrated_v1', '1')")
+        conn.commit()
+    except Exception:
+        pass
+
+
+@eel.expose
+def get_voice_engine_status():
+    eng = _get_pitchee_engine()
+    samples = []
+    if _PITCHEE_SAMPLES_DIR.exists():
+        for f in sorted(_PITCHEE_SAMPLES_DIR.glob("*.wav")):
+            samples.append({"name": f.name, "size": f.stat().st_size})
+    return {
+        "ok": True,
+        "native_available": eng is not None,
+        "engine_version": f"PitcheeCore v{eng.version()} (C++ ONNX)" if eng else "Motor Acústico DSP (Web / Cloud)",
+        "samples": samples,
+    }
+
+
+@eel.expose
+def get_voice_sessions():
+    conn = get_connection()
+    try:
+        _ensure_initial_pitchee_migration(conn)
+        rows = conn.execute("""
+            SELECT id, date, label, profile, duration_seconds, speech_seconds,
+                   final_score, base_score, vfp_score, naturalness_score,
+                   f0_mean_hz, f0_std_hz, fem_pct, health_score, hnr_db, cpps_db,
+                   jitter_local, shimmer_local, is_disordered, rule_code,
+                   engine_mode, notes, pinned, created_at,
+                   CASE WHEN audio_b64 IS NOT NULL AND audio_b64 != '' THEN 1 ELSE 0 END AS has_audio
+            FROM voice_sessions
+            ORDER BY pinned DESC, id DESC
+        """).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+@eel.expose
+def get_voice_session_detail(session_id):
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT * FROM voice_sessions WHERE id=?", (session_id,)).fetchone()
+        if not row:
+            return {"ok": False, "error": "Sesión no encontrada"}
+        d = dict(row)
+        d["result"] = json.loads(d["result_json"]) if d.get("result_json") else None
+        d["voice_health"] = json.loads(d["health_json"]) if d.get("health_json") else None
+        d.pop("result_json", None)
+        d.pop("health_json", None)
+        return {"ok": True, "session": d}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def analyze_voice_recording(payload):
+    """
+    Analyzes a WAV recording (base64 or built-in sample) using PitcheeCore C++ ONNX when local,
+    or the pure-Python DSP fallback when in Cloud, and saves the session to SQLite.
+    """
+    conn = get_connection()
+    tmp_path = None
+    try:
+        profile = (payload or {}).get("profile") or "feminization"
+        label = ((payload or {}).get("label") or "Práctica de voz").strip()
+        notes = ((payload or {}).get("notes") or "").strip()
+        sample_name = (payload or {}).get("sample_name")
+        audio_b64 = (payload or {}).get("audio_b64") or ""
+
+        if sample_name:
+            src_path = _PITCHEE_SAMPLES_DIR / Path(sample_name).name
+            if not src_path.exists():
+                return {"ok": False, "error": f"Muestra {sample_name} no encontrada localmente."}
+            wav_bytes = src_path.read_bytes()
+            audio_b64 = base64.b64encode(wav_bytes).decode("ascii")
+            if label == "Práctica de voz":
+                label = f"Muestra: {sample_name}"
+        else:
+            if "," in audio_b64:
+                audio_b64 = audio_b64.split(",", 1)[1]
+            if not audio_b64:
+                return {"ok": False, "error": "No se recibió audio para analizar."}
+            wav_bytes = base64.b64decode(audio_b64)
+
+        fd, tmp_str = tempfile.mkstemp(suffix=".wav", prefix="nicole_voice_")
+        os.close(fd)
+        tmp_path = Path(tmp_str)
+        tmp_path.write_bytes(wav_bytes)
+
+        eng = _get_pitchee_engine()
+        if eng is not None:
+            result = eng.analyze_wav(tmp_path, profile=profile)
+            try:
+                health = eng.analyze_voice_health(tmp_path)
+            except Exception:
+                health = None
+            engine_mode = "native"
+        else:
+            result, health = _dsp_fallback_analyze_wav(tmp_path, profile=profile)
+            engine_mode = "dsp"
+
+        comp = result.get("composite") or {}
+        vfp = result.get("vfp") or {}
+        nat = result.get("naturalness") or {}
+        f0 = result.get("f0") or {}
+        vad = result.get("vad") or {}
+        aud = result.get("audio") or {}
+        feats = (health.get("features") if isinstance(health, dict) else {}) or {}
+
+        f0_wins = [w.get("f0_hz") for w in (f0.get("windows") or []) if w.get("f0_hz") is not None]
+        fem_pct = (sum(1 for hz in f0_wins if hz > 165.0) / len(f0_wins) * 100.0) if f0_wins else 0.0
+
+        stored_b64 = audio_b64 if len(wav_bytes) <= 2_500_000 else None
+        dt_str = today()
+
+        cur = conn.execute("""
+            INSERT INTO voice_sessions (
+                date, label, profile, duration_seconds, speech_seconds,
+                final_score, base_score, vfp_score, naturalness_score,
+                f0_mean_hz, f0_std_hz, fem_pct, health_score, hnr_db, cpps_db,
+                jitter_local, shimmer_local, is_disordered, rule_code,
+                engine_mode, result_json, health_json, audio_b64, notes, pinned
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        """, (
+            dt_str,
+            label,
+            profile,
+            aud.get("analyzed_seconds") or 0.0,
+            vad.get("speech_seconds") or 0.0,
+            comp.get("final_score") or 0.0,
+            comp.get("base_score") or 0.0,
+            vfp.get("vfp_standard_score") or 0.0,
+            nat.get("score") or 0.0,
+            f0.get("mean_hz") or 0.0,
+            f0.get("standard_deviation_hz") or 0.0,
+            round(fem_pct, 1),
+            health.get("health_score") if isinstance(health, dict) else None,
+            feats.get("hnr_db"),
+            feats.get("cpps_db"),
+            feats.get("jitter_local"),
+            feats.get("shimmer_local"),
+            1 if (isinstance(health, dict) and health.get("is_disordered")) else 0,
+            comp.get("rule") or "continuous",
+            engine_mode,
+            json.dumps(result, ensure_ascii=False),
+            json.dumps(health, ensure_ascii=False) if health else None,
+            stored_b64,
+            notes
+        ))
+        new_id = cur.lastrowid
+        conn.commit()
+        return get_voice_session_detail(new_id)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    finally:
+        if tmp_path and tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+        conn.close()
+
+
+@eel.expose
+def toggle_pin_voice_session(session_id):
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT pinned FROM voice_sessions WHERE id=?", (session_id,)).fetchone()
+        if not row:
+            return {"ok": False, "error": "No encontrado"}
+        new_val = 0 if row["pinned"] else 1
+        conn.execute("UPDATE voice_sessions SET pinned=? WHERE id=?", (new_val, session_id))
+        conn.commit()
+        return {"ok": True, "pinned": bool(new_val)}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def delete_voice_session(session_id):
+    conn = get_connection()
+    try:
+        conn.execute("DELETE FROM voice_sessions WHERE id=?", (session_id,))
+        conn.commit()
+        return {"ok": True}
+    finally:
+        conn.close()
+
+
+@eel.expose
+def process_voice_realtime_f0(samples_f32, reset=False):
+    eng = _get_pitchee_engine()
+    if eng is not None and isinstance(samples_f32, list):
+        try:
+            frames = eng.process_realtime_f0([float(x) for x in samples_f32], reset=bool(reset))
+            return {"ok": True, "frames": frames, "mode": "native"}
+        except Exception as e:
+            return {"ok": False, "error": str(e), "frames": []}
+    return {"ok": True, "frames": [], "mode": "client"}

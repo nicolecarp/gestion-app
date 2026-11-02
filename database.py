@@ -688,6 +688,36 @@ def init_db():
             submitted_at TEXT DEFAULT (datetime('now','-3 hours')),
             UNIQUE(plan_id, period_key)
         )""",
+        """CREATE TABLE IF NOT EXISTS voice_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            label TEXT DEFAULT 'Práctica de voz',
+            profile TEXT DEFAULT 'feminization',
+            duration_seconds REAL DEFAULT 0.0,
+            speech_seconds REAL DEFAULT 0.0,
+            final_score REAL DEFAULT 0.0,
+            base_score REAL DEFAULT 0.0,
+            vfp_score REAL DEFAULT 0.0,
+            naturalness_score REAL DEFAULT 0.0,
+            f0_mean_hz REAL DEFAULT 0.0,
+            f0_std_hz REAL DEFAULT 0.0,
+            fem_pct REAL DEFAULT 0.0,
+            health_score REAL,
+            hnr_db REAL,
+            cpps_db REAL,
+            jitter_local REAL,
+            shimmer_local REAL,
+            is_disordered INTEGER DEFAULT 0,
+            rule_code TEXT DEFAULT 'continuous',
+            engine_mode TEXT DEFAULT 'native',
+            result_json TEXT,
+            health_json TEXT,
+            audio_b64 TEXT,
+            notes TEXT,
+            pinned INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now','-3 hours'))
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_voice_sessions_date ON voice_sessions(date)",
     ]:
         try:
             conn.execute(stmt)

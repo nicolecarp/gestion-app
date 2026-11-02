@@ -7473,7 +7473,8 @@ function scheduleDailyNotificationTimer() {
 function unlockAudioOnUserTap() {
     try {
         if (navigator.audioSession) {
-            navigator.audioSession.type = 'ambient';
+            const isVoiceTab = (state.view === 'personal' && state.personalTab === 'voice');
+            navigator.audioSession.type = isVoiceTab ? 'play-and-record' : 'ambient';
         }
     } catch (_) {}
     try {
@@ -13348,6 +13349,14 @@ const voiceState = {
     pianoVoices: new Map()
 };
 
+function setIOSMicAudioSession(enableCapture) {
+    try {
+        if (navigator.audioSession) {
+            navigator.audioSession.type = enableCapture ? 'play-and-record' : 'ambient';
+        }
+    } catch (_) {}
+}
+
 function cleanupVoiceStreams() {
     if (voiceState.recording) {
         voiceState.recording = false;
@@ -13372,6 +13381,9 @@ function cleanupVoiceStreams() {
             try { v.osc1.stop(); v.osc2.stop(); } catch (_) {}
         });
         voiceState.pianoVoices.clear();
+    }
+    if (state.view !== 'personal' || state.personalTab !== 'voice') {
+        setIOSMicAudioSession(false);
     }
 }
 
@@ -13464,6 +13476,7 @@ function voiceDetectPitchClient(buf, sampleRate) {
 }
 
 async function renderPersonalVoice(el) {
+    setIOSMicAudioSession(true);
     const [engineStatus, sessions] = await Promise.all([
         api(eel.get_voice_engine_status),
         api(eel.get_voice_sessions)
@@ -13672,8 +13685,10 @@ async function toggleVoiceRecording() {
 
 async function startVoiceRecordingSession() {
     try {
+        setIOSMicAudioSession(true);
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        if (ctx.state === 'suspended') await ctx.resume();
         const source = ctx.createMediaStreamSource(stream);
         const processor = ctx.createScriptProcessor(4096, 1, 1);
 
@@ -14101,8 +14116,10 @@ function renderVoiceLivePitchSubTab(el) {
 async function toggleVoiceLivePitch() {
     if (!voiceState.livePitchActive) {
         try {
+            setIOSMicAudioSession(true);
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            if (ctx.state === 'suspended') await ctx.resume();
             const source = ctx.createMediaStreamSource(stream);
             const processor = ctx.createScriptProcessor(4096, 1, 1);
 
@@ -14387,8 +14404,10 @@ function initVoicePianoGrid() {
 async function toggleVoiceSpectrum() {
     if (!voiceState.spectrumActive) {
         try {
+            setIOSMicAudioSession(true);
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            if (ctx.state === 'suspended') await ctx.resume();
             const source = ctx.createMediaStreamSource(stream);
             const analyser = ctx.createAnalyser();
             analyser.fftSize = 2048;

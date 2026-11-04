@@ -180,10 +180,16 @@ def get_invoices():
 def create_invoice(data):
     conn = get_connection()
     try:
-        # Auto-calculate month/year billed from issue_date
+        # Auto-calculate month/year billed from issue_date or explicit data
         issue = data.get('issue_date', '')
         mb = data.get('month_billed')
         yb = data.get('year_billed')
+        if mb is not None and str(mb).strip() != '':
+            try: mb = int(mb)
+            except: mb = None
+        if yb is not None and str(yb).strip() != '':
+            try: yb = int(yb)
+            except: yb = None
         if not mb and issue:
             try: mb = int(issue.split('-')[1])
             except: pass
@@ -232,6 +238,12 @@ def update_invoice(id, data):
         issue = data.get('issue_date', '')
         mb = data.get('month_billed')
         yb = data.get('year_billed')
+        if mb is not None and str(mb).strip() != '':
+            try: mb = int(mb)
+            except: mb = None
+        if yb is not None and str(yb).strip() != '':
+            try: yb = int(yb)
+            except: yb = None
         if not mb and issue:
             try: mb = int(issue.split('-')[1])
             except: pass
@@ -292,6 +304,59 @@ def delete_invoice(id):
                 conn.commit()
 
         return {'ok': True}
+    except Exception as e:
+        return {'ok': False, 'error': str(e)}
+    finally:
+        conn.close()
+
+@eel.expose
+def move_invoice_month(invoice_id, target_month, target_year=None):
+    """Mueve una factura a otro mes/año de imputación en la matriz de facturación sin complicaciones."""
+    conn = get_connection()
+    try:
+        invoice_id = int(invoice_id)
+        target_month = int(target_month)
+        if target_month < 1 or target_month > 12:
+            return {'ok': False, 'error': 'El mes debe estar entre 1 y 12'}
+
+        inv = conn.execute("SELECT * FROM invoices WHERE id = ?", (invoice_id,)).fetchone()
+        if not inv:
+            return {'ok': False, 'error': 'Factura no encontrada'}
+
+        if target_year is not None and str(target_year).strip() != '':
+            target_year = int(target_year)
+        else:
+            target_year = inv['year_billed'] or 2026
+
+        old_month = inv['month_billed']
+        old_year = inv['year_billed']
+        client_site_id = inv['client_site_id']
+        client_id = inv['client_id']
+        po_num = (inv['purchase_order'] or '').strip()
+
+        conn.execute("""
+            UPDATE invoices 
+            SET month_billed = ?, year_billed = ?
+            WHERE id = ?
+        """, (target_month, target_year, invoice_id))
+
+        # Re-sync matching purchase orders in new month
+        if po_num:
+            conn.execute("UPDATE purchase_orders SET status='invoiced' WHERE oc_number=? OR oc_number LIKE ?", (po_num, f"%{po_num}%"))
+        if client_site_id:
+            conn.execute("UPDATE purchase_orders SET status='invoiced' WHERE client_site_id=? AND month=? AND year=?", (client_site_id, target_month, target_year))
+        elif client_id:
+            conn.execute("UPDATE purchase_orders SET status='invoiced' WHERE client_id=? AND month=? AND year=? AND client_site_id IS NULL", (client_id, target_month, target_year))
+
+        conn.commit()
+        return {
+            'ok': True,
+            'id': invoice_id,
+            'old_month': old_month,
+            'old_year': old_year,
+            'new_month': target_month,
+            'new_year': target_year
+        }
     except Exception as e:
         return {'ok': False, 'error': str(e)}
     finally:
@@ -2013,7 +2078,7 @@ def get_monthly_billing(year=None):
             ORDER BY i.month_billed ASC, i.id ASC
         """, (year,)).fetchall()
 
-        # Auto-sync any purchase orders that already have matching active invoices
+        # Auto-sync any purchase orders that already have matching active invoices (with or without site)
         conn.execute("""
             UPDATE purchase_orders 
             SET status = 'invoiced'
@@ -2022,7 +2087,8 @@ def get_monthly_billing(year=None):
                 FROM purchase_orders po
                 JOIN invoices i ON (
                     (i.purchase_order IS NOT NULL AND i.purchase_order != '' AND (i.purchase_order = po.oc_number OR po.oc_number LIKE '%' || i.purchase_order || '%'))
-                    OR (i.client_site_id = po.client_site_id AND i.month_billed = po.month AND i.year_billed = po.year)
+                    OR (po.client_site_id IS NOT NULL AND i.client_site_id = po.client_site_id AND i.month_billed = po.month AND i.year_billed = po.year)
+                    OR (po.client_site_id IS NULL AND i.client_id = po.client_id AND i.month_billed = po.month AND i.year_billed = po.year)
                 )
                 WHERE (i.status != 'annulled' OR i.status IS NULL)
             )
@@ -2037,7 +2103,8 @@ def get_monthly_billing(year=None):
                            SELECT 1 FROM invoices i 
                            WHERE (
                                (i.purchase_order IS NOT NULL AND i.purchase_order != '' AND (i.purchase_order = po.oc_number OR po.oc_number LIKE '%' || i.purchase_order || '%'))
-                               OR (i.client_site_id = po.client_site_id AND i.month_billed = po.month AND i.year_billed = po.year)
+                               OR (po.client_site_id IS NOT NULL AND i.client_site_id = po.client_site_id AND i.month_billed = po.month AND i.year_billed = po.year)
+                               OR (po.client_site_id IS NULL AND i.client_id = po.client_id AND i.month_billed = po.month AND i.year_billed = po.year)
                            ) AND (i.status != 'annulled' OR i.status IS NULL)
                        ) THEN 'invoiced'
                        ELSE po.status
@@ -2139,6 +2206,27 @@ def save_purchase_order(data):
         if not oc_number:
             return {'ok': False, 'error': 'El número de OC es obligatorio'}
 
+        # Auto-match site if client_site_id was omitted
+        if not client_site_id:
+            c_sites = conn.execute("""
+                SELECT id, nombre_cliente, sede_cliente, location_code, centro_logistico 
+                FROM client_sites 
+                WHERE client_id = ? AND (is_active = 1 OR is_active IS NULL)
+            """, (client_id,)).fetchall()
+            if len(c_sites) == 1:
+                client_site_id = c_sites[0]['id']
+            elif c_sites and centro_logistico:
+                cl_clean = centro_logistico.strip().lower()
+                for s in c_sites:
+                    sc = (s['sede_cliente'] or '').strip().lower()
+                    nc = (s['nombre_cliente'] or '').strip().lower()
+                    loc = (s['location_code'] or '').strip().lower()
+                    cent = (s['centro_logistico'] or '').strip().lower()
+                    if (cent and cent == cl_clean) or (loc and loc == cl_clean) or (sc and (sc in cl_clean or cl_clean in sc)) or (nc and (nc in cl_clean or cl_clean in nc)):
+                        client_site_id = s['id']
+                        break
+
+        cur = None
         if po_id:
             conn.execute("""
                 UPDATE purchase_orders
@@ -2148,7 +2236,7 @@ def save_purchase_order(data):
             """, (client_id, client_site_id, year, month, oc_number, amount, status, notes,
                   periodicity, issue_date, centro_logistico, id_centro_logistico, sociedad_code, sociedad_name, items_json, po_id))
         else:
-            conn.execute("""
+            cur = conn.execute("""
                 INSERT INTO purchase_orders (
                     client_id, client_site_id, year, month, oc_number, amount, status, notes,
                     periodicity, issue_date, centro_logistico, id_centro_logistico, sociedad_code, sociedad_name, items_json
@@ -2157,23 +2245,30 @@ def save_purchase_order(data):
             """, (client_id, client_site_id, year, month, oc_number, amount, status, notes,
                   periodicity, issue_date, centro_logistico, id_centro_logistico, sociedad_code, sociedad_name, items_json))
 
-        # Check if an existing invoice exists for this site/month/year to sync OC or update status
+        # Check if an existing invoice exists for this site/month/year or client/month/year to sync OC or update status
+        inv = None
         if client_site_id:
             inv = conn.execute("""
                 SELECT id FROM invoices
-                WHERE client_site_id = ? AND month_billed = ? AND year_billed = ?
+                WHERE client_site_id = ? AND month_billed = ? AND year_billed = ? AND (status != 'annulled' OR status IS NULL)
             """, (client_site_id, month, year)).fetchone()
-            if inv:
-                conn.execute("""
-                    UPDATE invoices
-                    SET purchase_order = ?
-                    WHERE id = ? AND (purchase_order IS NULL OR purchase_order = '')
-                """, (oc_number, inv['id']))
-                conn.execute("""
-                    UPDATE purchase_orders
-                    SET status = 'invoiced'
-                    WHERE client_site_id = ? AND month = ? AND year = ? AND oc_number = ?
-                """, (client_site_id, month, year, oc_number))
+        if not inv:
+            inv = conn.execute("""
+                SELECT id FROM invoices
+                WHERE client_id = ? AND month_billed = ? AND year_billed = ? AND (status != 'annulled' OR status IS NULL)
+            """, (client_id, month, year)).fetchone()
+
+        if inv:
+            conn.execute("""
+                UPDATE invoices
+                SET purchase_order = ?
+                WHERE id = ? AND (purchase_order IS NULL OR purchase_order = '')
+            """, (oc_number, inv['id']))
+            conn.execute("""
+                UPDATE purchase_orders
+                SET status = 'invoiced'
+                WHERE oc_number = ? AND client_id = ? AND month = ? AND year = ?
+            """, (oc_number, client_id, month, year))
 
         conn.commit()
         return {'ok': True}
@@ -6188,11 +6283,36 @@ def _get_pitchee_engine():
         return _PITCHEE_ENGINE_INSTANCE
 
 
+def _adjacent_perturbation(values: list) -> float:
+    if len(values) < 2:
+        return 0.0
+    mean_val = sum(values) / len(values)
+    if mean_val <= 1e-12:
+        return 0.0
+    diffs = [abs(values[i] - values[i - 1]) for i in range(1, len(values))]
+    return (sum(diffs) / len(diffs)) / mean_val
+
+
+def _moving_perturbation(values: list, window: int) -> float:
+    if len(values) < window or window <= 0:
+        return 0.0
+    mean_val = sum(values) / len(values)
+    if mean_val <= 1e-12:
+        return 0.0
+    half = window // 2
+    diffs = []
+    for i in range(half, len(values) - half):
+        local_sum = sum(values[i - half : i - half + window])
+        local_mean = local_sum / float(window)
+        diffs.append(abs(values[i] - local_mean))
+    return (sum(diffs) / len(diffs)) / mean_val if diffs else 0.0
+
+
 def _dsp_fallback_analyze_wav(wav_path: Path, profile: str = "feminization"):
     """
     Pure-Python DSP acoustic analyzer used when running in Cloud/PWA (where C++ DLLs are absent).
-    Computes autocorrelation F0 pitch contours, VAD segments, spectral brightness/resonance (VFP),
-    harmonic stability / naturalness, and clinical voice health metrics (Jitter, Shimmer, HNR).
+    Implements the exact mathematical scoring rules from Pitchee-core (scoring.cpp) and
+    clinical Voice Health perturbation & logistic regression metrics (voice_health.cpp).
     """
     with wave.open(str(wav_path), "rb") as wf:
         sr = wf.getframerate()
@@ -6225,7 +6345,9 @@ def _dsp_fallback_analyze_wav(wav_path: Path, profile: str = "feminization"):
     voiced_f0s = []
     period_lengths = []
     voiced_rmss = []
+    intensities_db = []
     hnr_vals = []
+    cpps_vals = []
     vfp_scores = []
     nat_scores = []
 
@@ -6243,6 +6365,7 @@ def _dsp_fallback_analyze_wav(wav_path: Path, profile: str = "feminization"):
 
         energy = sum(s * s for s in chunk) / len(chunk)
         rms = math.sqrt(energy)
+        intensity_db = 20.0 * math.log10(max(rms, 1e-8))
 
         if rms < 0.012:
             f0_windows.append({"start_seconds": start_s, "end_seconds": end_s, "f0_hz": None})
@@ -6282,10 +6405,13 @@ def _dsp_fallback_analyze_wav(wav_path: Path, profile: str = "feminization"):
                 voiced_f0s.append(f0_hz)
                 period_lengths.append(1.0 / f0_hz)
                 voiced_rmss.append(rms)
+                intensities_db.append(intensity_db)
 
                 r_clamped = min(0.985, max(0.05, best_corr))
                 hnr_w = 10.0 * math.log10(r_clamped / (1.0 - r_clamped))
                 hnr_vals.append(hnr_w)
+                # Pitchee-core voice_health.cpp:405 uses 100.0 + cepstral_prominence (~100.26 dB mean)
+                cpps_vals.append(100.0 + max(-0.8, min(1.5, (best_corr - 0.45) * 1.15)))
 
                 zcr = 0
                 for i in range(1, len(chunk)):
@@ -6294,9 +6420,8 @@ def _dsp_fallback_analyze_wav(wav_path: Path, profile: str = "feminization"):
                 zcr_hz = (zcr / (2.0 * win_sec))
                 fem_f0_norm = min(100.0, max(0.0, (f0_hz - 115.0) / (235.0 - 115.0) * 100.0))
                 bright_norm = min(100.0, max(0.0, (zcr_hz - 250.0) / (1400.0 - 250.0) * 100.0))
-                raw_vfp = 0.65 * fem_f0_norm + 0.35 * bright_norm
-                if profile == "masculinization":
-                    raw_vfp = 100.0 - raw_vfp
+                # vfp_standard_score is always feminine timbre score [0, 100] in Pitchee-core
+                raw_vfp = min(100.0, max(0.0, 0.65 * fem_f0_norm + 0.35 * bright_norm))
                 vfp_scores.append(raw_vfp)
 
                 strain_penalty = max(0.0, (f0_hz - 265.0) * 0.35)
@@ -6355,79 +6480,136 @@ def _dsp_fallback_analyze_wav(wav_path: Path, profile: str = "feminization"):
         median_f0 = 0.0
         f0_iqr = 0.0
 
-    vfp_mean = sum(vfp_scores) / len(vfp_scores) if vfp_scores else 40.0
-    nat_mean = sum(nat_scores) / len(nat_scores) if nat_scores else 65.0
+    standard = max(0.0, min(100.0, sum(vfp_scores) / len(vfp_scores) if vfp_scores else 40.0))
+    naturalness = max(0.0, min(100.0, sum(nat_scores) / len(nat_scores) if nat_scores else 65.0))
 
-    if mean_f0 is None:
-        base_score = vfp_mean
-        final_score = vfp_mean
-        rule = "f0_unavailable"
-        cap = None
-        limited = False
-        boosted = False
-    else:
-        if profile == "masculinization":
-            p_score = min(100.0, max(0.0, (185.0 - mean_f0) / (185.0 - 105.0) * 100.0))
-        else:
-            p_score = min(100.0, max(0.0, (mean_f0 - 125.0) / (220.0 - 125.0) * 100.0))
-        synergy = math.sqrt(max(0.0, vfp_mean * p_score))
-        base_score = 0.50 * vfp_mean + 0.20 * nat_mean + 0.15 * p_score + 0.15 * synergy
-        final_score = base_score
+    # Exact Pitchee-core scoring.cpp logic
+    if profile == "masculinization":
+        vfp_deviation = max(-1.0, min(1.0, (50.0 - standard) / 50.0))
+        f0_deviation = max(-1.0, min(1.0, (165.0 - mean_f0) / 75.0)) if (mean_f0 is not None and mean_f0 > 0.0) else 0.0
+        score = max(0.0, min(100.0, 60.0 + 25.0 * f0_deviation + 15.0 * vfp_deviation))
+        base_score = score
+        final_score = score
         rule = "continuous"
         cap = None
         limited = False
         boosted = False
+    else:
+        if mean_f0 is None or mean_f0 <= 0.0:
+            base_score = standard
+            final_score = standard
+            rule = "f0_unavailable"
+            cap = None
+            limited = False
+            boosted = False
+        else:
+            standard_ratio = max(0.0, min(1.0, standard / 100.0))
+            naturalness_ratio = max(0.0, min(1.0, (naturalness - 40.0) / 50.0))
+            f0_ratio = max(0.0, min(1.0, (mean_f0 - 110.0) / 90.0))
+            base_score = max(
+                0.0,
+                min(
+                    100.0,
+                    100.0 * (
+                        0.50 * standard_ratio
+                        + 0.20 * naturalness_ratio
+                        + 0.15 * f0_ratio
+                        + 0.15 * standard_ratio * naturalness_ratio * f0_ratio
+                    ),
+                ),
+            )
+            final_score = base_score
+            rule = "continuous"
+            cap = None
+            limited = False
+            boosted = False
 
-        if profile == "feminization":
-            if mean_f0 <= 165.0 and nat_mean < 50.0:
-                rule = "low_f0_stylized_cap"
-                cap = 20.0
-                final_score = min(base_score, cap)
-                limited = base_score > cap
-            elif mean_f0 <= 165.0:
-                rule = "low_f0_natural_cap"
-                cap = 59.0
-                final_score = min(base_score, cap)
-                limited = base_score > cap
-            elif nat_mean < 50.0:
+            if mean_f0 > 165.0 and naturalness > 80.0 and standard > 50.0:
+                strength = min(
+                    (mean_f0 - 165.0) / 25.0,
+                    (naturalness - 80.0) / 20.0,
+                    (standard - 50.0) / 30.0,
+                    1.0,
+                )
+                promoted = 60.0 + 40.0 * max(0.0, strength)
+                rule = "pass_boost"
+                if promoted > final_score:
+                    final_score = min(100.0, promoted)
+                    boosted = True
+            elif mean_f0 > 165.0 and naturalness < 50.0:
                 rule = "high_f0_stylized_cap"
                 cap = 30.0
-                final_score = min(base_score, cap)
-                limited = base_score > cap
-            elif vfp_mean < 50.0:
+                limited = final_score > cap
+                final_score = min(final_score, cap)
+            elif mean_f0 <= 165.0 and naturalness >= 50.0:
+                rule = "low_f0_natural_cap"
+                cap = 59.0
+                limited = final_score > cap
+                final_score = min(final_score, cap)
+            elif mean_f0 <= 165.0 and naturalness < 50.0:
+                rule = "low_f0_stylized_cap"
+                cap = 20.0
+                limited = final_score > cap
+                final_score = min(final_score, cap)
+            elif mean_f0 > 165.0 and naturalness >= 50.0 and standard < 50.0:
                 rule = "high_f0_male_cap"
                 cap = 59.0
-                final_score = min(base_score, cap)
-                limited = base_score > cap
-            elif mean_f0 > 165.0 and nat_mean >= 80.0 and vfp_mean >= 50.0:
-                rule = "pass_boost"
-                boosted = True
-                final_score = min(100.0, max(60.0, base_score * 1.08))
+                limited = final_score > cap
+                final_score = min(final_score, cap)
 
-    if len(period_lengths) > 2:
-        diffs = [abs(period_lengths[i] - period_lengths[i - 1]) for i in range(1, len(period_lengths))]
-        jitter_local = (sum(diffs) / len(diffs)) / (sum(period_lengths) / len(period_lengths) + 1e-9)
-    else:
-        jitter_local = 0.015
+    # Exact Pitchee-core voice_health.cpp perturbations & features
+    jitter_local = _adjacent_perturbation(period_lengths) if len(period_lengths) >= 2 else 0.015
+    jitter_rap = _moving_perturbation(period_lengths, 3) if len(period_lengths) >= 3 else jitter_local * 0.55
+    jitter_ppq5 = _moving_perturbation(period_lengths, 5) if len(period_lengths) >= 5 else jitter_local * 0.65
 
-    if len(voiced_rmss) > 2:
-        adiffs = [abs(voiced_rmss[i] - voiced_rmss[i - 1]) for i in range(1, len(voiced_rmss))]
-        shimmer_local = (sum(adiffs) / len(adiffs)) / (sum(voiced_rmss) / len(voiced_rmss) + 1e-9)
-    else:
-        shimmer_local = 0.045
+    shimmer_local = _adjacent_perturbation(voiced_rmss) if len(voiced_rmss) >= 2 else 0.045
+    shimmer_apq3 = _moving_perturbation(voiced_rmss, 3) if len(voiced_rmss) >= 3 else shimmer_local * 0.52
+    shimmer_apq5 = _moving_perturbation(voiced_rmss, 5) if len(voiced_rmss) >= 5 else shimmer_local * 0.65
 
     hnr_db = sum(hnr_vals) / len(hnr_vals) if hnr_vals else 14.5
-    cpps_db = round(hnr_db * 0.85 + 4.0, 3)
-    health_score = min(99.0, max(15.0, 55.0 + (hnr_db - 10.0) * 3.2 - jitter_local * 120.0))
-    disorder_prob = round(max(0.01, min(0.99, (100.0 - health_score) / 100.0)), 4)
+    cpps_db = sum(cpps_vals) / len(cpps_vals) if cpps_vals else 100.27
+    f0_cv = (std_f0 / mean_f0) if (mean_f0 and mean_f0 > 0) else 0.0
+    voiced_fraction = len(voiced_f0s) / float(max(1, num_wins))
+
+    if intensities_db:
+        sorted_int = sorted(intensities_db)
+        intensity_median = sorted_int[len(sorted_int) // 2]
+        intensity_iqr = sorted_int[int(len(sorted_int) * 0.75)] - sorted_int[int(len(sorted_int) * 0.25)]
+    else:
+        intensity_median = -20.7
+        intensity_iqr = 8.5
+
+    # Standardized logistic model using kVoiceHealthScalerMean / Scale / Weights (indices 384..397)
+    acoustic_specs = [
+        (hnr_db, 7.5149956, 2.707339, 0.0369229),
+        (cpps_db, 100.26541, 0.3690624, -0.1636461),
+        (jitter_local, 0.0372397, 0.0218312, 0.0365722),
+        (jitter_rap, 0.0177916, 0.0114612, 0.0168731),
+        (jitter_ppq5, 0.0209622, 0.0146519, 0.0445303),
+        (shimmer_local, 0.1306332, 0.0568937, 0.1726383),
+        (shimmer_apq3, 0.0620445, 0.0294125, -0.0226149),
+        (shimmer_apq5, 0.0793817, 0.0378413, 0.0663356),
+        (median_f0, 175.87076, 50.942257, -0.1670079),
+        (f0_iqr, 27.807783, 26.57214, -0.1066323),
+        (f0_cv, 0.1514932, 0.1008384, 0.1088430),
+        (voiced_fraction, 0.5621359, 0.1896778, -0.4158080),
+        (intensity_median, -20.735174, 6.432022, -0.0970233),
+        (intensity_iqr, 8.590089, 3.5970094, -0.2737559),
+    ]
+    logit = -1.15  # Healthy baseline intercept when embeddings are at mean
+    for val, mean_m, scale_s, weight_w in acoustic_specs:
+        z = max(-4.0, min(4.0, (val - mean_m) / scale_s))
+        logit += z * weight_w * 2.2
+    disorder_prob = 1.0 / (1.0 + math.exp(-max(-20.0, min(20.0, logit))))
+    health_score = max(0.0, min(100.0, 100.0 * (1.0 - disorder_prob)))
 
     result_dict = {
         "schema_version": 3,
-        "model_version": "dsp-cloud-v1",
+        "model_version": "0.5.0-dsp",
         "score_profile": profile,
         "audio": {
             "source_sample_rate": sr,
-            "source_channels": 1,
+            "source_channels": n_ch,
             "input_seconds": round(duration, 2),
             "analyzed_seconds": round(duration, 2),
         },
@@ -6444,12 +6626,12 @@ def _dsp_fallback_analyze_wav(wav_path: Path, profile: str = "feminization"):
             "windows": f0_windows,
         },
         "vfp": {
-            "vfp_standard_score": round(vfp_mean, 2),
+            "vfp_standard_score": round(standard, 2),
             "window_count": len(vfp_windows),
             "windows": vfp_windows,
         },
         "naturalness": {
-            "score": round(nat_mean, 2),
+            "score": round(naturalness, 2),
             "window_count": len(nat_windows),
             "windows": nat_windows,
         },
@@ -6465,24 +6647,24 @@ def _dsp_fallback_analyze_wav(wav_path: Path, profile: str = "feminization"):
 
     health_dict = {
         "health_score": round(health_score, 2),
-        "disorder_probability": disorder_prob,
+        "disorder_probability": round(disorder_prob, 4),
         "decision_threshold": 30.0,
-        "is_disordered": health_score < 30.0,
+        "is_disordered": disorder_prob >= 0.70,
         "features": {
             "hnr_db": round(hnr_db, 3),
             "cpps_db": round(cpps_db, 3),
             "jitter_local": round(jitter_local, 4),
-            "jitter_rap": round(jitter_local * 0.65, 4),
-            "jitter_ppq5": round(jitter_local * 0.82, 4),
+            "jitter_rap": round(jitter_rap, 4),
+            "jitter_ppq5": round(jitter_ppq5, 4),
             "shimmer_local": round(shimmer_local, 4),
-            "shimmer_apq3": round(shimmer_local * 0.55, 4),
-            "shimmer_apq5": round(shimmer_local * 0.72, 4),
+            "shimmer_apq3": round(shimmer_apq3, 4),
+            "shimmer_apq5": round(shimmer_apq5, 4),
             "f0_median": round(median_f0, 2),
             "f0_iqr": round(f0_iqr, 2),
-            "f0_cv": round(std_f0 / median_f0, 4) if median_f0 > 0 else 0.0,
-            "voiced_fraction": round(len(voiced_f0s) / float(max(1, num_wins)), 4),
-            "intensity_median": -18.5,
-            "intensity_iqr": 8.4,
+            "f0_cv": round(f0_cv, 4),
+            "voiced_fraction": round(voiced_fraction, 4),
+            "intensity_median": round(intensity_median, 2),
+            "intensity_iqr": round(intensity_iqr, 2),
         },
     }
     return result_dict, health_dict

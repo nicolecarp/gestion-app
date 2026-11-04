@@ -1198,6 +1198,92 @@ async function buscarRucSunat() {
 }
 
 
+
+// ===================== QUICK MOVE INVOICE MONTH =====================
+
+function showMoveInvoiceMonthModal(invoiceId, currentMonth, currentYear, invNumber) {
+    currentMonth = parseInt(currentMonth) || 1;
+    currentYear = parseInt(currentYear) || (state.matrixYear || 2026);
+    const monthNames = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+    
+    let html = `
+    <div style="padding:6px 0">
+        <div style="margin-bottom:14px;padding:10px 14px;background:var(--bg-base);border-radius:10px;border-left:4px solid var(--primary)">
+            <div style="font-size:0.9rem">
+                Comprobante: <strong style="font-family:monospace;font-size:1.05rem;color:var(--accent)">${esc(invNumber || '')}</strong>
+            </div>
+            <div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">
+                Actualmente asignada a la matriz de: <span class="tag tag-primary" style="font-weight:700">${monthNames[currentMonth - 1]} ${currentYear}</span>
+            </div>
+        </div>
+
+        <div style="margin-bottom:14px">
+            <label style="font-weight:700;font-size:0.8rem;color:var(--text-muted);display:block;margin-bottom:6px">Año de Imputación:</label>
+            <div style="display:flex;gap:6px">
+                ${[2024, 2025, 2026, 2027].map(y => `
+                    <button type="button" class="btn ${y === currentYear ? 'btn-primary' : 'btn-secondary'} btn-sm" id="moveYearBtn_${y}" onclick="selectMoveInvoiceYear(${y})" style="flex:1;font-weight:700">
+                        ${y}
+                    </button>
+                `).join('')}
+            </div>
+            <input type="hidden" id="moveInvoiceSelectedYear" value="${currentYear}">
+        </div>
+
+        <label style="font-weight:700;font-size:0.8rem;color:var(--text-muted);display:block;margin-bottom:8px">Seleccionar Mes de Destino (1 clic para mover sin rodeos):</label>
+        <div style="display:grid;grid-template-columns:repeat(3, 1fr);gap:8px">
+            ${monthNames.map((name, idx) => {
+                const mNum = idx + 1;
+                const isCur = mNum === currentMonth;
+                return `
+                <button type="button" class="btn ${isCur ? 'btn-secondary' : 'btn-ghost'} btn-sm" style="padding:10px 6px;text-align:center;font-weight:${isCur ? '700' : '600'};border:1px solid ${isCur ? 'var(--primary)' : 'var(--border-light)'};background:${isCur ? 'rgba(99,102,241,0.12)' : 'var(--card)'}" onclick="executeMoveInvoiceMonth(${invoiceId}, ${mNum}, '${esc(invNumber)}')">
+                    ${name}
+                    ${isCur ? '<span style="display:block;font-size:0.68rem;color:var(--primary);font-weight:700">(Actual)</span>' : ''}
+                </button>`;
+            }).join('')}
+        </div>
+    </div>
+    `;
+
+    openModal(`📅 Mover Factura a otro Mes`, html);
+    const saveBtn = document.getElementById('modalSave');
+    if (saveBtn) {
+        saveBtn.textContent = 'Cancelar';
+        saveBtn.onclick = closeModal;
+    }
+}
+
+function selectMoveInvoiceYear(year) {
+    const hidden = document.getElementById('moveInvoiceSelectedYear');
+    if (hidden) hidden.value = year;
+    [2024, 2025, 2026, 2027].forEach(y => {
+        const btn = document.getElementById(`moveYearBtn_${y}`);
+        if (btn) {
+            btn.className = (y === year) ? 'btn btn-primary btn-sm' : 'btn btn-secondary btn-sm';
+            btn.style.flex = '1';
+            btn.style.fontWeight = '700';
+        }
+    });
+}
+
+async function executeMoveInvoiceMonth(invoiceId, targetMonth, invNumber) {
+    const yearEl = document.getElementById('moveInvoiceSelectedYear');
+    const targetYear = yearEl ? parseInt(yearEl.value) : (state.matrixYear || 2026);
+    const monthNames = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+
+    const res = await api(eel.move_invoice_month, invoiceId, targetMonth, targetYear);
+    if (res && res.ok) {
+        showToast(`✅ Factura ${invNumber} movida a ${monthNames[targetMonth - 1]} ${targetYear}`);
+        closeModal();
+        const content = document.getElementById('workContent');
+        if (content) {
+            if (state.workTab === 'invoices') await renderWorkInvoices(content, true);
+            else await renderWorkMatrix(content, true);
+        }
+    } else {
+        showToast(res?.error || 'Error al mover la factura');
+    }
+}
+
 // ===================== WORK MATRIX (MATRIZ MENSUAL 12 MESES & OC) =====================
 
 function toggleEmpresaExpand(clientId) {
@@ -1398,7 +1484,113 @@ function paintWorkMatrix(el) {
     for (const c of (resData.clients || [])) clientObjMap[c.id] = c;
     for (const c of (clients || [])) if (!clientObjMap[c.id]) clientObjMap[c.id] = c;
 
-    let companyIds = Object.keys(sitesByClient).map(x => parseInt(x));
+    // Ensure all clients with sites, orders, or invoices are included
+    const allCids = new Set([
+        ...Object.keys(sitesByClient).map(Number),
+        ...(resData.clients || []).map(c => c.id),
+        ...orders.map(o => o.client_id),
+        ...invoices.map(i => i.client_id)
+    ]);
+    let companyIds = Array.from(allCids).filter(Boolean);
+
+    // Normalize site mappings so no OC or invoice is lost if no site or centro was selected
+    for (const cid of companyIds) {
+        let clientSites = sitesByClient[cid] || [];
+        const clientObj = clientObjMap[cid] || {};
+
+        if (clientSites.length === 0) {
+            clientSites = [{
+                id: 'c_' + cid,
+                client_id: cid,
+                nombre_cliente: 'Sede Principal / General',
+                sede_cliente: 'General',
+                monthly_fee: 0,
+                servicios: 'Servicio general',
+                periodicity: 'mensual',
+                is_regular: 1,
+                is_virtual: true,
+                empresa: clientObj.business_name || 'Cliente',
+                ruc: clientObj.ruc || ''
+            }];
+            sitesByClient[cid] = clientSites;
+        }
+
+        if (clientSites.length === 1) {
+            const singleSite = clientSites[0];
+            for (let m = 1; m <= 12; m++) {
+                const kSingle = singleSite.id + '-' + m;
+                const kComp = 'c' + cid + '-' + m;
+                if (ocMap[kComp] && ocMap[kComp].length > 0) {
+                    if (!ocMap[kSingle]) ocMap[kSingle] = [];
+                    for (const po of ocMap[kComp]) {
+                        if (!po.client_site_id && !ocMap[kSingle].some(x => x.id === po.id)) {
+                            ocMap[kSingle].push(po);
+                        }
+                    }
+                }
+                if (invMap[kComp] && invMap[kComp].length > 0) {
+                    if (!invMap[kSingle]) invMap[kSingle] = [];
+                    for (const inv of invMap[kComp]) {
+                        if (!inv.client_site_id && !invMap[kSingle].some(x => x.id === inv.id)) {
+                            invMap[kSingle].push(inv);
+                        }
+                    }
+                }
+            }
+        } else if (clientSites.length > 1) {
+            const unassignedOcs = [];
+            for (let m = 1; m <= 12; m++) {
+                const kComp = 'c' + cid + '-' + m;
+                const compOcs = ocMap[kComp] || [];
+                for (const po of compOcs) {
+                    if (!po.client_site_id) {
+                        let matchedSite = null;
+                        if (po.centro_logistico) {
+                            const cl = po.centro_logistico.toLowerCase().trim();
+                            matchedSite = clientSites.find(s => {
+                                const sc = (s.sede_cliente || '').toLowerCase();
+                                const nc = (s.nombre_cliente || '').toLowerCase();
+                                const loc = (s.location_code || '').toLowerCase();
+                                const cent = (s.centro_logistico || '').toLowerCase();
+                                return (cent && cent === cl) || (loc && loc === cl) || (sc && (sc.includes(cl) || cl.includes(sc))) || (nc && (nc.includes(cl) || cl.includes(nc)));
+                            });
+                        }
+                        if (matchedSite) {
+                            const kSite = matchedSite.id + '-' + m;
+                            if (!ocMap[kSite]) ocMap[kSite] = [];
+                            if (!ocMap[kSite].some(x => x.id === po.id)) ocMap[kSite].push(po);
+                        } else {
+                            unassignedOcs.push(po);
+                        }
+                    }
+                }
+            }
+            if (unassignedOcs.length > 0) {
+                const unassignedSiteId = 'unassigned_' + cid;
+                if (!clientSites.some(x => x.id === unassignedSiteId)) {
+                    clientSites.push({
+                        id: unassignedSiteId,
+                        client_id: cid,
+                        nombre_cliente: 'Sede General / Sin Centro Específico',
+                        sede_cliente: 'General',
+                        monthly_fee: 0,
+                        servicios: 'Órdenes de compra generales',
+                        periodicity: 'mensual',
+                        is_regular: 1,
+                        is_virtual: true,
+                        empresa: clientObj.business_name || 'Cliente',
+                        ruc: clientObj.ruc || ''
+                    });
+                }
+                for (const po of unassignedOcs) {
+                    const kUn = unassignedSiteId + '-' + po.month;
+                    if (!ocMap[kUn]) ocMap[kUn] = [];
+                    if (!ocMap[kUn].some(x => x.id === po.id)) ocMap[kUn].push(po);
+                }
+            }
+        }
+    }
+
     companyIds.sort((a, b) => {
         const nameA = (clientObjMap[a]?.business_name || sitesByClient[a]?.[0]?.empresa || '').toUpperCase();
         const nameB = (clientObjMap[b]?.business_name || sitesByClient[b]?.[0]?.empresa || '').toUpperCase();
@@ -1679,7 +1871,8 @@ function paintWorkMatrix(el) {
                                     <div style="font-size:0.68rem;color:#10b981;font-weight:700">✓ Facturado</div>
                                 </div>
                             </div>`;
-                            actionButton = `<button class="btn btn-ghost btn-sm" style="font-size:0.75rem;padding:3px 8px" onclick="showInvoiceForm(${inv.id})">✎ Factura</button>`;
+                            actionButton = `<button class="btn btn-ghost btn-sm" style="font-size:0.75rem;padding:3px 8px" onclick="showInvoiceForm(${inv.id})">✎ Factura</button>
+                                                <button class="btn btn-ghost btn-sm" style="font-size:0.72rem;padding:3px 6px;color:var(--primary)" onclick="event.stopPropagation(); showMoveInvoiceMonthModal(${inv.id}, ${inv.month_billed || mSel}, ${inv.year_billed || state.matrixYear}, '${esc(inv.series)}-${esc(inv.number)}')" title="Mover a otro mes">⇄ Mes</button>`;
                         } else {
                             // Multiple invoices in same cell (e.g. duplicate)
                             cellContent = `<div style="display:flex;flex-direction:column;gap:4px">` +
@@ -1695,7 +1888,8 @@ function paintWorkMatrix(el) {
                                         </div>
                                     </div>
                                 `).join('') + `</div>`;
-                            actionButton = `<button class="btn btn-ghost btn-sm" style="font-size:0.75rem;padding:3px 8px" onclick="showInvoiceForm(${cellInvs[0].id})">✎ Facturas (${cellInvs.length})</button>`;
+                            actionButton = `<button class="btn btn-ghost btn-sm" style="font-size:0.75rem;padding:3px 8px" onclick="showInvoiceForm(${cellInvs[0].id})">✎ Facturas (${cellInvs.length})</button>
+                                                <button class="btn btn-ghost btn-sm" style="font-size:0.72rem;padding:3px 6px;color:var(--primary)" onclick="event.stopPropagation(); showMoveInvoiceMonthModal(${cellInvs[0].id}, ${cellInvs[0].month_billed || mSel}, ${cellInvs[0].year_billed || state.matrixYear}, '${esc(cellInvs[0].series)}-${esc(cellInvs[0].number)}')" title="Mover a otro mes">⇄ Mes</button>`;
                         }
                     } else if (cellOcs.length > 0) {
                         const po = cellOcs[0];
@@ -1723,7 +1917,8 @@ function paintWorkMatrix(el) {
                                     ${ocDisp ? `<span class="tag tag-gold" style="font-size:0.72rem">OC ${esc(ocDisp)}</span>` : '<span style="font-size:0.68rem;color:#10b981;font-weight:700">✓ Facturado</span>'}
                                 </div>
                             </div>`;
-                            actionButton = `<button class="btn btn-ghost btn-sm" style="font-size:0.75rem;padding:3px 8px" onclick="showInvoiceForm(${inv.id})">✎ Factura</button>`;
+                            actionButton = `<button class="btn btn-ghost btn-sm" style="font-size:0.75rem;padding:3px 8px" onclick="showInvoiceForm(${inv.id})">✎ Factura</button>
+                                                <button class="btn btn-ghost btn-sm" style="font-size:0.72rem;padding:3px 6px;color:var(--primary)" onclick="event.stopPropagation(); showMoveInvoiceMonthModal(${inv.id}, ${inv.month_billed || mSel}, ${inv.year_billed || state.matrixYear}, '${esc(inv.series)}-${esc(inv.number)}')" title="Mover a otro mes">⇄ Mes</button>`;
                         } else {
                             cellContent = `<div style="display:flex;flex-direction:column;gap:4px">` +
                                 cellInvs.map(inv => `
@@ -1977,8 +2172,11 @@ function paintWorkMatrix(el) {
                         if (cellInvs.length > 0 && cellOcs.length > 0) {
                             const po = cellOcs[0];
                             const inv = cellInvs[0];
-                            html += `<div class="matrix-cell-invoiced ${isCellMatched ? 'matrix-cell-highlight' : ''}" onclick="showInvoiceForm(${inv.id})" title="Factura S/ ${fmtMoney(monthAmount)} - OC: ${esc(po.oc_number)}">
-                                <div style="font-family:monospace;font-weight:700;font-size:0.76rem;color:var(--accent)">S/ ${fmtMoney(monthAmount)}</div>
+                            html += `<div class="matrix-cell-invoiced ${isCellMatched ? 'matrix-cell-highlight' : ''}" onclick="showInvoiceForm(${inv.id})" title="Factura S/ ${fmtMoney(monthAmount)} - OC: ${esc(po.oc_number)}. Clic para ver/editar">
+                                <div style="display:flex;justify-content:space-between;align-items:center">
+                                    <span style="font-family:monospace;font-weight:700;font-size:0.76rem;color:var(--accent)">S/ ${fmtMoney(monthAmount)}</span>
+                                    <button class="btn btn-ghost btn-sm" style="padding:0 3px;font-size:0.62rem;color:var(--primary)" onclick="event.stopPropagation(); showMoveInvoiceMonthModal(${inv.id}, ${inv.month_billed || m}, ${inv.year_billed || state.matrixYear}, '${esc(inv.series)}-${esc(inv.number)}')" title="Mover comprobante a otro mes">⇄</button>
+                                </div>
                                 <div style="font-size:0.65rem;color:var(--text-muted)">F: ${esc(inv.series)}-${esc(inv.number)}</div>
                                 <div style="font-size:0.68rem;font-weight:700;color:#d97706;margin-top:2px">OC ${esc(po.oc_number)}</div>
                             </div>`;
@@ -1991,8 +2189,11 @@ function paintWorkMatrix(el) {
                         } else if (cellInvs.length > 0) {
                             const inv = cellInvs[0];
                             const ocDisp = inv.purchase_order;
-                            html += `<div class="matrix-cell-invoiced ${isCellMatched ? 'matrix-cell-highlight' : ''}" onclick="showInvoiceForm(${inv.id})" title="Factura emitida S/ ${fmtMoney(monthAmount)}">
-                                <div style="font-family:monospace;font-weight:700;font-size:0.76rem;color:var(--accent)">S/ ${fmtMoney(monthAmount)}</div>
+                            html += `<div class="matrix-cell-invoiced ${isCellMatched ? 'matrix-cell-highlight' : ''}" onclick="showInvoiceForm(${inv.id})" title="Factura emitida S/ ${fmtMoney(monthAmount)}. Clic para ver/editar">
+                                <div style="display:flex;justify-content:space-between;align-items:center">
+                                    <span style="font-family:monospace;font-weight:700;font-size:0.76rem;color:var(--accent)">S/ ${fmtMoney(monthAmount)}</span>
+                                    <button class="btn btn-ghost btn-sm" style="padding:0 3px;font-size:0.62rem;color:var(--primary)" onclick="event.stopPropagation(); showMoveInvoiceMonthModal(${inv.id}, ${inv.month_billed || m}, ${inv.year_billed || state.matrixYear}, '${esc(inv.series)}-${esc(inv.number)}')" title="Mover comprobante a otro mes">⇄</button>
+                                </div>
                                 <div style="font-size:0.65rem;color:var(--text-muted)">F: ${esc(inv.series)}-${esc(inv.number)}</div>
                                 ${ocDisp ? `<div style="font-size:0.65rem;color:#f59e0b;font-weight:700">OC ${esc(ocDisp)}</div>` : ''}
                             </div>`;
@@ -2860,9 +3061,10 @@ function onPoClientChanged(clientSel, selSiteId) {
     if (!siteSel) return;
 
     const sites = (state.allSites || []).filter(s => s.client_id === clientId);
-    let opts = '<option value="">- Aplica a toda la Empresa -</option>';
+    let opts = '<option value="">- Aplica a toda la Empresa / General -</option>';
     sites.forEach(s => {
-        opts += `<option value="${s.id}" data-fee="${s.monthly_fee || 0}" ${s.id === selSiteId ? 'selected' : ''}>${esc(s.nombre_cliente)} (S/ ${fmtMoney(s.monthly_fee || 0)})</option>`;
+        const isSel = selSiteId ? (s.id == selSiteId) : (sites.length === 1);
+        opts += `<option value="${s.id}" data-fee="${s.monthly_fee || 0}" ${isSel ? 'selected' : ''}>${esc(s.nombre_cliente)} (S/ ${fmtMoney(s.monthly_fee || 0)})</option>`;
     });
     siteSel.innerHTML = opts;
 
@@ -2880,7 +3082,11 @@ async function savePurchaseOrderForm(e, poId) {
     e.preventDefault();
     const clientId = parseInt(document.getElementById('poClientId').value);
     const siteIdVal = document.getElementById('poSiteId').value;
-    const clientSiteId = siteIdVal ? parseInt(siteIdVal) : null;
+    let clientSiteId = siteIdVal ? parseInt(siteIdVal) : null;
+    if (!clientSiteId && clientId) {
+        const clSites = (state.allSites || []).filter(s => s.client_id === clientId);
+        if (clSites.length === 1) clientSiteId = clSites[0].id;
+    }
     const year = parseInt(document.getElementById('poYear').value);
     const month = parseInt(document.getElementById('poMonth').value);
     const ocNumber = document.getElementById('poOcNumber').value.trim();
@@ -3114,6 +3320,7 @@ function paintWorkInvoices(el) {
                 </td>
                 <td style="text-align:center;white-space:nowrap">
                     <button class="btn btn-ghost btn-sm" onclick="showInvoiceForm(${i.id})" title="Editar comprobante" style="padding:2px 5px">✎</button>
+                    <button class="btn btn-ghost btn-sm" onclick="showMoveInvoiceMonthModal(${i.id}, ${i.month_billed || 1}, ${i.year_billed || 2026}, '${esc(i.series)}-${esc(i.number)}')" title="Mover mes de imputación" style="padding:2px 5px">📅</button>
                     <button class="btn btn-ghost btn-sm" style="color:#ef4444;padding:2px 5px" onclick="deleteInvoice(${i.id}, '${esc(i.series)}-${esc(i.number)}')" title="Eliminar factura permanente">🗑️</button>
                 </td>
                 <td>${ocStr}</td>
@@ -3124,7 +3331,7 @@ function paintWorkInvoices(el) {
                 <td style="text-align:right;font-family:monospace;font-weight:700;${isAnulada ? 'text-decoration:line-through;color:var(--text-muted)' : ''}">S/ ${fmtMoney(feeTotal)}</td>
                 <td style="text-align:right;font-family:monospace;color:#f59e0b">S/ ${fmtMoney(feeDetr)}</td>
                 <td style="text-align:right;font-family:monospace;color:#10b981;font-weight:700">S/ ${fmtMoney(feeCred)}</td>
-                <td style="text-align:center;font-size:0.8rem">${mesStr}</td>
+                <td style="text-align:center;font-size:0.8rem;cursor:pointer" onclick="showMoveInvoiceMonthModal(${i.id}, ${i.month_billed || 1}, ${i.year_billed || 2026}, '${esc(i.series)}-${esc(i.number)}')" title="Clic para mover período">${mesStr} ✏️</td>
                 <td style="text-align:center">${statusBadge}</td>
             </tr>`;
         }
@@ -3218,6 +3425,8 @@ function showInvoiceModal(inv) {
         const defDetr = inv ? inv.detraccion : '';
         const defCred = inv ? inv.credito : '';
         const defIssueDate = inv ? inv.issue_date : today;
+        const defMonthBilled = inv ? (inv.month_billed || (inv.issue_date ? parseInt(inv.issue_date.split('-')[1]) : (new Date().getMonth() + 1))) : (new Date().getMonth() + 1);
+        const defYearBilled = inv ? (inv.year_billed || (inv.issue_date ? parseInt(inv.issue_date.split('-')[0]) : (new Date().getFullYear()))) : (state.matrixYear || new Date().getFullYear());
         let defDueDate = inv ? (inv.due_date || '') : '';
         if (!defDueDate && defIssueDate) {
             try {
@@ -3338,6 +3547,24 @@ function showInvoiceModal(inv) {
                     </select>
                 </div>
             </div>
+
+            <div class="form-row" style="background:rgba(99,102,241,0.05);padding:10px;border-radius:8px;margin-bottom:12px;border:1px solid rgba(99,102,241,0.18)">
+                <div class="form-group" style="flex:1;margin-bottom:0">
+                    <label style="color:var(--primary);font-weight:700">📅 Mes Imputado (Matriz de Facturación) *</label>
+                    <select class="form-control" name="month_billed" id="modalInvMonthBilled" style="font-weight:600">
+                        ${['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'].map((mn, idx) => `<option value="${idx+1}"${defMonthBilled === (idx+1) ? ' selected' : ''}>${mn}</option>`).join('')}
+                    </select>
+                </div>
+                <div class="form-group" style="flex:1;margin-bottom:0">
+                    <label style="color:var(--primary);font-weight:700">Año Imputado *</label>
+                    <select class="form-control" name="year_billed" id="modalInvYearBilled" style="font-weight:600">
+                        <option value="2024"${defYearBilled === 2024 ? ' selected' : ''}>2024</option>
+                        <option value="2025"${defYearBilled === 2025 ? ' selected' : ''}>2025</option>
+                        <option value="2026"${defYearBilled === 2026 ? ' selected' : ''}>2026</option>
+                        <option value="2027"${defYearBilled === 2027 ? ' selected' : ''}>2027</option>
+                    </select>
+                </div>
+            </div>
             ${inv ? `
             <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border-light);display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
                 <div style="font-size:0.75rem;color:var(--text-muted)">
@@ -3383,6 +3610,8 @@ function showInvoiceModal(inv) {
                 payment_type: f.get('payment_type') || 'credito',
                 issue_date: f.get('issue_date') || todayStr(),
                 due_date: f.get('due_date'),
+                month_billed: parseInt(f.get('month_billed')) || null,
+                year_billed: parseInt(f.get('year_billed')) || null,
                 status: f.get('status') || 'issued'
             };
 
@@ -7398,12 +7627,7 @@ let __audioUnlocked = false;
 let __swRegistration = null;
 
 function initAudioAndNotifications() {
-    try {
-        // 'ambient' mixes our chime on top of Spotify / Apple Music / YouTube without ever pausing your music!
-        if (navigator.audioSession) {
-            navigator.audioSession.type = 'ambient';
-        }
-    } catch (_) {}
+    // Do not force 'ambient' on startup so iOS microphone capture (play-and-record) is never blocked
 
     // Create hidden iOS 17.4+ / iOS 18 Taptic Engine switch element
     if (!document.getElementById('iosHapticLabel')) {
@@ -7471,12 +7695,13 @@ function scheduleDailyNotificationTimer() {
 }
 
 function unlockAudioOnUserTap() {
-    try {
-        if (navigator.audioSession) {
-            const isVoiceTab = (state.view === 'personal' && state.personalTab === 'voice');
-            navigator.audioSession.type = isVoiceTab ? 'play-and-record' : 'ambient';
-        }
-    } catch (_) {}
+    const isVoiceTab = (state.view === 'personal' && state.personalTab === 'voice');
+    if (isVoiceTab) {
+        try {
+            if (navigator.audioSession) navigator.audioSession.type = 'play-and-record';
+        } catch (_) {}
+        return;
+    }
     try {
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
         if (AudioCtx) {
@@ -13251,28 +13476,28 @@ window.renderFinanceSueldos = renderFinanceSueldos;
 
 const VOICE_PASSAGES = [
     {
-        title: "1. El viento del norte y el sol (Fonética balanceada)",
-        text: "El Viento del Norte y el Sol discutían sobre cuál de ellos era más fuerte. Por el camino llegó un viajero envuelto en un manto. Acordaron que quien pudiera hacer que el viajero se quitara el manto sería considerado el más fuerte. El viento del norte fue primero. Reunió toda su fuerza y sopló ferozmente hacia el viajero. Pero cuanto más fuerte soplaba, más se envolvía el viajero en la capa. El Viento del Norte se cansó y finalmente se calmó. Entonces el Sol salió de detrás de las nubes y por primera vez brilló suavemente. Sintiendo el calor, el viajero se aflojó el manto. El sol salió más alto, el aire se volvió más cálido y, finalmente, el viajero se quitó el manto y se sentó a descansar a la sombra."
+        title: "1. El viento del norte y el sol (Oficial Pitchee · Fonética balanceada)",
+        text: "El Viento del Norte y el Sol discutían sobre cuál de ellos era más fuerte. Por el camino llegó un viajero envuelto en un manto. Acordaron que quien pudiera hacer que el viajero se quitara el manto sería considerado el más fuerte. El viento del norte fue primero. Reunió toda su fuerza y sopló ferozmente hacia el viajero. Pero cuanto más fuerte soplaba, más se envolvía el viajero en la capa. El Viento del Norte se cansó y finalmente se calmó. Entonces el Sol salió de detrás de las nubes y por primera vez brilló suavemente. Sintiendo el calor, el viajero se aflojó el manto. El sol salió más alto, el aire se volvió más cálido y, finalmente, el viajero se quitó el manto y se sentó a descansar a la sombra. El Viento del Norte tuvo que admitir que el Sol era más fuerte. La gentileza y la paciencia a veces pueden lograr más que la fuerza."
     },
     {
-        title: "2. Separación de tareas (Conversacional)",
+        title: "2. Separación de tareas (Oficial Pitchee · Conversacional)",
         text: "La psicología adleriana divide los problemas en las relaciones en «mis tareas» y «tareas de otras personas». Cómo hablo, si soy honesto y qué consecuencias estoy dispuesto a aceptar son mis tareas. Que otra persona comprenda, esté de acuerdo o cambie es su tarea. La separación de tareas no es indiferencia ni una negativa a preocuparse. Significa no tomar decisiones por los demás y no permitir que sus juicios se apoderen de mi vida. Los límites claros pueden hacer que sea más fácil conocer a las personas como iguales, con mayor estabilidad y respeto."
     },
     {
-        title: "3. Tiempo social (Entonación fluida)",
-        text: "El tiempo social no es el flujo uniforme del tiempo físico medido por un reloj. Es un ritmo y un orden moldeados colectivamente por un grupo. Las vacaciones, los ciclos laborales, las etapas de la vida y la memoria generacional dan significado al tiempo. A través de instituciones y costumbres, una sociedad también dice a las personas cuándo deben estudiar, trabajar o formar una familia, moldeando sutilmente nuestra sensación de «demasiado temprano» y «demasiado tarde»."
+        title: "3. Tiempo social (Oficial Pitchee · Entonación fluida)",
+        text: "El tiempo social no es el flujo uniforme del tiempo físico medido por un reloj. Es un ritmo y un orden moldeados colectivamente por un grupo. Las vacaciones, los ciclos laborales, las etapas de la vida y la memoria generacional dan significado al tiempo. A través de instituciones y costumbres, una sociedad también dice a las personas cuándo deben estudiar, trabajar o formar una familia, moldeando sutilmente nuestra sensación de «demasiado temprano» y «demasiado tarde». Ver estos arreglos no requiere rechazar todas las reglas. Nos ayuda a distinguir los ritmos que realmente nos convienen de los horarios escritos por otros en nuestro nombre."
     },
     {
-        title: "4. La dicotomía del control (Articulación clara)",
-        text: "La filosofía estoica divide las cosas en dos categorías: lo que está bajo nuestro control y lo que no. El juicio, la elección y el esfuerzo pertenecen al primero; las opiniones de otras personas, los hechos que ya sucedieron, el clima y los resultados finales pertenecen al segundo. Gran parte del sufrimiento proviene de invertir energía en lo que no podemos controlar y descuidar el lugar donde podemos actuar."
+        title: "4. La dicotomía del control (Oficial Pitchee · Articulación clara)",
+        text: "La filosofía estoica divide las cosas en dos categorías: lo que está bajo nuestro control y lo que no. El juicio, la elección y el esfuerzo pertenecen al primero; las opiniones de otras personas, los hechos que ya sucedieron, el clima y los resultados finales pertenecen al segundo. Gran parte del sufrimiento proviene de invertir energía en lo que no podemos controlar y descuidar el lugar donde podemos actuar. La dicotomía del control no se trata de abandonar los objetivos. Significa hacer nuestra parte y luego devolver al mundo lo que no es nuestro. Aún podemos actuar con cuidado sin convertir cada resultado en un veredicto sobre nosotros mismos."
     },
     {
-        title: "5. Estado de Flow (Resonancia alta)",
-        text: "El flow es un estado de profunda implicación en el que las personas pierden la noción del tiempo y una excesiva timidez. Tiende a aparecer en actividades con objetivos claros, retroalimentación rápida y un desafío que coincide aproximadamente con la capacidad de cada uno. Las tareas demasiado fáciles generan aburrimiento, mientras que las tareas demasiado difíciles generan ansiedad."
+        title: "5. Estado de Flow (Oficial Pitchee · Ritmo sostenible)",
+        text: "El flow es un estado de profunda implicación en el que las personas pierden la noción del tiempo y una excesiva timidez. Tiende a aparecer en actividades con objetivos claros, retroalimentación rápida y un desafío que coincide aproximadamente con la capacidad de cada uno. Las tareas demasiado fáciles generan aburrimiento, mientras que las tareas demasiado difíciles generan ansiedad. Cuando el desafío supera ligeramente el nivel actual de habilidad, la atención se centra naturalmente en el trabajo en sí. El flujo no es una exigencia de ser productivo en todo momento. Es el descubrimiento de un ritmo sostenible en el que la concentración pasa a formar parte de la experiencia."
     },
     {
-        title: "6. Ejercicios de Resonancia y Brillo (M-N-I-E)",
-        text: "Mírame mañana mientras caminamos tranquilamente frente al mar. Nueve nubes blancas iluminan el cielo sereno de abril. Imagina una melodía ligera, cristalina y suave que vibra adelante en los labios sin esfuerzo en la garganta."
+        title: "6. Costo hundido (Oficial Pitchee · Expresión natural)",
+        text: "Un costo hundido es tiempo, dinero o emoción que ya se ha gastado y no se puede recuperar. Racionalmente, continuar o detenerse debería depender sólo de los beneficios y costos futuros. Sin embargo, la gente a menudo se niega a irse porque ya ha invertido mucho. Cuanto más nos aferramos al pasado, más fácil resulta seguir añadiendo algo a él. Reconocer un costo hundido no niega que el esfuerzo anterior fue sincero. Reconoce que el valor de algunas actividades ha llegado a su fin. La elección más difícil muchas veces no es empezar de nuevo, sino permitirnos detenernos."
     }
 ];
 
@@ -13286,38 +13511,176 @@ const VOICE_PIANO_NOTES = [
 const VOICE_RULE_INFO = {
     pass_boost: {
         badge: "✨ Impulso Calificado (Pass Boost)",
+        title: "Aumento de puntuación (Pass Boost)",
         tagClass: "tag-sage",
-        desc: "¡Excelente! Tu tono (>165 Hz), naturalidad (≥80) y timbre/resonancia (≥50) superaron todos los umbrales y activaron la bonificación."
+        condition: "F0 > 165 Hz, Naturalidad > 80, Timbre S > 50",
+        formula: "strength = min((F0-165)/25, (N-80)/20, (S-50)/30, 1) → promoted = 60 + 40 × strength → Final = max(Base, promoted)",
+        handling: "La puntuación general puede llegar hasta 100. Si promoted > Base, se aplica el impulso.",
+        desc: "¡Pase claro! Cuando se cumplen las tres condiciones simultáneamente, la puntuación general se impulsa entre 60 y 100.",
+        articleKey: "PASS_BOOST"
     },
     continuous: {
         badge: "✅ Puntuación Continua",
+        title: "Puntuación continua (Sin topes)",
         tagClass: "tag-sage",
-        desc: "Fórmula continua ponderando Timbre/Resonancia (50%), Naturalidad (20%), Tono F0 (15%) y Sinergia (15%) sin penalizaciones."
+        condition: "Ningún límite ni impulso especial se activó",
+        formula: "Final = Base = 100 × (0.50·Sr + 0.20·Nr + 0.15·F0r + 0.15·Sr·Nr·F0r)",
+        handling: "La puntuación general utiliza directamente la Puntuación Base.",
+        desc: "Esta vez no se activó ningún límite ni impulso. La puntuación general utiliza la fórmula continua.",
+        articleKey: "CONTINUOUS_PASS"
     },
     high_f0_stylized_cap: {
         badge: "⚠️ Tope por Baja Naturalidad (Máx 30)",
+        title: "Tono alto y naturalidad baja",
         tagClass: "tag-rose",
-        desc: "El tono supera los 165 Hz, pero la naturalidad es menor a 50 (voz tensa o en falsete forzado). Relajá la laringe y buscá suavidad."
+        condition: "F0 > 165 Hz y Naturalidad < 50",
+        formula: "Final = min(Base, 30)",
+        handling: "La puntuación global tiene un límite máximo de 30.",
+        desc: "El tono está por encima de 165 Hz, pero la naturalidad por debajo de 50 limita la puntuación general a 30. Evitá forzar un tono agudo con tensión.",
+        articleKey: "HIGH_F0_STYLIZED"
     },
     low_f0_natural_cap: {
         badge: "ℹ️ Tope por Tono Bajo (Máx 59)",
+        title: "Tono bajo con voz natural",
         tagClass: "tag-gold",
-        desc: "La naturalidad es buena (≥50), pero el tono medio F0 está en 165 Hz o menos, limitando la puntuación máxima a 59."
+        condition: "F0 ≤ 165 Hz y Naturalidad ≥ 50",
+        formula: "Final = min(Base, 59)",
+        handling: "La puntuación global tiene un límite máximo de 59.",
+        desc: "La naturalidad aprueba (≥50), pero el tono de 165 Hz o menos limita la puntuación general a 59. Concentrate en elevar suavemente el tono base.",
+        articleKey: "LOW_F0_NATURAL"
     },
     low_f0_stylized_cap: {
         badge: "⚠️ Tope por Tono y Naturalidad (Máx 20)",
+        title: "Tono bajo y baja naturalidad",
         tagClass: "tag-rose",
-        desc: "Tanto el tono (≤165 Hz) como la naturalidad (<50) están por debajo del umbral recomendado."
+        condition: "F0 ≤ 165 Hz y Naturalidad < 50",
+        formula: "Final = min(Base, 20)",
+        handling: "La puntuación global tiene un límite máximo de 20.",
+        desc: "El tono igual o inferior a 165 Hz y la naturalidad por debajo de 50 limitan la puntuación general a 20. Recuperá primero el habla relajada.",
+        articleKey: "LOW_F0_STYLIZED"
     },
     high_f0_male_cap: {
         badge: "ℹ️ Tope por Timbre / Resonancia (Máx 59)",
+        title: "Puntuación de timbre baja",
         tagClass: "tag-gold",
-        desc: "El tono (>165 Hz) y la naturalidad (≥50) son adecuados, pero el brillo/resonancia (Timbre S) es menor a 50. Llevá la resonancia hacia adelante."
+        condition: "F0 > 165 Hz, Naturalidad ≥ 50, Timbre S < 50",
+        formula: "Final = min(Base, 59)",
+        handling: "La puntuación global tiene un límite máximo de 59.",
+        desc: "Tu voz se mantiene natural en un tono alto (>165 Hz), pero el timbre por debajo de 50 limita la puntuación a 59. Llevá el foco de resonancia hacia adelante.",
+        articleKey: "HIGH_F0_TIMBRE"
     },
     f0_unavailable: {
-        badge: "Tono no detectado",
+        badge: "Tono no disponible",
+        title: "Tono F0 no detectado",
         tagClass: "tag-lavender",
-        desc: "No se detectaron suficientes ventanas sonoras estables; se usa directamente el puntaje de timbre."
+        condition: "Sin ventanas de tono sonoro confiables",
+        formula: "Final = Standard (Timbre S)",
+        handling: "La puntuación general utiliza directamente la puntuación tímbrica.",
+        desc: "No se detectó ningún tono estable. Acercate al micrófono y hablá de forma continua.",
+        articleKey: "TIMBRE_GUIDE"
+    }
+};
+
+const VOICE_KNOWLEDGE_ARTICLES = {
+    TIMBRE_GUIDE: {
+        category: "practice",
+        title: "🌸 Guía de Timbre (VFP): Dejá de forzar la voz",
+        summary: "Cómo mejorar el brillo y la resonancia del tracto vocal sin apretar la garganta ni usar aire excesivo.",
+        html: `
+            <p>Una puntuación baja de <strong>Timbre (S)</strong> significa que la resonancia actual no aporta suficientes rasgos acústicos femeninos al modelo, incluso si el tono F0 ya supera los 180–200 Hz.</p>
+            <h4 style="margin:10px 0 4px">Errores frecuentes</h4>
+            <ul style="padding-left:18px;margin:4px 0">
+                <li><strong>Subir únicamente el tono (F0)</strong>: Si el tono sube pero la resonancia sigue oscura o atrapada atrás en la faringe, el timbre S no subirá.</li>
+                <li><strong>Apretar continuamente la laringe</strong>: Puede dar brillo por unos segundos, pero tensa la voz y desploma la Naturalidad (N).</li>
+                <li><strong>Soplar demasiado aire (voz susurrada)</strong>: El aire excesivo debilita los armónicos, baja el HNR y dificulta la detección de F0.</li>
+            </ul>
+            <h4 style="margin:10px 0 4px">Rutina práctica en 4 pasos (10–15 min/día)</h4>
+            <ol style="padding-left:18px;margin:4px 0">
+                <li><strong>Grabá tu línea base</strong>: Leé una frase con tu voz cómoda sin presionar hacia abajo ni apretar hacia arriba.</li>
+                <li><strong>Soltá mandíbula, lengua y labios</strong>: Entoná una <code>m</code> suave pasando a <code>ma</code> y <code>me</code> sintiendo la vibración en los labios.</li>
+                <li><strong>Adelantá el foco del sonido</strong>: Articulá con claridad en la parte frontal de la boca (paladar duro y labios). Cambiá una sola variable a la vez.</li>
+                <li><strong>Transferí a una oración nueva</strong>: Probá con un pasaje distinto o una respuesta improvisada de 5 a 15 segundos.</li>
+            </ol>`
+    },
+    NATURALNESS_GUIDE: {
+        category: "practice",
+        title: "🍃 Guía de Naturalidad (N): Volver al habla conversacional",
+        summary: "Por qué baja la naturalidad y cómo recuperar una emisión relajada, conectada y cotidiana.",
+        html: `
+            <p>Una <strong>Naturalidad (N)</strong> baja (&lt;50) no significa que tu voz esté dañada, sino que la emisión suena forzada, rígida, sobreactuada o afectada por el micrófono.</p>
+            <h4 style="margin:10px 0 4px">Tres causas habituales</h4>
+            <ul style="padding-left:18px;margin:4px 0">
+                <li><strong>Actuar cada frase</strong>: Forzar cada final de oración de forma idéntica o impostada en vez de hablar como en una charla real.</li>
+                <li><strong>Trabar la garganta para sostener la altura</strong>: Mantener cuello, lengua y respiración rígidos para no perder el tono.</li>
+                <li><strong>Saturación o distancia del micrófono</strong>: Estar demasiado cerca del micrófono o con reducción de ruido agresiva.</li>
+            </ul>
+            <h4 style="margin:10px 0 4px">Cómo practicar</h4>
+            <ol style="padding-left:18px;margin:4px 0">
+                <li><strong>Imaginá a un interlocutor real</strong>: Leé el pasaje como si se lo contaras a una amiga frente a vos.</li>
+                <li><strong>Descomprimí con Vocal Fry suave</strong>: Relajá por completo y subí gradualmente hasta tu tono de habla cómodo.</li>
+                <li><strong>Mantené sesiones cortas (10–20 s)</strong>: No bajes el volumen a un susurro para fingir suavidad; buscá una voz clara, apoyada y a volumen normal.</li>
+            </ol>`
+    },
+    PITCH_GUIDE: {
+        category: "practice",
+        title: "🎵 Guía de Tono (F0): Subir la altura sin tensión",
+        summary: "Práctica de 8 minutos para superar el umbral de 165 Hz conservando la entonación natural.",
+        html: `
+            <p>Cuando el tono promedio F0 es igual o menor a <strong>165 Hz</strong>, la puntuación femenina se limita a un máximo de 59 puntos.</p>
+            <h4 style="margin:10px 0 4px">Qué evitar</h4>
+            <ul style="padding-left:18px;margin:4px 0">
+                <li>No empujes la laringe con la mano ni hables gritando para subir los Hz.</li>
+                <li>No arranques en falsete tenso ni fijes todas las palabras en una sola nota plana (monotonía).</li>
+            </ul>
+            <h4 style="margin:10px 0 4px">Práctica de 8 minutos</h4>
+            <ol style="padding-left:18px;margin:4px 0">
+                <li><strong>Soltá cuello y mandíbula</strong>: Inhalá suavemente por la nariz sin sobrecargar el pecho.</li>
+                <li><strong>Pequeño glissando con «m» o «ng»</strong>: Usá el Teclado de Piano (ej. F#3 · 185 Hz o G3 · 196 Hz) y deslizá suavemente entre dos notas vecinas.</li>
+                <li><strong>Elegí una altura sostenible</strong>: Pasá del tarareo a una oración completa. Elegí el tono que puedas sostener toda la frase con comodidad, no el más agudo posible.</li>
+                <li><strong>Conservá la melodía natural del idioma</strong>: Permití que las sílabas suban y bajen con naturalidad alrededor de tu nuevo centro tonal.</li>
+            </ol>`
+    },
+    CONTINUOUS_NO_PASS: {
+        category: "rules",
+        title: "📐 Regla 01: Tono, Naturalidad y Timbre aprueban, pero el total es < 60",
+        summary: "Superaste los tres umbrales individuales (>165 Hz, N ≥ 50, S ≥ 50), pero el promedio ponderado aún no llega a 60.",
+        html: `<p>Tu tono promedio supera los <strong>165 Hz</strong>, tu naturalidad es <strong>≥ 50</strong> y tu timbre es <strong>≥ 50</strong>, por lo que no se activó ningún tope penalizador. Sin embargo, uno o más de los tres indicadores sigue cerca de 50 y el resultado Base aún queda por debajo de 60. Enfocáte en subir el más bajo entre <strong>Timbre (S)</strong> y <strong>Naturalidad (N)</strong>.</p>`
+    },
+    CONTINUOUS_PASS: {
+        category: "rules",
+        title: "📐 Regla 02: Aprobación Inicial (≥ 60 puntos en Fórmula Continua)",
+        summary: "Alcanzaste la línea de aprobación femenina sin penalizaciones. Próxima meta: el rango Pass Boost.",
+        html: `<p>¡Felicitaciones! Cruzaste la línea de aprobación de 60 puntos con todos los indicadores en verde. Tu próximo objetivo es activar el <strong>Impulso Calificado (Pass Boost)</strong> manteniendo <strong>F0 &gt; 165 Hz</strong>, <strong>Timbre S &gt; 50</strong> y elevando la <strong>Naturalidad N por encima de 80</strong>.</p>`
+    },
+    PASS_BOOST: {
+        category: "rules",
+        title: "📐 Regla 03: Entrando al Rango de Bonificación («¡Pass Boost!»)",
+        summary: "F0 > 165 Hz, Naturalidad > 80 y Timbre S > 50 activos al mismo tiempo.",
+        html: `<p>Cuando <strong>F0 &gt; 165 Hz</strong>, <strong>Naturalidad &gt; 80</strong> y <strong>Timbre S &gt; 50</strong> se cumplen simultáneamente, Pitchee activa la promoción al rango 60–100 según la fuerza del indicador más débil de los tres. Tu único objetivo ahora es consolidar la estabilidad en charlas cotidianas.</p>`
+    },
+    HIGH_F0_STYLIZED: {
+        category: "rules",
+        title: "📐 Regla 04: Tono Alto y Baja Naturalidad (Tope en 30 pts)",
+        summary: "F0 > 165 Hz pero Naturalidad < 50: voz percibida como tensa, suspendida o artificial.",
+        html: `<p>El tono supera los 165 Hz, pero la naturalidad cae por debajo de 50. El sistema limita el puntaje a <strong>30 puntos</strong> porque subir aún más de 180 Hz a 210 Hz con la garganta tensa sólo reduce la naturalidad. Relajá la emisión y recuperá el habla conversacional antes de buscar más altura.</p>`
+    },
+    LOW_F0_NATURAL: {
+        category: "rules",
+        title: "📐 Regla 05: Voz Natural pero Tono Bajo ≤ 165 Hz (Tope en 59 pts)",
+        summary: "Naturalidad ≥ 50 pero F0 ≤ 165 Hz: la voz suena relajada pero permanece en rango masculino/andrógeno.",
+        html: `<p>La naturalidad es buena (≥ 50), lo que indica que hablás sin tensión. Sin embargo, al no superar los <strong>165 Hz</strong>, el puntaje general se limita a <strong>59 puntos</strong> sin importar cuán alto sea el timbre. Practicá con la Guía de Tono F0 para elevar suavemente tu nota base.</p>`
+    },
+    LOW_F0_STYLIZED: {
+        category: "rules",
+        title: "📐 Regla 06: Tono Bajo y Baja Naturalidad (Tope en 20 pts)",
+        summary: "F0 ≤ 165 Hz y Naturalidad < 50: voz retraída, presionada o contenida.",
+        html: `<p>Tanto el tono (≤ 165 Hz) como la naturalidad (&lt; 50) fallan al mismo tiempo, limitando la puntuación a <strong>20 puntos</strong>. Trabajá primero la <strong>Naturalidad</strong> leyendo oraciones completas con fluidez y volumen normal, y recién después entrená la altura tonal por separado.</p>`
+    },
+    HIGH_F0_TIMBRE: {
+        category: "rules",
+        title: "📐 Regla 07: Tono Alto pero Timbre Bajo < 50 (Tope en 59 pts)",
+        summary: "F0 > 165 Hz y Naturalidad ≥ 50, pero Timbre S < 50: voz aguda con resonancia oscura/masculina.",
+        html: `<p>Tu tono (>165 Hz) y naturalidad (≥50) ya aprueban, por lo que subir más el tono no resolverá el cuello de botella. El puntaje se limita a <strong>59 puntos</strong> porque falta brillo y resonancia frontal (Timbre S &lt; 50). Seguí la Guía de Timbre (VFP) para acortar el tracto vocal y llevar la resonancia hacia adelante.</p>`
     }
 };
 
@@ -13335,26 +13698,51 @@ const voiceState = {
     recordBuffers: [],
     recordSampleRate: 16000,
     recordStartTime: 0,
+    recordSpeechSeconds: 0,
     recordTimer: null,
     livePitchActive: false,
+    livePitchPaused: false,
     livePitchStream: null,
     livePitchCtx: null,
     livePitchProcessor: null,
     livePitchFrames: [],
+    livePitchChartStyle: 'curve', // 'curve' or 'dots' (from RealtimePitchScreen.kt)
     spectrumActive: false,
     specStream: null,
     specCtx: null,
     specAnalyser: null,
     pianoCtx: null,
-    pianoVoices: new Map()
+    pianoVoices: new Map(),
+    historyRangeDays: 0, // 7, 30, 90, 0 (All) - from InsightsDashboardScreen.kt
+    historyMetric: 'final_score' // 'final_score', 'vfp_score', 'naturalness_score', 'f0_mean_hz', 'f0_std_hz', 'health_score'
 };
 
 function setIOSMicAudioSession(enableCapture) {
     try {
+        if (enableCapture && typeof __sharedAudioCtx !== 'undefined' && __sharedAudioCtx) {
+            try { __sharedAudioCtx.close(); } catch (_) {}
+            __sharedAudioCtx = null;
+            __audioUnlocked = false;
+        }
         if (navigator.audioSession) {
-            navigator.audioSession.type = enableCapture ? 'play-and-record' : 'ambient';
+            navigator.audioSession.type = enableCapture ? 'play-and-record' : 'auto';
         }
     } catch (_) {}
+}
+
+async function requestVoiceMicStream() {
+    setIOSMicAudioSession(true);
+    try {
+        return await navigator.mediaDevices.getUserMedia({
+            audio: {
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false
+            }
+        });
+    } catch (_) {
+        return await navigator.mediaDevices.getUserMedia({ audio: true });
+    }
 }
 
 function cleanupVoiceStreams() {
@@ -13367,6 +13755,7 @@ function cleanupVoiceStreams() {
     }
     if (voiceState.livePitchActive) {
         voiceState.livePitchActive = false;
+        voiceState.livePitchPaused = false;
         try { if (voiceState.livePitchProcessor) voiceState.livePitchProcessor.disconnect(); } catch (_) {}
         try { if (voiceState.livePitchStream) voiceState.livePitchStream.getTracks().forEach(t => t.stop()); } catch (_) {}
         try { if (voiceState.livePitchCtx) voiceState.livePitchCtx.close(); } catch (_) {}
@@ -13394,6 +13783,139 @@ function voiceHzToNote(hz) {
     const note = names[((midi % 12) + 12) % 12];
     const octave = Math.floor(midi / 12) - 1;
     return `${note}${octave}`;
+}
+
+function voiceF0ProgressScore(f0Hz, profile = 'feminization') {
+    if (!f0Hz || f0Hz <= 0) return 0;
+    if (profile === 'masculinization') {
+        return Math.min(100, Math.max(0, (250.0 - f0Hz) / (250.0 - 100.0) * 100.0));
+    }
+    return Math.min(100, Math.max(0, (f0Hz - 100.0) / 120.0 * 100.0));
+}
+
+function computePitcheeScoreInsight(session) {
+    const r = (session && session.result) || {};
+    const comp = r.composite || {};
+    const vfp = r.vfp || {};
+    const nat = r.naturalness || {};
+    const f0 = r.f0 || {};
+
+    const profile = r.score_profile || session.profile || 'feminization';
+    const rule = comp.rule || session.rule_code || 'continuous';
+    const finalScore = comp.final_score != null ? comp.final_score : (parseFloat(session.final_score) || 0);
+    const baseScore = comp.base_score != null ? comp.base_score : (parseFloat(session.base_score) || 0);
+    const rawStandard = vfp.vfp_standard_score != null ? vfp.vfp_standard_score : (parseFloat(session.vfp_score) || 0);
+    const standard = profile === 'masculinization' ? Math.max(0, Math.min(100, 100 - rawStandard)) : rawStandard;
+    const naturalness = nat.score != null ? nat.score : (parseFloat(session.naturalness_score) || 0);
+    const meanF0 = f0.mean_hz != null ? f0.mean_hz : (session.f0_mean_hz ? parseFloat(session.f0_mean_hz) : null);
+    const f0Score = meanF0 ? voiceF0ProgressScore(meanF0, profile) : 0;
+
+    if (profile === 'masculinization') {
+        const entries = [
+            { key: 'TIMBRE', score: standard },
+            { key: 'NATURALNESS', score: naturalness },
+            { key: 'F0', score: f0Score }
+        ];
+        const weakest = entries.reduce((a, b) => a.score <= b.score ? a : b);
+        return {
+            profile,
+            rule: 'continuous',
+            ruleTitle: 'Puntuación continua masculina',
+            ruleDescription: 'La puntuación general combina tono (<165 Hz) y timbre masculino respecto a una referencia neutral.',
+            ruleImpact: 'Puntuación global = fórmula continua masculina',
+            bottleneckMetric: weakest.key,
+            hasBottleneck: false,
+            bottleneckTitle: null,
+            bottleneckDescription: null,
+            standard,
+            naturalness,
+            meanF0,
+            f0Score
+        };
+    }
+
+    const rInfo = VOICE_RULE_INFO[rule] || VOICE_RULE_INFO.continuous;
+    let ruleImpact = 'Sin límite ni impulso';
+    if (rule === 'f0_unavailable') {
+        ruleImpact = 'Puntuación general = puntuación tímbrica';
+    } else if (rule === 'pass_boost') {
+        const delta = Math.max(0, finalScore - baseScore);
+        ruleImpact = comp.boosted && delta > 0.05
+            ? `Impulso de regla +${delta.toFixed(1)} puntos`
+            : 'Se cumplieron las condiciones de impulso';
+    } else if (comp.cap != null) {
+        const delta = Math.max(0, baseScore - finalScore);
+        ruleImpact = comp.limited && delta > 0.05
+            ? `Limitado a ${comp.cap.toFixed(0)}, reducido en ${delta.toFixed(1)} puntos`
+            : `Limitado a ${comp.cap.toFixed(0)}, sin reducción adicional`;
+    }
+
+    let bottleneckMetric = 'TIMBRE';
+    if (rule === 'high_f0_stylized_cap') bottleneckMetric = 'NATURALNESS';
+    else if (rule === 'low_f0_natural_cap' || rule === 'f0_unavailable') bottleneckMetric = 'F0';
+    else if (rule === 'low_f0_stylized_cap') bottleneckMetric = naturalness <= f0Score ? 'NATURALNESS' : 'F0';
+    else if (rule === 'high_f0_male_cap') bottleneckMetric = 'TIMBRE';
+    else {
+        const entries = [
+            { key: 'TIMBRE', score: standard },
+            { key: 'NATURALNESS', score: naturalness },
+            { key: 'F0', score: f0Score }
+        ];
+        bottleneckMetric = entries.reduce((a, b) => a.score <= b.score ? a : b).key;
+    }
+
+    let hasBottleneck = false;
+    let bottleneckTitle = null;
+    let bottleneckDescription = null;
+    if (rule === 'f0_unavailable') {
+        hasBottleneck = true;
+        bottleneckTitle = 'Tono no disponible';
+        bottleneckDescription = 'No hubo un tono confiable disponible, por lo que no se activó la fórmula continua completa.';
+    } else if (rule === 'high_f0_stylized_cap') {
+        hasBottleneck = true;
+        bottleneckTitle = 'Cuello de botella: Baja naturalidad';
+        bottleneckDescription = 'El tono está por encima de 165 Hz, pero la naturalidad por debajo de 50 limita la puntuación general a 30.';
+    } else if (rule === 'low_f0_natural_cap') {
+        hasBottleneck = true;
+        bottleneckTitle = 'Cuello de botella: Tono bajo';
+        bottleneckDescription = 'La naturalidad aprueba, pero el tono de 165 Hz o menos limita la puntuación general a 59.';
+    } else if (rule === 'low_f0_stylized_cap') {
+        hasBottleneck = true;
+        bottleneckTitle = 'Cuello de botella: Tono bajo y baja naturalidad';
+        bottleneckDescription = 'El tono igual o inferior a 165 Hz y la naturalidad por debajo de 50 limitan la puntuación general a 20.';
+    } else if (rule === 'high_f0_male_cap') {
+        hasBottleneck = true;
+        bottleneckTitle = 'Cuello de botella: Puntuación de timbre baja';
+        bottleneckDescription = 'El tono supera los 165 Hz con buena naturalidad, pero el timbre por debajo de 50 limita la puntuación general a 59.';
+    } else if (rule === 'continuous' && (meanF0 == null || meanF0 <= 165.0 || standard < 50.0 || naturalness < 50.0)) {
+        hasBottleneck = true;
+        if (meanF0 == null || meanF0 <= 165.0) {
+            bottleneckTitle = 'Cuello de botella: Tono bajo';
+            bottleneckDescription = 'El tono promedio es igual o inferior a 165 Hz.';
+        } else if (standard < 50.0) {
+            bottleneckTitle = 'Cuello de botella: Puntuación de timbre baja';
+            bottleneckDescription = 'La puntuación del timbre (S) está por debajo de 50.';
+        } else {
+            bottleneckTitle = 'Cuello de botella: Baja naturalidad';
+            bottleneckDescription = 'La naturalidad (N) está por debajo de 50.';
+        }
+    }
+
+    return {
+        profile,
+        rule,
+        ruleTitle: rInfo.title,
+        ruleDescription: rInfo.desc,
+        ruleImpact,
+        bottleneckMetric,
+        hasBottleneck,
+        bottleneckTitle,
+        bottleneckDescription,
+        standard,
+        naturalness,
+        meanF0,
+        f0Score
+    };
 }
 
 function voiceResampleLinear(input, inRate, outRate) {
@@ -13504,13 +14026,14 @@ async function renderPersonalVoice(el) {
         { id: 'analyze', label: '🎙️ Evaluar y Salud Vocal' },
         { id: 'live', label: '📈 Tono en Vivo (F0)' },
         { id: 'tools', label: '🎹 Piano y Espectro FFT' },
-        { id: 'history', label: `📊 Evolución e Historial (${totalCount})` },
+        { id: 'history', label: `📊 Panel de Evolución (${totalCount})` },
     ];
 
     let html = `
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
         <div style="display:flex;gap:6px;flex-wrap:wrap">
             ${subTabs.map(t => `<button class="btn ${voiceState.subTab === t.id ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="switchVoiceSubTab('${t.id}')">${t.label}</button>`).join('')}
+            <button class="btn btn-ghost btn-sm" onclick="openVoiceGuideModal()">📚 Biblioteca de Voz (10 Guías)</button>
         </div>
         <div style="display:flex;align-items:center;gap:8px;font-size:0.78rem;color:var(--text-muted);background:var(--bg-surface);padding:6px 12px;border-radius:99px;border:1px solid var(--border)">
             <span style="width:8px;height:8px;border-radius:50%;background:${voiceState.engineInfo.native_available ? 'var(--sage)' : 'var(--gold)'};display:inline-block"></span>
@@ -13527,17 +14050,17 @@ async function renderPersonalVoice(el) {
         <div class="stat-card lavender" style="cursor:pointer" onclick="switchVoiceSubTab('live')">
             <div class="stat-icon">🎵</div>
             <div class="stat-value">${latest && latest.f0_mean_hz ? parseFloat(latest.f0_mean_hz).toFixed(0) + ' Hz' : avgF0}</div>
-            <div class="stat-label">${latest && latest.f0_mean_hz ? `Nota ${voiceHzToNote(latest.f0_mean_hz)} · Meta >165 Hz` : 'Tono Medio F0'}</div>
+            <div class="stat-label">${latest && latest.f0_mean_hz ? `Nota ${voiceHzToNote(latest.f0_mean_hz)} · Meta >165 Hz` : 'Mi Tono Promedio F0'}</div>
         </div>
         <div class="stat-card coral" style="cursor:pointer" onclick="switchVoiceSubTab('analyze')">
             <div class="stat-icon">🌸</div>
             <div class="stat-value">${latest ? parseFloat(latest.vfp_score || 0).toFixed(1) : '--'}</div>
-            <div class="stat-label">Timbre / Resonancia (S)</div>
+            <div class="stat-label">Partitura de Timbre (S)</div>
         </div>
         <div class="stat-card sage" style="cursor:pointer" onclick="switchVoiceSubTab('analyze')">
             <div class="stat-icon">🩺</div>
             <div class="stat-value">${latestHealth}</div>
-            <div class="stat-label">${latest && latest.hnr_db != null ? `Salud Vocal · HNR ${parseFloat(latest.hnr_db).toFixed(1)} dB` : 'Salud Laríngea (≥30 ok)'}</div>
+            <div class="stat-label">${latest && latest.hnr_db != null ? `Salud Vocal · HNR ${parseFloat(latest.hnr_db).toFixed(1)} dB` : 'Salud de la Voz (≥30 ok)'}</div>
         </div>
     </div>
 
@@ -13616,13 +14139,13 @@ function renderVoiceAnalyzeSubTab(el) {
     let html = `
     <div class="card" style="margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px">
-            <div class="card-title" style="margin:0">📖 Pasaje de Lectura Guiada</div>
+            <div class="card-title" style="margin:0">📖 Pasajes Oficiales de Lectura (Pitchee)</div>
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                 <select class="form-control" style="width:auto;padding:5px 10px;font-size:0.82rem" onchange="onVoicePassageChange(this.value)">
                     ${VOICE_PASSAGES.map((p, idx) => `<option value="${idx}" ${String(idx) === String(voiceState.passageIdx) ? 'selected' : ''}>${esc(p.title)}</option>`).join('')}
                     ${customSaved ? `<option value="custom" ${voiceState.passageIdx === 'custom' ? 'selected' : ''}>★ Mi pasaje personalizado</option>` : ''}
                 </select>
-                <button class="btn btn-ghost btn-sm" onclick="showCustomVoicePassageModal()">✍️ Editar propio</button>
+                <button class="btn btn-ghost btn-sm" onclick="showCustomVoicePassageModal()">✍️ Pasaje propio</button>
             </div>
         </div>
         <div id="voicePassageBox" style="background:var(--bg-base);border-left:4px solid var(--primary);padding:14px 18px;border-radius:10px;line-height:1.7;font-size:0.95rem;color:var(--text)">${esc(currentPassageText)}</div>
@@ -13631,29 +14154,29 @@ function renderVoiceAnalyzeSubTab(el) {
     <div class="card" style="margin-bottom:16px;text-align:center;padding:22px 18px">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:14px">
             <div style="text-align:left">
-                <div style="font-weight:700;font-size:1rem">Grabadora y Evaluador Acústico</div>
-                <div style="font-size:0.8rem;color:var(--text-muted)">Se evalúan en simultáneo Timbre/Resonancia (VFP), Naturalidad, Tono F0 y las 14 métricas clínicas de Salud Vocal</div>
+                <div style="font-weight:700;font-size:1rem">Grabadora y Evaluador Acústico Pitchee</div>
+                <div style="font-size:0.8rem;color:var(--text-muted)">Evalúa en simultáneo Timbre/Resonancia (VFP), Naturalidad, Tono F0, Reglas de Puntuación y las 14 métricas de Salud Vocal</div>
             </div>
             <div style="display:inline-flex;background:var(--bg-base);padding:3px;border-radius:10px;border:1px solid var(--border)">
-                <button class="btn ${voiceState.profile === 'feminization' ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="setVoiceProfile('feminization')">🌸 Objetivo Femenino</button>
-                <button class="btn ${voiceState.profile === 'masculinization' ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="setVoiceProfile('masculinization')">💙 Objetivo Masculino</button>
+                <button class="btn ${voiceState.profile === 'feminization' ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="setVoiceProfile('feminization')">🌸 Tendencia Femenina</button>
+                <button class="btn ${voiceState.profile === 'masculinization' ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="setVoiceProfile('masculinization')">💙 Tendencia Masculina</button>
             </div>
         </div>
 
         <div style="display:flex;flex-direction:column;align-items:center;gap:12px;margin:12px 0">
-            <button id="voiceRecordOrb" onclick="toggleVoiceRecording()" style="width:84px;height:84px;border-radius:50%;border:none;background:var(--primary);color:#151014;font-size:2rem;cursor:pointer;box-shadow:0 0 0 8px rgba(242,139,168,0.18);transition:all 0.2s;display:flex;align-items:center;justify-content:center">🎙️</button>
-            <div id="voiceRecordStatus" style="font-weight:700;font-size:1.02rem">Tocá el micrófono para grabar tu voz (mín. 5 segundos recomendados)</div>
-            <div id="voiceRecordTimer" style="font-size:0.82rem;color:var(--text-muted)">Habla de forma continua y relajada leyendo el pasaje superior</div>
-            <div style="width:100%;max-width:400px;height:8px;background:var(--bg-base);border-radius:99px;overflow:hidden;border:1px solid var(--border)">
+            <button id="voiceRecordOrb" onclick="toggleVoiceRecording()" style="width:88px;height:88px;border-radius:50%;border:none;background:var(--primary);color:#151014;font-size:2.1rem;cursor:pointer;box-shadow:0 0 0 8px rgba(242,139,168,0.18);transition:all 0.2s;display:flex;align-items:center;justify-content:center">🎙️</button>
+            <div id="voiceRecordStatus" style="font-weight:700;font-size:1.02rem">Tocá para comenzar a grabar (Al menos 5.0 s de habla efectiva)</div>
+            <div id="voiceRecordTimer" style="font-size:0.84rem;color:var(--text-muted)">Habla con naturalidad a volumen y distancia normales</div>
+            <div style="width:100%;max-width:420px;height:8px;background:var(--bg-base);border-radius:99px;overflow:hidden;border:1px solid var(--border)">
                 <div id="voiceRecordProgress" style="height:100%;width:0%;background:var(--primary);transition:width 0.12s linear"></div>
             </div>
             <canvas id="voiceLiveWaveCanvas" style="width:100%;max-width:520px;height:68px;background:var(--bg-base);border-radius:10px"></canvas>
         </div>
 
         <div style="display:flex;gap:10px;justify-content:center;align-items:center;flex-wrap:wrap;margin-top:10px;padding-top:12px;border-top:1px solid var(--border)">
-            <input type="text" id="voiceSessionLabelInput" class="form-control" style="max-width:220px;font-size:0.84rem" placeholder="Etiqueta (ej. Mañana, Lectura 1)">
+            <input type="text" id="voiceSessionLabelInput" class="form-control" style="max-width:220px;font-size:0.84rem" placeholder="Etiqueta (ej. Práctica tarde)">
             <label class="btn btn-secondary btn-sm" style="cursor:pointer;margin:0">
-                📂 Subir Audio (.wav/.mp3/.m4a)
+                📂 Analizar Archivo (.wav/.mp3/.m4a)
                 <input type="file" accept="audio/*" style="display:none" onchange="handleVoiceFileUpload(this)">
             </label>
             ${samples.length > 0 ? `
@@ -13685,8 +14208,7 @@ async function toggleVoiceRecording() {
 
 async function startVoiceRecordingSession() {
     try {
-        setIOSMicAudioSession(true);
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const stream = await requestVoiceMicStream();
         const ctx = new (window.AudioContext || window.webkitAudioContext)();
         if (ctx.state === 'suspended') await ctx.resume();
         const source = ctx.createMediaStreamSource(stream);
@@ -13698,6 +14220,7 @@ async function startVoiceRecordingSession() {
         voiceState.recordBuffers = [];
         voiceState.recordSampleRate = ctx.sampleRate;
         voiceState.recordStartTime = performance.now();
+        voiceState.recordSpeechSeconds = 0;
         voiceState.recording = true;
 
         const waveCanvas = document.getElementById('voiceLiveWaveCanvas');
@@ -13707,11 +14230,17 @@ async function startVoiceRecordingSession() {
             if (!voiceState.recording) return;
             const ch = e.inputBuffer.getChannelData(0);
             voiceState.recordBuffers.push(new Float32Array(ch));
+            let energy = 0;
+            for (let i = 0; i < ch.length; i++) energy += ch[i] * ch[i];
+            const rms = Math.sqrt(energy / ch.length);
+            if (rms >= 0.012) {
+                voiceState.recordSpeechSeconds += ch.length / ctx.sampleRate;
+            }
             if (wCtx && waveCanvas) {
                 const w = waveCanvas.width = waveCanvas.clientWidth || 480;
                 const h = waveCanvas.height = waveCanvas.clientHeight || 68;
                 wCtx.clearRect(0, 0, w, h);
-                wCtx.strokeStyle = '#F28BA8';
+                wCtx.strokeStyle = rms >= 0.012 ? '#F28BA8' : '#7CA5F5';
                 wCtx.lineWidth = 2;
                 wCtx.beginPath();
                 const step = Math.max(1, Math.floor(ch.length / w));
@@ -13734,15 +14263,21 @@ async function startVoiceRecordingSession() {
             orb.textContent = '⏹️';
         }
         const st = document.getElementById('voiceRecordStatus');
-        if (st) st.textContent = 'Grabando tu voz... Tocá de nuevo para detener y analizar';
+        if (st) st.textContent = 'Grabando... Tocá el botón rojo para detener y analizar';
 
         voiceState.recordTimer = setInterval(() => {
             const elapsed = (performance.now() - voiceState.recordStartTime) / 1000;
-            const pct = Math.min(100, (elapsed / 5.0) * 100);
+            const speechSec = voiceState.recordSpeechSeconds;
+            const pct = Math.min(100, (speechSec / 5.0) * 100);
             const prog = document.getElementById('voiceRecordProgress');
             const tim = document.getElementById('voiceRecordTimer');
-            if (prog) prog.style.width = `${pct}%`;
-            if (tim) tim.textContent = `Tiempo grabado: ${elapsed.toFixed(1)} s / 5.0 s recomendados`;
+            if (prog) {
+                prog.style.width = `${pct}%`;
+                prog.style.background = speechSec >= 5.0 ? 'var(--sage)' : 'var(--primary)';
+            }
+            if (tim) {
+                tim.innerHTML = `Habla efectiva: <strong style="color:${speechSec >= 5.0 ? 'var(--sage)' : 'var(--text)'}">${speechSec.toFixed(1)} / 5.0 s</strong> · Tiempo total: ${elapsed.toFixed(1)} s`;
+            }
         }, 100);
     } catch (err) {
         showToast('No se pudo acceder al micrófono: ' + err.message);
@@ -13764,9 +14299,9 @@ async function stopAndSubmitVoiceRecording() {
     try { if (voiceState.recordCtx) await voiceState.recordCtx.close(); } catch (_) {}
 
     const totalLen = voiceState.recordBuffers.reduce((acc, b) => acc + b.length, 0);
-    if (totalLen < voiceState.recordSampleRate * 0.8) {
+    if (totalLen < voiceState.recordSampleRate * 1.0) {
         const st = document.getElementById('voiceRecordStatus');
-        if (st) st.textContent = 'Grabación muy corta (< 1s). Intentá hablar al menos 3–5 segundos.';
+        if (st) st.textContent = 'La grabación es demasiado corta (< 1 s). Grabá durante al menos 3–5 segundos.';
         return;
     }
 
@@ -13844,6 +14379,29 @@ async function runBackendVoiceAnalysis(payload) {
     }
 }
 
+function getPreviousVoiceSessionFor(currentSession) {
+    if (!currentSession || !voiceState.sessions || voiceState.sessions.length < 2) return null;
+    const idx = voiceState.sessions.findIndex(s => s.id === currentSession.id);
+    if (idx >= 0 && idx + 1 < voiceState.sessions.length) {
+        return voiceState.sessions[idx + 1];
+    }
+    return voiceState.sessions.find(s => s.id !== currentSession.id) || null;
+}
+
+function formatVoiceDeltaBadge(curr, prev, unit = '') {
+    if (curr == null || prev == null || isNaN(curr) || isNaN(prev)) {
+        return `<span style="font-size:0.73rem;color:var(--text-muted)">vs último —</span>`;
+    }
+    const diff = curr - prev;
+    if (Math.abs(diff) <= 0.05) {
+        return `<span style="font-size:0.73rem;color:var(--text-muted)">vs último → 0${unit}</span>`;
+    }
+    const up = diff > 0;
+    const col = up ? 'var(--sage)' : 'var(--rose)';
+    const dec = unit === ' Hz' ? 0 : 1;
+    return `<span style="font-size:0.73rem;font-weight:700;color:${col}">vs último ${up ? '↑' : '↓'} ${Math.abs(diff).toFixed(dec)}${unit}</span>`;
+}
+
 function renderVoiceSessionDetailInto(container, session) {
     if (!container || !session) return;
     const r = session.result || {};
@@ -13856,103 +14414,193 @@ function renderVoiceSessionDetailInto(container, session) {
     const aud = r.audio || {};
     const feats = vh.features || {};
 
-    const finalScore = comp.final_score != null ? comp.final_score : (session.final_score || 0);
-    const baseScore = comp.base_score != null ? comp.base_score : (session.base_score || 0);
-    const vfpScore = vfp.vfp_standard_score != null ? vfp.vfp_standard_score : (session.vfp_score || 0);
-    const natScore = nat.score != null ? nat.score : (session.naturalness_score || 0);
-    const f0Mean = f0.mean_hz != null ? f0.mean_hz : (session.f0_mean_hz || null);
-    const f0Std = f0.standard_deviation_hz != null ? f0.standard_deviation_hz : (session.f0_std_hz || 0);
+    const finalScore = comp.final_score != null ? comp.final_score : (parseFloat(session.final_score) || 0);
+    const baseScore = comp.base_score != null ? comp.base_score : (parseFloat(session.base_score) || 0);
+    const f0Std = f0.standard_deviation_hz != null ? f0.standard_deviation_hz : (parseFloat(session.f0_std_hz) || 0);
 
-    const ruleKey = comp.rule || session.rule_code || 'continuous';
+    const insight = computePitcheeScoreInsight(session);
+    const prevSession = getPreviousVoiceSessionFor(session);
+    const prevFinal = prevSession ? parseFloat(prevSession.final_score) : null;
+    const prevStd = prevSession ? (insight.profile === 'masculinization' ? 100 - parseFloat(prevSession.vfp_score) : parseFloat(prevSession.vfp_score)) : null;
+    const prevNat = prevSession ? parseFloat(prevSession.naturalness_score) : null;
+    const prevF0 = prevSession && prevSession.f0_mean_hz ? parseFloat(prevSession.f0_mean_hz) : null;
+
+    const ruleKey = insight.rule;
     const rInfo = VOICE_RULE_INFO[ruleKey] || VOICE_RULE_INFO.continuous;
     const passed = finalScore >= 60;
 
+    // ScoreIndexChart dual-circle percentages (ScoreResult.kt:172-273)
+    const femVisual = Math.max(0, Math.min(100, insight.profile === 'masculinization' ? 100 - finalScore : finalScore));
+    const mascVisual = Math.max(0, Math.min(100, 100 - femVisual));
+    const femDiameter = Math.round(58 + femVisual * 0.46);
+    const mascDiameter = Math.round(58 + mascVisual * 0.46);
+
     const audioSrc = session.audio_b64 ? `data:audio/wav;base64,${session.audio_b64}` : '';
 
+    // Suggested Knowledge Base articles (ScoreSuggestions.kt)
+    const suggestedKeys = [];
+    if (insight.profile !== 'masculinization') {
+        if (ruleKey === 'continuous') {
+            suggestedKeys.push(finalScore >= 60 ? 'CONTINUOUS_PASS' : 'CONTINUOUS_NO_PASS');
+        } else if (rInfo.articleKey && VOICE_KNOWLEDGE_ARTICLES[rInfo.articleKey]) {
+            suggestedKeys.push(rInfo.articleKey);
+        }
+        const metricGuideKey = insight.bottleneckMetric === 'TIMBRE'
+            ? 'TIMBRE_GUIDE'
+            : (insight.bottleneckMetric === 'NATURALNESS' ? 'NATURALNESS_GUIDE' : 'PITCH_GUIDE');
+        if (!suggestedKeys.includes(metricGuideKey)) suggestedKeys.push(metricGuideKey);
+    }
+
     let html = `
-    <div class="card" style="margin-bottom:14px;border-left:4px solid ${passed ? 'var(--sage)' : 'var(--primary)'}">
-        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px">
-            <div>
+    <div class="card" style="margin-bottom:14px;border-left:4px solid ${insight.hasBottleneck ? 'var(--rose)' : (passed ? 'var(--sage)' : 'var(--primary)')}">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:16px">
+            <div style="flex:1;min-width:250px">
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                     <span class="tag ${rInfo.tagClass}">${rInfo.badge}</span>
+                    <span class="tag tag-lavender">${esc(insight.ruleImpact)}</span>
                     <span style="font-size:0.78rem;color:var(--text-muted)">${esc(session.label || 'Sesión')} · ${fmtDate(session.date)}</span>
                 </div>
-                <h3 style="margin:6px 0 4px;font-size:1.2rem">${passed ? `🎉 ¡Objetivo alcanzado! (${finalScore.toFixed(1)} pts)` : `Evaluación: ${finalScore.toFixed(1)} pts — En entrenamiento`}</h3>
-                <div style="font-size:0.84rem;color:var(--text-muted)">${esc(rInfo.desc)}</div>
+                <h3 style="margin:8px 0 4px;font-size:1.22rem">
+                    ${insight.hasBottleneck
+                        ? `⚠️ ${esc(insight.bottleneckTitle)}`
+                        : (passed ? `🎉 ¡Tu voz aprueba! (${finalScore.toFixed(1)} pts)` : `Evaluación Continua: ${finalScore.toFixed(1)} pts`)}
+                </h3>
+                <div style="font-size:0.85rem;color:var(--text-muted);margin-bottom:10px">
+                    ${esc(insight.hasBottleneck ? insight.bottleneckDescription : rInfo.desc)}
+                </div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+                    <button class="btn btn-secondary btn-sm" onclick="openVoiceRulesModal()">📐 Ver Detalles y Fórmulas de Puntuación</button>
+                    ${suggestedKeys.map(k => {
+                        const art = VOICE_KNOWLEDGE_ARTICLES[k];
+                        return art ? `<button class="btn btn-ghost btn-sm" onclick="openVoiceGuideModal('${k}')">📖 ${esc(art.title)}</button>` : '';
+                    }).join('')}
+                </div>
             </div>
-            ${audioSrc ? `<div><audio controls src="${audioSrc}" style="height:36px"></audio></div>` : ''}
+
+            <!-- Pitchee Dual-Circle ScoreIndexChart -->
+            <div style="display:flex;align-items:center;gap:12px;background:var(--bg-base);padding:10px 16px;border-radius:16px;border:1px solid var(--border)">
+                <div style="width:${mascDiameter}px;height:${mascDiameter}px;border-radius:50%;background:rgba(124,165,245,0.22);border:2px solid #7CA5F5;color:#7CA5F5;display:flex;flex-direction:column;align-items:center;justify-content:center;font-weight:800;font-size:0.86rem" title="Proporción Masculina">
+                    <span>${mascVisual.toFixed(0)}%</span>
+                    <span style="font-size:0.62rem;font-weight:600">Masc</span>
+                </div>
+                <div style="width:${femDiameter}px;height:${femDiameter}px;border-radius:50%;background:rgba(242,139,168,0.25);border:2px solid #F28BA8;color:#F28BA8;display:flex;flex-direction:column;align-items:center;justify-content:center;font-weight:800;font-size:0.95rem" title="Proporción Femenina">
+                    <span>${femVisual.toFixed(0)}%</span>
+                    <span style="font-size:0.64rem;font-weight:600">Fem</span>
+                </div>
+            </div>
         </div>
+        ${audioSrc ? `<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-wrap:wrap"><span style="font-size:0.8rem;color:var(--text-muted)">🔊 Grabación guardada:</span><audio controls src="${audioSrc}" style="height:36px;flex:1;min-width:220px"></audio></div>` : ''}
     </div>
 
-    <div class="stats-row" style="grid-template-columns:repeat(auto-fit,minmax(175px,1fr));margin-bottom:14px">
+    <div class="stats-row" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-bottom:14px">
         <div class="card" style="padding:14px;margin:0">
-            <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;font-weight:700">Puntuación General</div>
-            <div style="font-size:1.75rem;font-weight:800;color:var(--primary);margin:4px 0">${finalScore.toFixed(1)}</div>
-            <div style="font-size:0.76rem;color:var(--text-muted)">Base: ${baseScore.toFixed(1)} / 100 (≥60 aprueba)</div>
+            <div style="display:flex;justify-content:space-between;align-items:center">
+                <span style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;font-weight:700">Puntuación General</span>
+                ${formatVoiceDeltaBadge(finalScore, prevFinal)}
+            </div>
+            <div style="font-size:1.8rem;font-weight:800;color:var(--primary);margin:4px 0">${finalScore.toFixed(1)}</div>
+            <div style="font-size:0.76rem;color:var(--text-muted)">Base antes de regla: <strong>${baseScore.toFixed(1)}</strong> / 100 (≥60 aprueba)</div>
+            <div style="margin-top:8px;height:6px;background:var(--bg-base);border-radius:99px;overflow:hidden">
+                <div style="height:100%;width:${Math.min(100, Math.max(0, finalScore))}%;background:var(--primary)"></div>
+            </div>
         </div>
-        <div class="card" style="padding:14px;margin:0">
-            <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;font-weight:700">Timbre / Resonancia (S)</div>
-            <div style="font-size:1.75rem;font-weight:800;color:#E75480;margin:4px 0">${vfpScore.toFixed(1)}</div>
-            <div style="font-size:0.76rem;color:var(--text-muted)">${vfp.window_count || 0} ventanas · Brillo vocal</div>
+
+        <div class="card" style="padding:14px;margin:0;${insight.bottleneckMetric === 'TIMBRE' ? 'border:1px solid var(--rose)' : ''}">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+                <span style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;font-weight:700">Timbre S ${insight.bottleneckMetric === 'TIMBRE' ? '<span class="tag tag-rose" style="padding:1px 6px;font-size:0.65rem">Más bajo</span>' : ''}</span>
+                ${formatVoiceDeltaBadge(insight.standard, prevStd)}
+            </div>
+            <div style="font-size:1.8rem;font-weight:800;color:#E75480;margin:4px 0">${insight.standard.toFixed(1)}</div>
+            <div style="font-size:0.76rem;color:var(--text-muted)">${vfp.window_count || 0} ventanas · Umbral ≥50</div>
+            <div style="margin-top:8px;height:6px;background:var(--bg-base);border-radius:99px;overflow:hidden">
+                <div style="height:100%;width:${Math.min(100, Math.max(0, insight.standard))}%;background:#E75480"></div>
+            </div>
         </div>
-        <div class="card" style="padding:14px;margin:0">
-            <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;font-weight:700">Naturalidad (N)</div>
-            <div style="font-size:1.75rem;font-weight:800;color:#25A6A0;margin:4px 0">${natScore.toFixed(1)}</div>
-            <div style="font-size:0.76rem;color:var(--text-muted)">${natScore >= 50 ? 'Fonación relajada (≥50)' : 'Fonación tensa (<50)'}</div>
+
+        <div class="card" style="padding:14px;margin:0;${insight.bottleneckMetric === 'NATURALNESS' ? 'border:1px solid var(--rose)' : ''}">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+                <span style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;font-weight:700">Naturalidad N ${insight.bottleneckMetric === 'NATURALNESS' ? '<span class="tag tag-rose" style="padding:1px 6px;font-size:0.65rem">Más bajo</span>' : ''}</span>
+                ${formatVoiceDeltaBadge(insight.naturalness, prevNat)}
+            </div>
+            <div style="font-size:1.8rem;font-weight:800;color:#25A6A0;margin:4px 0">${insight.naturalness.toFixed(1)}</div>
+            <div style="font-size:0.76rem;color:var(--text-muted)">${insight.naturalness >= 80 ? 'Rango Bonus (≥80)' : (insight.naturalness >= 50 ? 'Aprobado (≥50)' : 'Tensa / Artificial (<50)')}</div>
+            <div style="margin-top:8px;height:6px;background:var(--bg-base);border-radius:99px;overflow:hidden">
+                <div style="height:100%;width:${Math.min(100, Math.max(0, insight.naturalness))}%;background:#25A6A0"></div>
+            </div>
         </div>
-        <div class="card" style="padding:14px;margin:0">
-            <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;font-weight:700">Tono Promedio (F0)</div>
-            <div style="font-size:1.75rem;font-weight:800;color:var(--lavender);margin:4px 0">${f0Mean ? f0Mean.toFixed(1) + ' Hz' : 'N/A'}</div>
-            <div style="font-size:0.76rem;color:var(--text-muted)">${f0Mean ? `Nota ${voiceHzToNote(f0Mean)} · ±${f0Std.toFixed(1)} Hz` : 'Sin tono'} · (${session.fem_pct || 0}% >165Hz)</div>
+
+        <div class="card" style="padding:14px;margin:0;${insight.bottleneckMetric === 'F0' ? 'border:1px solid var(--rose)' : ''}">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+                <span style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;font-weight:700">Tono Medio F0 ${insight.bottleneckMetric === 'F0' ? '<span class="tag tag-rose" style="padding:1px 6px;font-size:0.65rem">Más bajo</span>' : ''}</span>
+                ${formatVoiceDeltaBadge(insight.meanF0, prevF0, ' Hz')}
+            </div>
+            <div style="font-size:1.8rem;font-weight:800;color:var(--lavender);margin:4px 0">${insight.meanF0 ? insight.meanF0.toFixed(0) + ' Hz' : 'No det.'}</div>
+            <div style="font-size:0.76rem;color:var(--text-muted)">${insight.meanF0 ? `Nota ${voiceHzToNote(insight.meanF0)} · ±${f0Std.toFixed(1)} Hz` : 'Sin tono'} · (${session.fem_pct || 0}% >165Hz)</div>
+            <div style="margin-top:8px;height:6px;background:var(--bg-base);border-radius:99px;overflow:hidden">
+                <div style="height:100%;width:${Math.min(100, Math.max(0, insight.f0Score))}%;background:var(--lavender)"></div>
+            </div>
         </div>
     </div>
 
     <div class="card" style="margin-bottom:14px">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:10px">
-            <div class="card-title" style="margin:0">📈 Línea de Tiempo Acústica: Tono F0 (Hz), Timbre (S) y Naturalidad (N)</div>
-            <div style="font-size:0.78rem;color:var(--text-muted)">Duración: ${(aud.analyzed_seconds || session.duration_seconds || 0).toFixed(2)}s · Habla efectiva VAD: ${(vad.speech_seconds || session.speech_seconds || 0).toFixed(2)}s</div>
+            <div class="card-title" style="margin:0">📈 Línea de Tiempo Acústica: Curva F0 (Hz), Timbre (S) y Naturalidad (N)</div>
+            <div style="font-size:0.78rem;color:var(--text-muted)">Duración analizada: ${(aud.analyzed_seconds || session.duration_seconds || 0).toFixed(2)}s · Habla sonora VAD: ${(vad.speech_seconds || session.speech_seconds || 0).toFixed(2)}s (${vad.segment_count || 0} segm.)</div>
         </div>
         <canvas id="voiceTimelineCanvas" style="width:100%;height:250px;background:var(--bg-base);border-radius:10px;display:block"></canvas>
         <div style="display:flex;gap:16px;font-size:0.78rem;color:var(--text-muted);margin-top:8px;flex-wrap:wrap">
-            <span>● <strong style="color:var(--primary)">Curva F0 (Hz)</strong> (Línea punteada: 165 Hz)</span>
-            <span>● <strong style="color:#E75480">Timbre VFP (0–100)</strong></span>
-            <span>● <strong style="color:#25A6A0">Naturalidad (0–100)</strong></span>
-            <span>▬ <strong style="color:#7CA5F5">Segmentos de habla activa (VAD)</strong></span>
+            <span>● <strong style="color:var(--primary)">Curva F0 (>165 Hz rosa / <165 Hz azul)</strong></span>
+            <span>● <strong style="color:#E75480">Timbre VFP S (0–100)</strong></span>
+            <span>● <strong style="color:#25A6A0">Naturalidad N (0–100)</strong></span>
+            <span>▬ <strong style="color:#7CA5F5">Segmentos de habla activa (Silero VAD)</strong></span>
         </div>
     </div>`;
 
     if (vh && vh.health_score != null) {
         const isHealthy = !vh.is_disordered;
+        const threshold = vh.decision_threshold != null ? vh.decision_threshold : 30.0;
+        const disProb = vh.disorder_probability != null ? (vh.disorder_probability * 100).toFixed(1) + '%' : '--';
         html += `
         <div class="card">
             <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px">
-                <div class="card-title" style="margin:0">🩺 Diagnóstico de Salud y Estabilidad Vocal (14 Métricas Clínicas)</div>
-                <span class="tag ${isHealthy ? 'tag-sage' : 'tag-rose'}">${isHealthy ? '✅ Saludable (≥30 · Sin ronquera)' : '⚠️ Posible fatiga o ronquera (<30)'}</span>
+                <div>
+                    <div class="card-title" style="margin:0">🩺 Salud de la Voz (14 Métricas Clínicas Pitchee)</div>
+                    <div style="font-size:0.78rem;color:var(--text-muted)">Línea de referencia saludable: ≥ ${threshold.toFixed(0)} pts · Riesgo de fatiga/disfonía: ${disProb}</div>
+                </div>
+                <span class="tag ${isHealthy ? 'tag-sage' : 'tag-rose'}">${isHealthy ? '✅ La condición de la voz se ve bien' : '⚠️ Considere prestar atención a la condición de su voz'}</span>
             </div>
-            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:10px">
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px">
                 <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
-                    <div style="font-size:0.72rem;color:var(--text-muted)">Salud Vocal</div>
-                    <div style="font-size:1.25rem;font-weight:700;color:${isHealthy ? 'var(--sage)' : 'var(--rose)'}">${vh.health_score.toFixed(1)} / 100</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted)">Puntaje de Salud Vocal</div>
+                    <div style="font-size:1.3rem;font-weight:800;color:${isHealthy ? 'var(--sage)' : 'var(--rose)'}">${vh.health_score.toFixed(1)} / 100</div>
                 </div>
                 <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
-                    <div style="font-size:0.72rem;color:var(--text-muted)">HNR (Claridad Armónica)</div>
-                    <div style="font-size:1.25rem;font-weight:700">${feats.hnr_db != null ? feats.hnr_db.toFixed(2) + ' dB' : '--'}</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted)">HNR (Armónicos/Ruido)</div>
+                    <div style="font-size:1.2rem;font-weight:700">${feats.hnr_db != null ? feats.hnr_db.toFixed(1) + ' dB' : '--'}</div>
                 </div>
                 <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
-                    <div style="font-size:0.72rem;color:var(--text-muted)">CPPS (Prominencia Cepstral)</div>
-                    <div style="font-size:1.25rem;font-weight:700">${feats.cpps_db != null ? feats.cpps_db.toFixed(2) + ' dB' : '--'}</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted)">CPPS (Pico Cepstral)</div>
+                    <div style="font-size:1.2rem;font-weight:700">${feats.cpps_db != null ? feats.cpps_db.toFixed(1) + ' dB' : '--'}</div>
                 </div>
                 <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
-                    <div style="font-size:0.72rem;color:var(--text-muted)">Jitter / Shimmer Local</div>
-                    <div style="font-size:1.15rem;font-weight:700">${((feats.jitter_local || 0) * 100).toFixed(2)}% / ${((feats.shimmer_local || 0) * 100).toFixed(2)}%</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted)">Jitter (Local / RAP / PPQ5)</div>
+                    <div style="font-size:1.02rem;font-weight:700">${feats.jitter_local != null ? feats.jitter_local.toFixed(3) : '--'} / ${feats.jitter_rap != null ? feats.jitter_rap.toFixed(3) : '--'} / ${feats.jitter_ppq5 != null ? feats.jitter_ppq5.toFixed(3) : '--'}</div>
                 </div>
                 <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
-                    <div style="font-size:0.72rem;color:var(--text-muted)">Mediana / IQR F0</div>
-                    <div style="font-size:1.15rem;font-weight:700">${feats.f0_median != null ? feats.f0_median.toFixed(0) : '--'} Hz (±${feats.f0_iqr != null ? feats.f0_iqr.toFixed(0) : '--'})</div>
+                    <div style="font-size:0.72rem;color:var(--text-muted)">Shimmer (Local / APQ3 / APQ5)</div>
+                    <div style="font-size:1.02rem;font-weight:700">${feats.shimmer_local != null ? feats.shimmer_local.toFixed(3) : '--'} / ${feats.shimmer_apq3 != null ? feats.shimmer_apq3.toFixed(3) : '--'} / ${feats.shimmer_apq5 != null ? feats.shimmer_apq5.toFixed(3) : '--'}</div>
+                </div>
+                <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
+                    <div style="font-size:0.72rem;color:var(--text-muted)">Mediana F0 / IQR / CV</div>
+                    <div style="font-size:1.02rem;font-weight:700">${feats.f0_median != null ? feats.f0_median.toFixed(1) + ' Hz' : '--'} · ±${feats.f0_iqr != null ? feats.f0_iqr.toFixed(1) : '--'} · CV ${feats.f0_cv != null ? (feats.f0_cv * 100).toFixed(1) + '%' : '--'}</div>
+                </div>
+                <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
+                    <div style="font-size:0.72rem;color:var(--text-muted)">Intensidad Mediana / IQR</div>
+                    <div style="font-size:1.1rem;font-weight:700">${feats.intensity_median != null ? feats.intensity_median.toFixed(1) + ' dB' : '--'} (±${feats.intensity_iqr != null ? feats.intensity_iqr.toFixed(1) + ' dB' : '--'})</div>
                 </div>
                 <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
                     <div style="font-size:0.72rem;color:var(--text-muted)">Fracción Sonora</div>
-                    <div style="font-size:1.15rem;font-weight:700">${feats.voiced_fraction != null ? (feats.voiced_fraction * 100).toFixed(0) + '%' : '--'}</div>
+                    <div style="font-size:1.2rem;font-weight:700">${feats.voiced_fraction != null ? (feats.voiced_fraction * 100).toFixed(1) + '%' : '--'}</div>
                 </div>
             </div>
         </div>`;
@@ -13960,6 +14608,72 @@ function renderVoiceSessionDetailInto(container, session) {
 
     container.innerHTML = html;
     setTimeout(() => drawVoiceTimelineChart(r), 20);
+}
+
+function openVoiceRulesModal() {
+    const s = voiceState.currentSession;
+    if (!s) return;
+    const r = s.result || {};
+    const comp = r.composite || {};
+    const insight = computePitcheeScoreInsight(s);
+    const finalScore = comp.final_score != null ? comp.final_score : (parseFloat(s.final_score) || 0);
+    const baseScore = comp.base_score != null ? comp.base_score : (parseFloat(s.base_score) || 0);
+
+    const sr = Math.max(0, Math.min(1, insight.standard / 100));
+    const nr = Math.max(0, Math.min(1, (insight.naturalness - 40) / 50));
+    const f0r = insight.meanF0 ? Math.max(0, Math.min(1, (insight.meanF0 - 110) / 90)) : 0;
+
+    const allRuleKeys = ['continuous', 'pass_boost', 'high_f0_stylized_cap', 'low_f0_natural_cap', 'low_f0_stylized_cap', 'high_f0_male_cap', 'f0_unavailable'];
+
+    const html = `
+    <div style="display:flex;flex-direction:column;gap:14px;font-size:0.88rem;line-height:1.6">
+        <div style="display:flex;justify-content:space-between;align-items:center;background:var(--bg-base);padding:14px 16px;border-radius:12px;border:1px solid var(--border)">
+            <div>
+                <div style="font-size:0.75rem;color:var(--text-muted);text-transform:uppercase;font-weight:700">Puntuación General Final</div>
+                <div style="font-size:2rem;font-weight:800;color:var(--primary)">${finalScore.toFixed(1)} <span style="font-size:0.9rem;color:var(--text-muted);font-weight:500">/ 100 (Base: ${baseScore.toFixed(1)})</span></div>
+                <div style="font-size:0.8rem;color:var(--text-muted)">60 es la puntuación para aprobar · ${esc(insight.ruleImpact)}</div>
+            </div>
+            <span class="tag ${(VOICE_RULE_INFO[insight.rule] || VOICE_RULE_INFO.continuous).tagClass}">${(VOICE_RULE_INFO[insight.rule] || VOICE_RULE_INFO.continuous).badge}</span>
+        </div>
+
+        <div style="background:var(--bg-base);padding:14px 16px;border-radius:12px;border:left:4px solid var(--primary)">
+            <div style="font-weight:700;margin-bottom:6px">📐 Fórmula Base Pitchee-core (scoring.cpp)</div>
+            <div style="font-family:monospace;background:var(--bg-surface);padding:10px 12px;border-radius:8px;font-size:0.82rem;overflow-x:auto">
+                S_r = Standard / 100 = <strong>${sr.toFixed(3)}</strong><br>
+                N_r = clamp((Naturalness - 40) / 50, 0, 1) = <strong>${nr.toFixed(3)}</strong><br>
+                F0_r = clamp((F0 - 110) / 90, 0, 1) = <strong>${f0r.toFixed(3)}</strong><br>
+                Base = 100 × (0.50·S_r + 0.20·N_r + 0.15·F0_r + 0.15·S_r·N_r·F0_r) = <strong>${baseScore.toFixed(2)}</strong>
+            </div>
+        </div>
+
+        <div>
+            <div style="font-weight:700;margin-bottom:8px">Reglas de Puntuación (Regla activa resaltada)</div>
+            <div style="display:flex;flex-direction:column;gap:8px">
+                ${allRuleKeys.map(k => {
+                    const info = VOICE_RULE_INFO[k];
+                    const active = k === insight.rule;
+                    return `
+                    <div style="padding:10px 14px;border-radius:10px;background:var(--bg-base);border:${active ? '2px solid var(--primary)' : '1px solid var(--border)'}">
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+                            <strong>${esc(info.title)}</strong>
+                            ${active ? '<span class="tag tag-sage">Regla emparejada</span>' : ''}
+                        </div>
+                        <div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">
+                            <strong>Condición:</strong> ${esc(info.condition)} · <strong>Fórmula:</strong> <code>${esc(info.formula)}</code>
+                        </div>
+                        <div style="font-size:0.82rem;margin-top:4px">${esc(info.desc)}</div>
+                    </div>`;
+                }).join('')}
+            </div>
+        </div>
+    </div>`;
+
+    openModal('📐 Reglas y Fórmulas de Puntuación Pitchee', html);
+    const saveBtn = document.getElementById('modalSave');
+    if (saveBtn) {
+        saveBtn.textContent = 'Cerrar';
+        saveBtn.onclick = closeModal;
+    }
 }
 
 function drawVoiceTimelineChart(r) {
@@ -14033,27 +14747,26 @@ function drawVoiceTimelineChart(r) {
         ctx.stroke();
     }
 
-    // F0 curve
+    // F0 curve colored by >= 165 Hz (pink) vs < 165 Hz (blue) just like AudioTimeline.kt
     const f0Wins = (r.f0 && r.f0.windows) || [];
-    ctx.strokeStyle = '#F28BA8';
-    ctx.lineWidth = 2.5;
-    let penDown = false;
-    ctx.beginPath();
+    ctx.lineWidth = 2.6;
+    let prevPt = null;
     f0Wins.forEach(win => {
         if (win.f0_hz == null) {
-            penDown = false;
+            prevPt = null;
             return;
         }
         const xm = xOf((win.start_seconds + win.end_seconds) / 2);
         const ym = yOfHz(win.f0_hz);
-        if (!penDown) {
-            ctx.moveTo(xm, ym);
-            penDown = true;
-        } else {
+        if (prevPt) {
+            ctx.strokeStyle = win.f0_hz >= 165 ? '#F28BA8' : '#7CA5F5';
+            ctx.beginPath();
+            ctx.moveTo(prevPt.x, prevPt.y);
             ctx.lineTo(xm, ym);
+            ctx.stroke();
         }
+        prevPt = { x: xm, y: ym, hz: win.f0_hz };
     });
-    ctx.stroke();
 
     // Time axis
     ctx.fillStyle = '#a8929e';
@@ -14071,11 +14784,12 @@ function renderVoiceLivePitchSubTab(el) {
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
             <div>
                 <div class="card-title" style="margin:0">📈 Monitor de Tono Fundamental (F0) en Tiempo Real</div>
-                <div style="font-size:0.8rem;color:var(--text-muted)">La línea de 165 Hz divide la zona masculina/andrógena (<165 Hz) de la zona femenina (>165 Hz)</div>
+                <div style="font-size:0.8rem;color:var(--text-muted)">Nota: 165 Hz es el límite común entre tendencia masculina (<165 Hz) y femenina (>165 Hz)</div>
             </div>
-            <div style="display:flex;gap:8px">
-                <button id="voiceLivePitchBtn" class="btn btn-primary" onclick="toggleVoiceLivePitch()">▶️ Iniciar Monitoreo</button>
-                <button class="btn btn-secondary" onclick="clearVoiceLivePitch()">🔄 Limpiar</button>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <button class="btn btn-ghost btn-sm" onclick="toggleVoiceLivePitchStyle()">${voiceState.livePitchChartStyle === 'curve' ? '📈 Estilo: Curva' : '••• Estilo: Puntos'}</button>
+                <button id="voiceLivePitchBtn" class="btn btn-primary btn-sm" onclick="toggleVoiceLivePitch()">▶️ Iniciar Monitoreo</button>
+                <button class="btn btn-secondary btn-sm" onclick="clearVoiceLivePitch()">🔄 Reiniciar</button>
             </div>
         </div>
 
@@ -14083,20 +14797,20 @@ function renderVoiceLivePitchSubTab(el) {
             <div style="background:var(--bg-base);padding:12px 14px;border-radius:12px;border:1px solid var(--border)">
                 <div style="font-size:0.74rem;color:var(--text-muted)">TONO ACTUAL</div>
                 <div id="vLiveCurrentHz" style="font-size:1.6rem;font-weight:800;color:var(--primary)">-- Hz</div>
-                <div id="vLiveCurrentNote" style="font-size:0.78rem;color:var(--text-muted)">Nota: --</div>
+                <div id="vLiveCurrentNote" style="font-size:0.78rem;color:var(--text-muted)">Esperando un tono estable</div>
             </div>
             <div style="background:var(--bg-base);padding:12px 14px;border-radius:12px;border:1px solid var(--border)">
-                <div style="font-size:0.74rem;color:var(--text-muted)">PROMEDIO DE SESIÓN</div>
+                <div style="font-size:0.74rem;color:var(--text-muted)">MI TONO PROMEDIO</div>
                 <div id="vLiveAvgHz" style="font-size:1.6rem;font-weight:800;color:var(--lavender)">-- Hz</div>
                 <div id="vLiveRangeHz" style="font-size:0.78rem;color:var(--text-muted)">Rango: -- a -- Hz</div>
             </div>
             <div style="background:var(--bg-base);padding:12px 14px;border-radius:12px;border:1px solid var(--border)">
-                <div style="font-size:0.74rem;color:var(--text-muted)">TIEMPO EN ZONA >165 HZ</div>
+                <div style="font-size:0.74rem;color:var(--text-muted)">PROPORCIÓN >165 HZ</div>
                 <div id="vLiveFemPct" style="font-size:1.6rem;font-weight:800;color:var(--sage)">--%</div>
                 <div style="font-size:0.78rem;color:var(--text-muted)">Objetivo recomendado: ≥75%</div>
             </div>
             <div style="background:var(--bg-base);padding:12px 14px;border-radius:12px;border:1px solid var(--border)">
-                <div style="font-size:0.74rem;color:var(--text-muted)">ESTABILIDAD (DESV. EST.)</div>
+                <div style="font-size:0.74rem;color:var(--text-muted)">VARIACIÓN DE TONO (DESV.)</div>
                 <div id="vLiveStdHz" style="font-size:1.6rem;font-weight:800">-- Hz</div>
                 <div id="vLiveConf" style="font-size:0.78rem;color:var(--text-muted)">Confianza: --</div>
             </div>
@@ -14106,18 +14820,23 @@ function renderVoiceLivePitchSubTab(el) {
     </div>
 
     <div class="card">
-        <div class="card-title">📖 Pasaje de referencia para leer mientras monitoreás tu curva</div>
+        <div class="card-title">📖 Pasaje de lectura en vivo</div>
         <div style="background:var(--bg-base);border-left:4px solid var(--primary);padding:14px 18px;border-radius:10px;line-height:1.7;font-size:0.95rem">${esc(pText)}</div>
     </div>`;
 
-    setTimeout(() => drawVoiceLivePitchCanvas(), 20);
+    setTimeout(() => updateVoiceLivePitchUI(), 20);
+}
+
+function toggleVoiceLivePitchStyle() {
+    voiceState.livePitchChartStyle = voiceState.livePitchChartStyle === 'curve' ? 'dots' : 'curve';
+    const subEl = document.getElementById('voiceSubContent');
+    if (subEl && voiceState.subTab === 'live') renderVoiceLivePitchSubTab(subEl);
 }
 
 async function toggleVoiceLivePitch() {
     if (!voiceState.livePitchActive) {
         try {
-            setIOSMicAudioSession(true);
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const stream = await requestVoiceMicStream();
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
             if (ctx.state === 'suspended') await ctx.resume();
             const source = ctx.createMediaStreamSource(stream);
@@ -14173,13 +14892,13 @@ async function toggleVoiceLivePitch() {
         try { if (voiceState.livePitchStream) voiceState.livePitchStream.getTracks().forEach(t => t.stop()); } catch (_) {}
         try { if (voiceState.livePitchCtx) await voiceState.livePitchCtx.close(); } catch (_) {}
         const btn = document.getElementById('voiceLivePitchBtn');
-        if (btn) btn.textContent = '▶️ Iniciar Monitoreo';
+        if (btn) btn.textContent = '▶️ Reanudar Monitoreo';
     }
 }
 
 function clearVoiceLivePitch() {
     voiceState.livePitchFrames = [];
-    drawVoiceLivePitchCanvas();
+    updateVoiceLivePitchUI();
 }
 
 function updateVoiceLivePitchUI() {
@@ -14249,24 +14968,36 @@ function drawVoiceLivePitchCanvas() {
 
     ctx.fillStyle = '#a8929e';
     ctx.font = '11.5px Outfit, sans-serif';
-    ctx.fillText('165 Hz (Umbral femenino)', 10, y165 - 6);
+    ctx.fillText('165 Hz (Límite común)', 10, y165 - 6);
     ctx.fillText('220 Hz (A3 referencia)', 10, y220 - 6);
 
     const frames = voiceState.livePitchFrames;
     if (!frames.length) return;
 
-    ctx.lineWidth = 3;
-    for (let i = 1; i < frames.length; i++) {
-        const prev = frames[i - 1];
-        const curr = frames[i];
-        if (!prev.voiced || !curr.voiced || !prev.f0_hz || !curr.f0_hz) continue;
-        const x1 = ((i - 1) / Math.max(1, frames.length - 1)) * (w - 20) + 10;
-        const x2 = (i / Math.max(1, frames.length - 1)) * (w - 20) + 10;
-        ctx.strokeStyle = curr.f0_hz >= 165 ? '#F28BA8' : '#7CA5F5';
-        ctx.beginPath();
-        ctx.moveTo(x1, yOf(prev.f0_hz));
-        ctx.lineTo(x2, yOf(curr.f0_hz));
-        ctx.stroke();
+    if (voiceState.livePitchChartStyle === 'dots') {
+        for (let i = 0; i < frames.length; i++) {
+            const curr = frames[i];
+            if (!curr.voiced || !curr.f0_hz) continue;
+            const x = (i / Math.max(1, frames.length - 1)) * (w - 20) + 10;
+            ctx.fillStyle = curr.f0_hz >= 165 ? '#F28BA8' : '#7CA5F5';
+            ctx.beginPath();
+            ctx.arc(x, yOf(curr.f0_hz), 3.2, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    } else {
+        ctx.lineWidth = 3;
+        for (let i = 1; i < frames.length; i++) {
+            const prev = frames[i - 1];
+            const curr = frames[i];
+            if (!prev.voiced || !curr.voiced || !prev.f0_hz || !curr.f0_hz) continue;
+            const x1 = ((i - 1) / Math.max(1, frames.length - 1)) * (w - 20) + 10;
+            const x2 = (i / Math.max(1, frames.length - 1)) * (w - 20) + 10;
+            ctx.strokeStyle = curr.f0_hz >= 165 ? '#F28BA8' : '#7CA5F5';
+            ctx.beginPath();
+            ctx.moveTo(x1, yOf(prev.f0_hz));
+            ctx.lineTo(x2, yOf(curr.f0_hz));
+            ctx.stroke();
+        }
     }
 }
 
@@ -14274,12 +15005,12 @@ function drawVoiceLivePitchCanvas() {
 function renderVoiceToolsSubTab(el) {
     el.innerHTML = `
     <div class="card" style="margin-bottom:16px">
-        <div class="card-title">🎹 Teclado Acústico de Referencia Vocal (F#2 a F4)</div>
+        <div class="card-title">🎹 Teclas del Piano (F#2 a F4 · Toca para reproducir, mantén presionado para sostener)</div>
         <div style="font-size:0.83rem;color:var(--text-muted);margin-bottom:12px">
-            Mantené presionada cualquier nota para escuchar su tono fundamental + primer armónico e imitar la altura con tu voz:
-            <span style="margin-left:8px">🟦 <strong>Masculino (F#2–C#3 · 92–139 Hz)</strong></span> ·
-            <span>⬜ <strong>Andrógeno (D3–F3 · 147–175 Hz)</strong></span> ·
-            <span>🌸 <strong>Femenino (F#3–C#4 · 185–277 Hz)</strong></span>
+            Toca notas y observa su tono de referencia:
+            <span style="margin-left:8px">🟦 <strong>Masculino (F#2–C#3 · 92.5–138.6 Hz)</strong></span> ·
+            <span>⬜ <strong>Neutral (D3–F3 · 146.8–174.6 Hz)</strong></span> ·
+            <span>🌸 <strong>Femenino (F#3–C#4 · 185.0–277.2 Hz)</strong></span>
         </div>
         <div id="voicePianoGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:8px"></div>
     </div>
@@ -14287,10 +15018,10 @@ function renderVoiceToolsSubTab(el) {
     <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
             <div>
-                <div class="card-title" style="margin:0">🌊 Analizador de Espectro y Formantes en Vivo (FFT)</div>
-                <div style="font-size:0.8rem;color:var(--text-muted)">Observá la distribución de armónicos y el centroide espectral (brillo/resonancia) entre 40 y 8000 Hz</div>
+                <div class="card-title" style="margin:0">🌊 Espectro: Distribución de Frecuencia en Vivo (FFT)</div>
+                <div style="font-size:0.8rem;color:var(--text-muted)">Analizador espectral de armónicos, centroide de brillo y sonoridad en tiempo real (40–8000 Hz)</div>
             </div>
-            <button id="voiceToggleSpecBtn" class="btn btn-primary btn-sm" onclick="toggleVoiceSpectrum()">▶️ Iniciar Espectro</button>
+            <button id="voiceToggleSpecBtn" class="btn btn-primary btn-sm" onclick="toggleVoiceSpectrum()">▶️ Iniciar Monitoreo de Espectro</button>
         </div>
 
         <div class="stats-row" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-bottom:12px">
@@ -14307,7 +15038,7 @@ function renderVoiceToolsSubTab(el) {
                 <div id="vSpecRolloff" style="font-size:1.3rem;font-weight:700;color:var(--sage)">-- Hz</div>
             </div>
             <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
-                <div style="font-size:0.72rem;color:var(--text-muted)">Nivel RMS</div>
+                <div style="font-size:0.72rem;color:var(--text-muted)">Volumen de Voz</div>
                 <div id="vSpecDbfs" style="font-size:1.3rem;font-weight:700">-- dBFS</div>
             </div>
         </div>
@@ -14352,7 +15083,7 @@ function initVoicePianoGrid() {
 
         osc1.start();
         osc2.start();
-        el.style.transform = 'scale(0.95)';
+        el.style.transform = 'scale(0.96)';
         el.style.filter = 'brightness(1.2)';
         voiceState.pianoVoices.set(midi, { osc1, osc2, gain, el });
     };
@@ -14404,8 +15135,7 @@ function initVoicePianoGrid() {
 async function toggleVoiceSpectrum() {
     if (!voiceState.spectrumActive) {
         try {
-            setIOSMicAudioSession(true);
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const stream = await requestVoiceMicStream();
             const ctx = new (window.AudioContext || window.webkitAudioContext)();
             if (ctx.state === 'suspended') await ctx.resume();
             const source = ctx.createMediaStreamSource(stream);
@@ -14420,7 +15150,7 @@ async function toggleVoiceSpectrum() {
             voiceState.spectrumActive = true;
 
             const btn = document.getElementById('voiceToggleSpecBtn');
-            if (btn) btn.textContent = '⏸️ Detener Espectro';
+            if (btn) btn.textContent = '⏸️ Detener Monitoreo de Espectro';
 
             const freqData = new Float32Array(analyser.frequencyBinCount);
             const timeData = new Float32Array(analyser.fftSize);
@@ -14503,30 +15233,106 @@ async function toggleVoiceSpectrum() {
         try { if (voiceState.specStream) voiceState.specStream.getTracks().forEach(t => t.stop()); } catch (_) {}
         try { if (voiceState.specCtx) await voiceState.specCtx.close(); } catch (_) {}
         const btn = document.getElementById('voiceToggleSpecBtn');
-        if (btn) btn.textContent = '▶️ Iniciar Espectro';
+        if (btn) btn.textContent = '▶️ Iniciar Monitoreo de Espectro';
     }
 }
 
-// --- SUBTAB 4: EVOLUTION TREND & RECORDING HISTORY ---
+// --- SUBTAB 4: EVOLUTION TREND & RECORDING HISTORY (InsightsDashboardScreen.kt) ---
+const VOICE_HISTORY_METRICS = {
+    final_score: { label: 'Puntuación general', unit: '', max: 100, min: 0, threshold: 60, desc: 'Combina timbre, naturalidad, tono y reglas de puntuación activas.' },
+    vfp_score: { label: 'Partitura de timbre (S)', unit: '', max: 100, min: 0, threshold: 50, desc: 'Refleja el juicio del modelo ECAPA sobre el brillo y la resonancia.' },
+    naturalness_score: { label: 'Naturalidad (N)', unit: '', max: 100, min: 0, threshold: 50, desc: 'Refleja cuán relajada, conectada y conversacional suena la voz.' },
+    f0_mean_hz: { label: 'Tono medio (F0)', unit: ' Hz', max: 280, min: 80, threshold: 165, desc: 'Frecuencia fundamental promedio en Hz a lo largo de la grabación.' },
+    f0_std_hz: { label: 'Variación de tono', unit: ' Hz', max: 60, min: 0, threshold: null, desc: 'Desviación estándar del tono F0 a lo largo de la grabación.' },
+    health_score: { label: 'Salud de la voz', unit: '', max: 100, min: 0, threshold: 30, desc: 'Índice clínico de estabilidad fonatoria (HNR, CPPS, Jitter y Shimmer).' }
+};
+
+function setVoiceHistoryFilter(rangeDays, metricKey) {
+    if (rangeDays !== null && rangeDays !== undefined) voiceState.historyRangeDays = rangeDays;
+    if (metricKey) voiceState.historyMetric = metricKey;
+    const subEl = document.getElementById('voiceSubContent');
+    if (subEl && voiceState.subTab === 'history') renderVoiceHistorySubTab(subEl);
+}
+
 function renderVoiceHistorySubTab(el) {
-    const list = voiceState.sessions || [];
+    const allList = voiceState.sessions || [];
+    const rangeDays = voiceState.historyRangeDays || 0;
+    const mKey = voiceState.historyMetric || 'final_score';
+    const mMeta = VOICE_HISTORY_METRICS[mKey] || VOICE_HISTORY_METRICS.final_score;
+
+    let filtered = allList;
+    if (rangeDays > 0) {
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - rangeDays + 1);
+        const cutoffStr = localDateStr(cutoff);
+        filtered = allList.filter(s => (s.date || '') >= cutoffStr);
+    }
+
+    const vals = filtered.map(s => parseFloat(s[mKey])).filter(v => !isNaN(v) && v > 0);
+    const latestVal = vals.length > 0 ? vals[0] : null;
+    const avgVal = vals.length > 0 ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+    const minVal = vals.length > 0 ? Math.min(...vals) : null;
+    const maxVal = vals.length > 0 ? Math.max(...vals) : null;
+    const fmtV = v => v != null ? `${v.toFixed(mMeta.unit === ' Hz' ? 0 : 1)}${mMeta.unit}` : '--';
+
+    const ranges = [
+        { d: 7, label: '7 días' },
+        { d: 30, label: '30 días' },
+        { d: 90, label: '90 días' },
+        { d: 0, label: 'Todos' }
+    ];
+
     let html = `
     <div class="card" style="margin-bottom:16px">
-        <div class="card-title">📈 Evolución Histórica de Puntuación General, Timbre (S) y Tono (F0)</div>
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:12px">
+            <div>
+                <div class="card-title" style="margin:0">📈 Tendencia de Evaluación (${esc(mMeta.label)})</div>
+                <div style="font-size:0.8rem;color:var(--text-muted)">${esc(mMeta.desc)}</div>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+                ${ranges.map(r => `<button class="btn ${rangeDays === r.d ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="setVoiceHistoryFilter(${r.d}, null)">${r.label}</button>`).join('')}
+            </div>
+        </div>
+
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px">
+            ${Object.entries(VOICE_HISTORY_METRICS).map(([k, info]) => `
+                <button class="btn ${mKey === k ? 'btn-secondary' : 'btn-ghost'} btn-sm" style="${mKey === k ? 'border-color:var(--primary)' : ''}" onclick="setVoiceHistoryFilter(null, '${k}')">${esc(info.label)}</button>
+            `).join('')}
+        </div>
+
+        <div class="stats-row" style="grid-template-columns:repeat(auto-fit,minmax(135px,1fr));margin-bottom:12px">
+            <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
+                <div style="font-size:0.72rem;color:var(--text-muted)">Lo último</div>
+                <div style="font-size:1.3rem;font-weight:800;color:var(--primary)">${fmtV(latestVal)}</div>
+            </div>
+            <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
+                <div style="font-size:0.72rem;color:var(--text-muted)">Promedio</div>
+                <div style="font-size:1.3rem;font-weight:800;color:var(--lavender)">${fmtV(avgVal)}</div>
+            </div>
+            <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
+                <div style="font-size:0.72rem;color:var(--text-muted)">Mínimo</div>
+                <div style="font-size:1.3rem;font-weight:800">${fmtV(minVal)}</div>
+            </div>
+            <div style="background:var(--bg-base);padding:10px 12px;border-radius:10px;border:1px solid var(--border)">
+                <div style="font-size:0.72rem;color:var(--text-muted)">Máximo</div>
+                <div style="font-size:1.3rem;font-weight:800;color:var(--sage)">${fmtV(maxVal)}</div>
+            </div>
+        </div>
+
         <canvas id="voiceHistoryTrendCanvas" style="width:100%;height:230px;background:var(--bg-base);border-radius:10px;display:block"></canvas>
     </div>
 
     <div class="card">
-        <div class="card-title">🗂️ Registro de Evaluaciones y Grabaciones (${list.length})</div>`;
+        <div class="card-title">🗂️ Historial de Análisis de Voz (${filtered.length} evaluaciones)</div>`;
 
-    if (list.length === 0) {
-        html += `<div class="empty-state"><div class="empty-icon">🎙️</div><h3>Sin sesiones registradas</h3><p>Grabá tu primera práctica en la pestaña «Evaluar y Salud Vocal»</p></div></div>`;
+    if (filtered.length === 0) {
+        html += `<div class="empty-state"><div class="empty-icon">🎙️</div><h3>Sin sesiones en este rango</h3><p>Grabá tu voz en la pestaña «Evaluar y Salud Vocal» o seleccioná el rango «Todos».</p></div></div>`;
         el.innerHTML = html;
         return;
     }
 
     html += `<div style="display:flex;flex-direction:column;gap:10px">`;
-    for (const s of list) {
+    for (const s of filtered) {
         const sc = parseFloat(s.final_score || 0).toFixed(1);
         const vfp = parseFloat(s.vfp_score || 0).toFixed(1);
         const nat = parseFloat(s.naturalness_score || 0).toFixed(1);
@@ -14538,18 +15344,18 @@ function renderVoiceHistorySubTab(el) {
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;padding:12px 16px;background:var(--bg-base);border:1px solid ${s.pinned ? 'var(--primary)' : 'var(--border)'};border-radius:12px">
             <div>
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                    ${s.pinned ? '<span title="Fijada">📌</span>' : ''}
+                    ${s.pinned ? '<span class="tag tag-gold">📌 Fijado</span>' : ''}
                     <strong style="font-size:0.95rem">${esc(s.label)}</strong>
                     <span class="tag ${passed ? 'tag-sage' : 'tag-lavender'}">Puntaje: ${sc}</span>
                     <span style="font-size:0.76rem;color:var(--text-muted)">${fmtDate(s.date)}</span>
                 </div>
                 <div style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">
-                    Timbre S: <strong>${vfp}</strong> · Naturalidad N: <strong>${nat}</strong> · Tono F0: <strong>${f0}</strong>${vh}
+                    S: <strong>${vfp}</strong> · N: <strong>${nat}</strong> · Tono F0: <strong>${f0}</strong>${vh}
                 </div>
             </div>
             <div style="display:flex;gap:6px;align-items:center">
-                <button class="btn btn-secondary btn-sm" onclick="inspectVoiceSession(${s.id})">🔍 Ver análisis y audio</button>
-                <button class="btn btn-ghost btn-sm" title="Fijar / Desfijar" onclick="togglePinVoiceSessionUI(${s.id})">${s.pinned ? '📌' : '📍'}</button>
+                <button class="btn btn-secondary btn-sm" onclick="inspectVoiceSession(${s.id})">🔍 Abrir análisis</button>
+                <button class="btn btn-ghost btn-sm" title="Fijar / Desanclar" onclick="togglePinVoiceSessionUI(${s.id})">${s.pinned ? '📌' : '📍'}</button>
                 <button class="btn btn-ghost btn-sm" style="color:var(--rose)" onclick="deleteVoiceSessionUI(${s.id})">✕</button>
             </div>
         </div>`;
@@ -14557,10 +15363,10 @@ function renderVoiceHistorySubTab(el) {
     html += `</div></div>`;
     el.innerHTML = html;
 
-    setTimeout(() => drawVoiceHistoryTrendChart(list), 20);
+    setTimeout(() => drawVoiceHistoryTrendChart(filtered, mKey, mMeta), 20);
 }
 
-function drawVoiceHistoryTrendChart(list) {
+function drawVoiceHistoryTrendChart(list, mKey = 'final_score', mMeta = VOICE_HISTORY_METRICS.final_score) {
     const canvas = document.getElementById('voiceHistoryTrendCanvas');
     if (!canvas || !list.length) return;
     const ctx = canvas.getContext('2d');
@@ -14569,32 +15375,34 @@ function drawVoiceHistoryTrendChart(list) {
     ctx.clearRect(0, 0, w, h);
 
     const ordered = [...list].reverse();
-    const padL = 40, padR = 24, padT = 20, padB = 26;
+    const padL = 46, padR = 24, padT = 20, padB = 26;
     const plotW = w - padL - padR;
     const plotH = h - padT - padB;
 
+    const minV = mMeta.min;
+    const maxV = mMeta.max;
     const xOf = i => ordered.length === 1 ? w / 2 : padL + (i / (ordered.length - 1)) * plotW;
-    const yOf = sc => padT + (1 - Math.min(100, Math.max(0, sc)) / 100) * plotH;
+    const yOf = val => padT + (1 - (Math.min(maxV, Math.max(minV, val)) - minV) / (maxV - minV)) * plotH;
 
-    // 60 pass threshold line
-    const y60 = yOf(60);
-    ctx.strokeStyle = 'rgba(139, 211, 180, 0.45)';
-    ctx.setLineDash([5, 4]);
-    ctx.beginPath();
-    ctx.moveTo(padL, y60);
-    ctx.lineTo(w - padR, y60);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = '#a8929e';
-    ctx.font = '10.5px Outfit, sans-serif';
-    ctx.fillText('60 pts', 4, y60 + 3);
+    if (mMeta.threshold != null) {
+        const yThr = yOf(mMeta.threshold);
+        ctx.strokeStyle = 'rgba(139, 211, 180, 0.45)';
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath();
+        ctx.moveTo(padL, yThr);
+        ctx.lineTo(w - padR, yThr);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = '#a8929e';
+        ctx.font = '10.5px Outfit, sans-serif';
+        ctx.fillText(`${mMeta.threshold}${mMeta.unit}`, 4, yThr + 3);
+    }
 
-    // Draw Final Score line
     ctx.strokeStyle = '#F28BA8';
     ctx.lineWidth = 2.8;
     ctx.beginPath();
     ordered.forEach((item, i) => {
-        const sc = parseFloat(item.final_score || 0);
+        const sc = parseFloat(item[mKey] || 0);
         const x = xOf(i), y = yOf(sc);
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
@@ -14602,7 +15410,7 @@ function drawVoiceHistoryTrendChart(list) {
     ctx.stroke();
 
     ordered.forEach((item, i) => {
-        const sc = parseFloat(item.final_score || 0);
+        const sc = parseFloat(item[mKey] || 0);
         const x = xOf(i), y = yOf(sc);
         ctx.fillStyle = '#F28BA8';
         ctx.beginPath();
@@ -14628,49 +15436,49 @@ async function togglePinVoiceSessionUI(id) {
 }
 
 async function deleteVoiceSessionUI(id) {
-    if (!confirm('¿Eliminar esta sesión de voz?')) return;
+    if (!confirm('¿Eliminar este registro de análisis de voz?')) return;
     await api(eel.delete_voice_session, id);
     if (voiceState.currentSession && voiceState.currentSession.id === id) {
         voiceState.currentSession = null;
     }
-    showToast('Sesión eliminada');
+    showToast('Registro eliminado');
     const content = document.getElementById('personalContent');
     if (content) await renderPersonalVoice(content);
 }
 
-function openVoiceGuideModal() {
+function openVoiceGuideModal(selectedKey = 'TIMBRE_GUIDE') {
+    const keys = Object.keys(VOICE_KNOWLEDGE_ARTICLES);
+    const activeKey = VOICE_KNOWLEDGE_ARTICLES[selectedKey] ? selectedKey : 'TIMBRE_GUIDE';
+    const current = VOICE_KNOWLEDGE_ARTICLES[activeKey];
+
+    const practiceKeys = keys.filter(k => VOICE_KNOWLEDGE_ARTICLES[k].category === 'practice');
+    const ruleKeys = keys.filter(k => VOICE_KNOWLEDGE_ARTICLES[k].category === 'rules');
+
     const html = `
-    <div style="line-height:1.65;font-size:0.9rem;display:flex;flex-direction:column;gap:12px">
-        <div style="background:var(--bg-base);padding:12px 14px;border-radius:10px;border-left:4px solid var(--primary)">
-            <strong>🌸 1. Los 3 Pilares de la Feminización Vocal (Pitchee)</strong>
-            <p style="margin:6px 0 0;color:var(--text-muted)">
-                La percepción de género de la voz no depende únicamente de hablar agudo. El modelo evalúa:
-                <br>• <strong>Timbre / Resonancia (S · 50% del puntaje)</strong>: El brillo espectral determinado por el tamaño del tracto vocal (elevar suavemente la laringe y llevar el sonido hacia los labios/paladar).
-                <br>• <strong>Naturalidad (N · 20% del puntaje)</strong>: Que la voz suene relajada, fluida y sin tensión ni falsete apretado (umbral saludable ≥50).
-                <br>• <strong>Tono Fundamental (F0 · 15% + 15% sinergia)</strong>: Mantener la frecuencia media por encima de <strong>165 Hz</strong> (idealmente entre 180 y 225 Hz, notas F#3 a A3).
-            </p>
+    <div style="display:flex;flex-direction:column;gap:12px;font-size:0.88rem;line-height:1.65">
+        <div>
+            <div style="font-size:0.74rem;text-transform:uppercase;color:var(--text-muted);font-weight:700;margin-bottom:6px">Guías de Práctica Vocal (3)</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+                ${practiceKeys.map(k => `<button class="btn ${k === activeKey ? 'btn-primary' : 'btn-secondary'} btn-sm" onclick="openVoiceGuideModal('${k}')">${esc(VOICE_KNOWLEDGE_ARTICLES[k].title)}</button>`).join('')}
+            </div>
         </div>
-        <div style="background:var(--bg-base);padding:12px 14px;border-radius:10px;border-left:4px solid var(--sage)">
-            <strong>🩺 2. Salud Vocal y Prevención de Fatiga</strong>
-            <p style="margin:6px 0 0;color:var(--text-muted)">
-                • <strong>HNR (Relación Armónicos/Ruido)</strong>: Mide la pureza de la vibración de los pliegues vocales (valores más altos en dB indican voz limpia y sin aire excesivo).
-                <br>• <strong>CPPS</strong>: Prominencia del pico cepstral suavizado, el indicador clínico más fiable de estabilidad fonatoria.
-                <br>• <strong>Jitter y Shimmer</strong>: Pequeñas variaciones de frecuencia y amplitud ciclo a ciclo. Si sentís sequedad o el puntaje de salud baja de 30, hidratate y descansá la voz.
-            </p>
+        <div>
+            <div style="font-size:0.74rem;text-transform:uppercase;color:var(--text-muted);font-weight:700;margin-bottom:6px">Guías de Reglas de Puntuación (7)</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+                ${ruleKeys.map(k => `<button class="btn ${k === activeKey ? 'btn-primary' : 'btn-ghost'} btn-sm" onclick="openVoiceGuideModal('${k}')">${esc(VOICE_KNOWLEDGE_ARTICLES[k].title)}</button>`).join('')}
+            </div>
         </div>
-        <div style="background:var(--bg-base);padding:12px 14px;border-radius:10px;border-left:4px solid var(--lavender)">
-            <strong>🎯 3. Cómo entrenar en tus sesiones diarias</strong>
-            <p style="margin:6px 0 0;color:var(--text-muted)">
-                1. Usá el <strong>Teclado de Piano</strong> para tocar F#3 (185 Hz) o G#3 (208 Hz) y entonar una "Mmmm" suave hacia los labios.<br>
-                2. Abrí <strong>Tono en Vivo (F0)</strong> y leé en voz alta buscando que más del 75% de tu curva permanezca en color rosa (>165 Hz).<br>
-                3. Grabá 5 a 10 segundos en <strong>Evaluar y Salud Vocal</strong> para registrar tu evolución semanal en la base de datos.
-            </p>
+        <div style="background:var(--bg-base);padding:16px 18px;border-radius:12px;border-left:4px solid var(--primary);margin-top:4px">
+            <h3 style="margin:0 0 6px;font-size:1.08rem">${esc(current.title)}</h3>
+            <div style="font-size:0.8rem;color:var(--text-muted);margin-bottom:10px">${esc(current.summary)}</div>
+            <div>${current.html}</div>
         </div>
     </div>`;
-    openModal('📚 Guía de Entrenamiento y Acústica Vocal', html);
+
+    openModal('📚 Biblioteca de Voz Pitchee', html);
     const saveBtn = document.getElementById('modalSave');
     if (saveBtn) {
-        saveBtn.textContent = 'Entendido';
+        saveBtn.textContent = 'Cerrar';
         saveBtn.onclick = closeModal;
     }
 }
@@ -14684,10 +15492,16 @@ window.toggleVoiceRecording = toggleVoiceRecording;
 window.handleVoiceFileUpload = handleVoiceFileUpload;
 window.analyzeSelectedVoiceSample = analyzeSelectedVoiceSample;
 window.toggleVoiceLivePitch = toggleVoiceLivePitch;
+window.toggleVoiceLivePitchStyle = toggleVoiceLivePitchStyle;
 window.clearVoiceLivePitch = clearVoiceLivePitch;
 window.toggleVoiceSpectrum = toggleVoiceSpectrum;
+window.setVoiceHistoryFilter = setVoiceHistoryFilter;
 window.inspectVoiceSession = inspectVoiceSession;
 window.togglePinVoiceSessionUI = togglePinVoiceSessionUI;
 window.deleteVoiceSessionUI = deleteVoiceSessionUI;
 window.openVoiceGuideModal = openVoiceGuideModal;
+window.openVoiceRulesModal = openVoiceRulesModal;
+window.showMoveInvoiceMonthModal = showMoveInvoiceMonthModal;
+window.selectMoveInvoiceYear = selectMoveInvoiceYear;
+window.executeMoveInvoiceMonth = executeMoveInvoiceMonth;
 window.cleanupVoiceStreams = cleanupVoiceStreams;

@@ -2030,15 +2030,15 @@ def apply_cleanups_and_seeds(conn):
             print("[seed_lindley_automation_v1] Error:", e)
 
     # 17. Update workout routine to Mes 2 (Hipertrofia Focalizada y Control de Cintura)
-    seed_mes2 = conn.execute("SELECT value FROM config WHERE key='update_workout_routine_mes2_v1'").fetchone()
+    seed_mes2 = conn.execute("SELECT value FROM config WHERE key='update_workout_routine_mes2_v2'").fetchone()
     if not seed_mes2:
         try:
             apply_workout_routine_mes2(conn)
-            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('update_workout_routine_mes2_v1', '1')")
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('update_workout_routine_mes2_v2', '1')")
             conn.commit()
-            print("[update_workout_routine_mes2_v1] Successfully updated workout routines to Mes 2.")
+            print("[update_workout_routine_mes2_v2] Successfully updated workout routines to Mes 2.")
         except Exception as e:
-            print("[update_workout_routine_mes2_v1] Error:", e)
+            print("[update_workout_routine_mes2_v2] Error:", e)
 
 
 def _get_mes2_workout_data():
@@ -2069,9 +2069,9 @@ def _get_mes2_workout_data():
     )
 
     return [
-        (1, "Día 1: Bloque A — Ensanchamiento Lateral", "Glúteo medio y menor (abducción frontal) · Equipo: Mancuerna Máxima (9.5 kg) + Disco Suelto (4.0 kg)", warmup_std, post_stretch, 1, [
-            ("Principal", "Abducción de Cadera Tumbada de Lado", 4, "15 por lado", "Disco Suelto (4.0 kg) en muslo externo", 4.0, 60, 1),
-            ("Principal", "Zancada Lateral (Lateral Lunge)", 4, "12 por lado", "Mancuerna Máxima (9.5 kg) al pecho", 9.5, 75, 1),
+        (1, "Día 1: Bloque A — Ensanchamiento Lateral", "Glúteo medio y menor (abducción frontal) · 1 Mancuerna de 9.5 kg + 2 discos sueltos de 2 kg (4 kg)", warmup_std, post_stretch, 1, [
+            ("Principal", "Abducción de Cadera Tumbada de Lado", 4, "15 por lado", "2 discos de 2 kg sueltos (4.0 kg) en muslo", 4.0, 60, 1),
+            ("Principal", "Zancada Lateral (Lateral Lunge)", 4, "12 por lado", "1 Mancuerna de 9.5 kg al pecho (2+1.5+1.25 por lado)", 9.5, 75, 1),
             ("Aislamiento", "Patada Lateral de Pie (Abducción de pie)", 4, "15 por lado", "Banda elástica nivel Fuerte (tobillos)", 0.0, 60, 1),
             ("Bombeo", "Abducción Sentada con Banda", 4, "25", "Banda elástica nivel Fuerte (rodillas)", 0.0, 60, 1),
         ]),
@@ -2081,23 +2081,23 @@ def _get_mes2_workout_data():
             ("Estabilidad", "Dead Bug (Bicho Muerto)", 3, "10 por lado", "Peso corporal", 0.0, 45, 1),
             ("Isometría", "Plancha Frontal (Plank tradicional)", 4, "Al fallo técnico", "Peso corporal", 0.0, 60, 1),
         ]),
-        (3, "Día 3: Bloque B — Proyección y Masa", "Glúteo mayor e isquios · Truco: Iniciar con Mancuerna Máxima (9.5 kg) en Ej. 1 y pasar a Par de Mancuernas (7.0 kg c/u) en Ej. 2 y 3", warmup_std, post_stretch, 3, [
-            ("Principal", "Puente de Glúteo Acostada a 1 Pierna", 4, "12 por pierna", "Mancuerna Máxima (9.5 kg) en cadera", 9.5, 75, 1),
-            ("Principal", "Split Squat (Sentadilla Dividida Estática)", 4, "10 por pierna", "Par de Mancuernas (7.0 kg c/u)", 14.0, 90, 1),
-            ("Principal", "Peso Muerto Rumano (Tradicional a 2 piernas)", 4, "12", "Par de Mancuernas (7.0 kg c/u)", 14.0, 90, 1),
+        (3, "Día 3: Bloque B — Proyección y Masa", "Glúteo mayor e isquios · Ej. 1 con 1 Mancuerna (9.5 o 11 kg) y Ej. 2-3 con 2 Mancuernas de 7.0 kg c/u", warmup_std, post_stretch, 3, [
+            ("Principal", "Puente de Glúteo Acostada a 1 Pierna", 4, "12 por pierna", "1 Mancuerna de 9.5 kg en cadera (o 11 kg máx)", 9.5, 75, 1),
+            ("Principal", "Split Squat (Sentadilla Dividida Estática)", 4, "10 por pierna", "2 Mancuernas de 7.0 kg c/u (2kg + 1.5kg por lado)", 7.0, 90, 1),
+            ("Principal", "Peso Muerto Rumano (Tradicional a 2 piernas)", 4, "12", "2 Mancuernas de 7.0 kg c/u (2kg + 1.5kg por lado)", 7.0, 90, 1),
             ("Aislamiento", "Donkey Kicks (Patada de burro en 4 apoyos)", 3, "15 por pierna", "Banda elástica nivel Fuerte", 0.0, 60, 1),
         ]),
-        (4, "Día 4: Bloque A — Ensanchamiento Lateral + Core", "Glúteo medio y menor + Vacío abdominal · Equipo: Mancuerna Máxima (9.5 kg) + Disco Suelto (4.0 kg)", warmup_std, post_stretch, 4, [
-            ("Principal", "Abducción de Cadera Tumbada de Lado", 4, "15 por lado", "Disco Suelto (4.0 kg) en muslo externo", 4.0, 60, 1),
-            ("Principal", "Zancada Lateral (Lateral Lunge)", 4, "12 por lado", "Mancuerna Máxima (9.5 kg) al pecho", 9.5, 75, 1),
+        (4, "Día 4: Bloque A — Ensanchamiento Lateral + Core", "Glúteo medio y menor + Vacío abdominal · 1 Mancuerna de 9.5 kg + 2 discos sueltos de 2 kg (4 kg)", warmup_std, post_stretch, 4, [
+            ("Principal", "Abducción de Cadera Tumbada de Lado", 4, "15 por lado", "2 discos de 2 kg sueltos (4.0 kg) en muslo", 4.0, 60, 1),
+            ("Principal", "Zancada Lateral (Lateral Lunge)", 4, "12 por lado", "1 Mancuerna de 9.5 kg al pecho (2+1.5+1.25 por lado)", 9.5, 75, 1),
             ("Aislamiento", "Patada Lateral de Pie (Abducción de pie)", 4, "15 por lado", "Banda elástica nivel Fuerte (tobillos)", 0.0, 60, 1),
             ("Bombeo", "Abducción Sentada con Banda", 4, "25", "Banda elástica nivel Fuerte (rodillas)", 0.0, 60, 1),
             ("Core (Solo Día 4)", "Stomach Vacuums (Vacío Abdominal)", 5, "15 segundos", "Peso corporal", 0.0, 30, 1),
         ]),
-        (5, "Día 5: Bloque B — Proyección y Masa", "Glúteo mayor e isquios · Truco: Iniciar con Mancuerna Máxima (9.5 kg) en Ej. 1 y pasar a Par de Mancuernas (7.0 kg c/u) en Ej. 2 y 3", warmup_std, post_stretch, 5, [
-            ("Principal", "Puente de Glúteo Acostada a 1 Pierna", 4, "12 por pierna", "Mancuerna Máxima (9.5 kg) en cadera", 9.5, 75, 1),
-            ("Principal", "Split Squat (Sentadilla Dividida Estática)", 4, "10 por pierna", "Par de Mancuernas (7.0 kg c/u)", 14.0, 90, 1),
-            ("Principal", "Peso Muerto Rumano (Tradicional a 2 piernas)", 4, "12", "Par de Mancuernas (7.0 kg c/u)", 14.0, 90, 1),
+        (5, "Día 5: Bloque B — Proyección y Masa", "Glúteo mayor e isquios · Ej. 1 con 1 Mancuerna (9.5 o 11 kg) y Ej. 2-3 con 2 Mancuernas de 7.0 kg c/u", warmup_std, post_stretch, 5, [
+            ("Principal", "Puente de Glúteo Acostada a 1 Pierna", 4, "12 por pierna", "1 Mancuerna de 9.5 kg en cadera (o 11 kg máx)", 9.5, 75, 1),
+            ("Principal", "Split Squat (Sentadilla Dividida Estática)", 4, "10 por pierna", "2 Mancuernas de 7.0 kg c/u (2kg + 1.5kg por lado)", 7.0, 90, 1),
+            ("Principal", "Peso Muerto Rumano (Tradicional a 2 piernas)", 4, "12", "2 Mancuernas de 7.0 kg c/u (2kg + 1.5kg por lado)", 7.0, 90, 1),
             ("Aislamiento", "Donkey Kicks (Patada de burro en 4 apoyos)", 3, "15 por pierna", "Banda elástica nivel Fuerte", 0.0, 60, 1),
         ]),
         (6, "Día 6: Postura, Flexibilidad y Relax (Circuito Continuo)", "Descompresión lumbopélvica y apertura torácica · 3 a 4 rondas continuas de forma fluida", None, None, 6, [

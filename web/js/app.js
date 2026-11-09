@@ -8138,7 +8138,7 @@ const EXERCISE_HOWTO_GUIDES = {
     // --- MES 2: BLOQUE A (ENSANCHAMIENTO LATERAL) ---
     'abducción de cadera tumbada de lado': [
         'Acostada completamente de lado en la colchoneta con el cuerpo alineado en línea recta (no rotar la cadera hacia atrás).',
-        'Sostén los dos discos de 2kg (Disco Suelto de 4.0 kg) apoyados sobre la cara externa del muslo superior.',
+        'Sostén los 2 discos de 2 kg juntos (4.0 kg en total, o 1 disco de 2 kg si prefieres comodidad) apoyados sobre la cara externa del muslo superior.',
         'Eleva la pierna recta hacia el techo manteniendo la punta del pie apuntando ligeramente hacia abajo (esto aísla el glúteo medio y desactiva el tensor de la fascia lata).',
         'Baja en 2 segundos controlando el peso. Completa las repeticiones de un lado y cambia.'
     ],
@@ -8388,11 +8388,11 @@ function buildRoutineDayViewHTML(days, selectedDayId, suggestedDayId) {
         </div>
 
         <details style="margin:0 0 12px;padding:10px 14px;border-radius:10px;background:var(--bg);border:1px solid var(--border-light);font-size:0.84rem">
-            <summary style="cursor:pointer;font-weight:700;color:var(--text-secondary);user-select:none">🔩 Configuración Exacta de Pesas (Mes 2 — 3 armados estándar)</summary>
+            <summary style="cursor:pointer;font-weight:700;color:var(--text-secondary);user-select:none">🔩 Armado Real con tus 12 Discos (4x 2kg, 4x 1.5kg, 4x 1.25kg · Mangos 0kg)</summary>
             <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;color:var(--text-secondary);line-height:1.45">
-                <div>• <strong>Mancuerna Máxima (9.5 kg):</strong> 1 mango + 2 discos de 2kg + 2 de 1.5kg + 2 de 1.25kg <em>(3 discos de cada lado)</em>.</div>
-                <div>• <strong>Par de Mancuernas (7.0 kg c/u — 14 kg totales):</strong> 2 mangos. En cada mango colocar 2 discos de 2kg + 2 de 1.5kg <em>(1 de 2kg y 1 de 1.5kg por lado)</em>.</div>
-                <div>• <strong>Disco Suelto (4.0 kg):</strong> 2 discos de 2kg apilados uno sobre otro, sostenidos con la mano <em>(sin mango)</em>.</div>
+                <div>• <strong>1 Mancuerna de 9.5 kg (Días 1, 3, 4 y 5):</strong> En 1 mango poner <strong>1 de 2kg + 1 de 1.5kg + 1 de 1.25kg</strong> de cada lado <em>(te deja libres los otros 2 discos de 2kg para Abducción Tumbada)</em>. <br><span style="color:var(--text-muted);font-size:0.8rem">↳ Tip Bloque B (Días 3 y 5): Como no usas discos sueltos, si quieres más carga puedes poner los 4 discos de 2kg + 2 de 1.5kg en 1 mango = <strong>11.0 kg</strong>.</span></div>
+                <div>• <strong>2 Mancuernas de 7.0 kg c/u (Días 3 y 5):</strong> En cada mango poner <strong>1 disco de 2kg + 1 disco de 1.5kg</strong> de cada lado <em>(7.0 kg en cada mano · si algún día les sumas 1 de 1.25kg por lado llegan a 9.5 kg c/u)</em>.</div>
+                <div>• <strong>2 Discos de 2 kg sueltos = 4.0 kg (Días 1 y 4):</strong> Los 2 discos de 2kg que sobran de la mancuerna de 9.5 kg, apoyados juntos sobre el muslo <em>(o 1 solo disco de 2 kg si 2 apilados te resultan incómodos)</em>.</div>
             </div>
         </details>`;
 

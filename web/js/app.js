@@ -8092,13 +8092,13 @@ function summarizeStretchNames(rawText, type) {
     for (const line of lines) {
         if (line.startsWith('•') || line.startsWith('-') || line.startsWith('⏱') || line.toLowerCase().startsWith('realiza estos')) continue;
         if (line.toLowerCase().startsWith('estiramientos post-entrenamiento')) continue;
-        const cleanTitle = line.replace(/\s*\(.*?\)\s*$/, '').replace(/:$/, '').trim();
+        const cleanTitle = line.replace(/\s*\(.*?\)\s*$/, '').replace(/\s*[—\-]\s*.*$/, '').replace(/:$/, '').trim();
         if (cleanTitle && cleanTitle.length < 65) {
             titles.push(cleanTitle);
         }
     }
     if (titles.length > 0) {
-        const suffix = type === 'warmup' ? ' (5 - 10 min)' : '';
+        const suffix = type === 'warmup' ? ' (5 min)' : (type === 'cooldown' ? ' (~4 min)' : '');
         return titles.join(' · ') + suffix;
     }
     // Fallback if custom single-line note
@@ -8135,6 +8135,82 @@ function formatStretchGuideHTML(rawText, accentColor = 'var(--primary)') {
 }
 
 const EXERCISE_HOWTO_GUIDES = {
+    // --- MES 2: BLOQUE A (ENSANCHAMIENTO LATERAL) ---
+    'abducción de cadera tumbada de lado': [
+        'Acostada completamente de lado en la colchoneta con el cuerpo alineado en línea recta (no rotar la cadera hacia atrás).',
+        'Sostén los dos discos de 2kg (Disco Suelto de 4.0 kg) apoyados sobre la cara externa del muslo superior.',
+        'Eleva la pierna recta hacia el techo manteniendo la punta del pie apuntando ligeramente hacia abajo (esto aísla el glúteo medio y desactiva el tensor de la fascia lata).',
+        'Baja en 2 segundos controlando el peso. Completa las repeticiones de un lado y cambia.'
+    ],
+    'zancada lateral (lateral lunge)': [
+        'De pie, sostén la Mancuerna Máxima (9.5 kg) verticalmente pegada al pecho (agarre tipo copa).',
+        'Da un paso amplio hacia un costado, flexionando esa rodilla y empujando la cadera hacia atrás mientras la otra pierna queda completamente estirada.',
+        'Inclina ligeramente el torso hacia adelante manteniendo la espalda recta para enfatizar el estiramiento del glúteo lateral.',
+        'Empuja fuerte con el talón para volver al centro. Completa todas las repeticiones de un lado y luego cambia.'
+    ],
+    'patada lateral de pie (abducción de pie)': [
+        'Coloca la banda Fuerte alrededor de los tobillos y apoya una mano en la pared para no perder el equilibrio.',
+        'Sin inclinar el tronco hacia el costado (el torso debe quedar rígido y vertical), separa una pierna hacia el lateral venciendo la tensión de la banda.',
+        'Aguanta 1 segundo en el punto de máxima apertura y regresa lento.'
+    ],
+    'abducción sentada con banda': [
+        'Sentada en el borde de una silla con la banda Fuerte justo por encima de las rodillas y pies apoyados al ancho de los hombros.',
+        'Inclina el torso hacia adelante unos 45 grados manteniendo la espalda recta.',
+        'Abre las rodillas hacia los lados con fuerza y controla el regreso sin que la banda junte las rodillas de golpe.'
+    ],
+    // --- MES 2: BLOQUE B (PROYECCIÓN Y MASA) ---
+    'puente de glúteo acostada a 1 pierna': [
+        'Acostada boca arriba en la colchoneta con las rodillas flexionadas. Eleva un pie del suelo llevando esa rodilla hacia el pecho.',
+        'Apoya la Mancuerna Máxima (9.5 kg) sobre el pliegue de la cadera de la pierna que quedó apoyada en el piso.',
+        'Empuja desde el talón elevando la pelvis hasta alinear cadera y rodilla.',
+        'Aprieta fuerte el glúteo arriba durante 1 segundo y baja sin descansar del todo en el suelo entre repeticiones.'
+    ],
+    'split squat (sentadilla dividida estática)': [
+        'Sostén el Par de Mancuernas (7.0 kg c/u) a los lados del cuerpo. Da un paso largo hacia adelante y deja ambos pies fijos en el suelo (talón trasero levantado).',
+        'Regla biomecánica crítica: inclina el torso unos 30 grados hacia adelante (acercando el pecho hacia el muslo delantero) y baja hasta que la rodilla forme un ángulo de 90 grados.',
+        'Sube empujando con el talón delantero sin dar pasos; haz todas las repeticiones de una pierna y luego cambia.'
+    ],
+    'peso muerto rumano (tradicional a 2 piernas)': [
+        'De pie con pies al ancho de caderas, sosteniendo el Par de Mancuernas (7.0 kg c/u) pegadas al frente de los muslos.',
+        'Destraba las rodillas con una mínima flexión fija (15-20 grados) y empuja la cadera horizontalmente hacia atrás (como intentando cerrar una puerta con los glúteos).',
+        'Baja las mancuernas rozando las piernas hasta pasar apenas las rodillas (donde sientas el máximo estiramiento en isquiotibiales sin encorvar la espalda baja) y sube apretando los glúteos.'
+    ],
+    'donkey kicks (patada de burro en 4 apoyos)': [
+        'En posición de cuadrupedia (4 apoyos: manos y rodillas en la colchoneta), engancha la banda Fuerte entre la planta de un pie y la rodilla o empeine opuesto.',
+        'Manteniendo el abdomen firme para no arquear la cintura lumbar, patea hacia atrás y hacia el techo manteniendo la rodilla flexionada a 90 grados.'
+    ],
+    // --- MES 2: CINTURA Y CORE (DÍA 2) ---
+    'stomach vacuums (vacío abdominal)': [
+        'De pie, en cuatro apoyos o acostada boca arriba. Inhala profundo por la nariz y exhala absolutamente todo el aire por la boca hasta vaciar los pulmones.',
+        'Sin volver a tomar aire, "succiona" y mete el ombligo hacia adentro y hacia arriba (como intentando pegarlo a la columna vertebral y debajo de las costillas).',
+        'Sostén esa succión isométrica durante 15 segundos exactos, relaja, respira normal 30 segundos y repite.'
+    ],
+    'dead bug (bicho muerto)': [
+        'Acostada boca arriba, brazos extendidos hacia el techo y piernas levantadas con rodillas flexionadas a 90 grados.',
+        'Presiona fuertemente la espalda baja contra la colchoneta (no debe quedar ningún hueco entre la cintura y el piso).',
+        'Extiende lentamente el brazo derecho hacia atrás y la pierna izquierda hacia adelante hasta quedar a pocos centímetros del suelo, sin que la espalda baja se despegue de la colchoneta.',
+        'Vuelve al centro y alterna con el lado opuesto.'
+    ],
+    'levantamiento de piernas acostada': [
+        'Acostada boca arriba, manos debajo de los glúteos para proteger la zona lumbar.',
+        'Eleva ambas piernas juntas y bájalas de forma controlada sin que los talones toquen el piso, manteniendo la tensión en el abdomen bajo.'
+    ],
+    'plancha frontal (plank tradicional)': [
+        'Apoya los antebrazos en el piso con los codos justo debajo de los hombros y las piernas estiradas.',
+        'Forma una línea recta de cabeza a talones contrayendo el transverso abdominal y los glúteos.',
+        'No dejes caer la cadera ni la subas. Respira con calma y sostén hasta el fallo técnico (cuando la cadera empiece a caer, termina).'
+    ],
+    // --- MES 2: DÍA 6 (POSTURA Y MOVILIDAD) ---
+    'lunges profundos para psoas': [
+        'Apoya una rodilla en el piso y pisa con el otro pie hacia adelante (ambas rodillas a 90 grados).',
+        'Mantén la espalda completamente recta y contrae el abdomen.',
+        'Empuja tu cadera suavemente hacia adelante sin arquear la espalda baja ni rebotes bruscos, respirando profundo.'
+    ],
+    'transiciones 90-90': [
+        'Sentada en el suelo con la pierna delantera flexionada a 90° frente al torso (rotación externa) y la trasera a 90° hacia el costado/atrás (rotación interna).',
+        'Inclínate suavemente hacia adelante con el pecho recto sobre la tibia delantera y luego transiciona de forma fluida hacia el otro lado.'
+    ],
+    // --- MES 1 / VARIANTES PREVIAS ---
     'clamshells (almejas)': [
         'Acuéstate de lado con las rodillas flexionadas (unos 45°), los pies juntos y la banda justo encima de las rodillas.',
         'Apoya la cabeza en tu brazo y mantén la cadera apilada, sin rodar hacia atrás.',
@@ -8144,8 +8220,8 @@ const EXERCISE_HOWTO_GUIDES = {
     'abducción tumbada': [
         'Acuéstate de lado con el cuerpo en línea recta y el disco apoyado sobre el muslo de arriba (sujétalo con la mano).',
         'Flexiona levemente la pierna de abajo para estabilizarte.',
-        'Sube la pierna de arriba estirada, con la punta mirando al frente (no hacia el techo), hasta unos 45°.',
-        'Baja lento sin apoyar del todo y repite. Haz todas las repeticiones y cambia de lado.'
+        'Sube la pierna de arriba estirada, con la punta mirando ligeramente hacia abajo, hasta unos 45°.',
+        'Baja lento en 2 segundos controlando el peso y repite. Haz todas las repeticiones y cambia de lado.'
     ],
     'zancadas': [
         'Párate con las mancuernas a los costados y los pies a la altura de la cadera.',
@@ -8154,22 +8230,19 @@ const EXERCISE_HOWTO_GUIDES = {
         'Empuja con el talón de adelante para volver al inicio. Alterna las piernas o completa una y luego la otra.'
     ],
     'abducción sentada': [
-        'Siéntate en una silla o banco con la espalda derecha y la banda fuerte justo encima de las rodillas.',
-        'Mantén los pies apoyados y las rodillas juntas al inicio.',
+        'Siéntate en el borde de una silla con la banda fuerte justo encima de las rodillas.',
+        'Inclina el torso unos 45° hacia adelante con la espalda recta.',
         'Abre las rodillas hacia afuera contra la resistencia de la banda, apretando el glúteo.',
-        'Sostén 1 segundo abierta y vuelve lento sin soltar la tensión de la banda.'
+        'Controla el regreso sin que la banda junte las rodillas de golpe.'
     ],
     'levantamiento de piernas': [
-        'Acuéstate boca arriba con las piernas estiradas y las manos bajo la cadera o a los lados.',
-        'Pega la zona lumbar al piso contrayendo el abdomen.',
-        'Sube ambas piernas juntas hasta formar 90° con el torso.',
-        'Baja lento sin tocar el piso y sin despegar la espalda baja. Si se arquea, flexiona un poco las rodillas.'
+        'Acuéstate boca arriba con las piernas estiradas y las manos debajo de los glúteos para proteger la zona lumbar.',
+        'Sube ambas piernas juntas y bájalas de forma controlada sin que los talones toquen el piso, manteniendo la tensión en el abdomen bajo.'
     ],
     'stomach vacuums': [
-        'Puedes hacerlo de pie, en cuatro apoyos o acostada. En cuatro apoyos es lo más fácil para empezar.',
-        'Exhala todo el aire por la boca hasta vaciar los pulmones.',
-        'Sin inhalar, mete el ombligo hacia la columna lo más que puedas, como si quisieras tocar la espalda con él.',
-        'Sostén el tiempo indicado respirando superficialmente por el pecho. Relaja y repite.'
+        'De pie, en cuatro apoyos o acostada boca arriba. Inhala profundo por la nariz y exhala todo el aire por la boca hasta vaciar los pulmones.',
+        'Sin volver a tomar aire, succiona y mete el ombligo hacia adentro y hacia arriba.',
+        'Sostén esa succión isométrica durante 15 segundos exactos, relaja, respira normal 30 segundos y repite.'
     ],
     'plancha frontal (plank)': [
         'Apoya los antebrazos en el piso con los codos justo debajo de los hombros y las piernas estiradas.',
@@ -8190,15 +8263,14 @@ const EXERCISE_HOWTO_GUIDES = {
         'Aprieta fuerte el glúteo 1-2 segundos arriba y baja controlado sin apoyar del todo.'
     ],
     'split squat (sentadilla dividida)': [
-        'Párate en posición de zancada con un pie adelante y el otro atrás, pies fijos en el piso, mancuernas a los costados.',
-        'Baja recto hacia el piso, doblando ambas rodillas hasta unos 90°, con el torso derecho.',
-        'La rodilla de adelante sigue la línea del pie y el peso va sobre el talón delantero.',
-        'Sube empujando con la pierna de adelante. Haz todas las repeticiones de un lado y luego cambia.'
+        'Sostén el Par de Mancuernas (7.0 kg c/u) a los lados del cuerpo. Da un paso largo hacia adelante y deja ambos pies fijos (talón trasero levantado).',
+        'Inclina el torso unos 30° hacia adelante (acercando el pecho al muslo delantero) y baja hasta que la rodilla forme 90°.',
+        'Sube empujando con el talón delantero sin dar pasos; haz todas las repeticiones de una pierna y luego cambia.'
     ],
     'peso muerto rumano (normal)': [
         'Párate con los pies al ancho de la cadera y una mancuerna en cada mano frente a los muslos.',
-        'Rodillas apenas flexionadas y fijas; empuja la cadera hacia atrás como si cerraras una puerta con la cola.',
-        'Baja las mancuernas pegadas a las piernas manteniendo la espalda recta hasta sentir el estirón en la parte trasera de los muslos.',
+        'Rodillas apenas flexionadas y fijas (15-20°); empuja la cadera horizontalmente hacia atrás como si cerraras una puerta con los glúteos.',
+        'Baja las mancuernas rozando las piernas hasta pasar apenas las rodillas sin encorvar la espalda baja.',
         'Sube empujando la cadera hacia adelante y apretando el glúteo arriba.'
     ],
     'caminata lateral (monster walks)': [
@@ -8208,16 +8280,13 @@ const EXERCISE_HOWTO_GUIDES = {
         'Camina 10 pasos hacia un lado y 10 de vuelta (20 en total) sin subir ni bajar la cadera.'
     ],
     'donkey kicks (patadas de burro)': [
-        'Ponte en cuatro apoyos con manos bajo los hombros, rodillas bajo la cadera y la banda sobre los muslos o en el pie.',
-        'Mantén la espalda neutra y el abdomen apretado.',
-        'Empuja un talón hacia el techo manteniendo la rodilla a 90°, sin arquear la espalda baja.',
-        'Aprieta el glúteo arriba 1 segundo y baja lento. Haz todas las repeticiones y cambia de pierna.'
+        'En posición de cuadrupedia (4 apoyos), engancha la banda fuerte entre la planta de un pie y la rodilla o empeine opuesto.',
+        'Manteniendo el abdomen firme para no arquear la cintura lumbar, patea hacia atrás y hacia el techo manteniendo la rodilla a 90°.'
     ],
     'patada lateral de pie': [
-        'Párate derecha con la banda fuerte sobre las rodillas o los tobillos, apoyándote en una pared o silla si lo necesitas.',
-        'Mantén el torso recto y el abdomen firme.',
-        'Lleva la pierna libre hacia el costado con la punta al frente, sin inclinar el cuerpo.',
-        'Vuelve lento y repite. Haz todas las repeticiones y cambia de lado.'
+        'Coloca la banda fuerte alrededor de los tobillos y apoya una mano en la pared para no perder el equilibrio.',
+        'Con el torso rígido y vertical (sin inclinarte), separa una pierna hacia el lateral venciendo la tensión de la banda.',
+        'Aguanta 1 segundo en máxima apertura y regresa lento.'
     ],
     'hip thrust acostada (puente)': [
         'Acuéstate boca arriba con las rodillas flexionadas y los pies apoyados al ancho de la cadera.',
@@ -8244,9 +8313,9 @@ const EXERCISE_HOWTO_GUIDES = {
         'Mantén la posición respirando profundo y vuelve lento.'
     ],
     'apertura de pecho en marco de puerta': [
-        'Párate en un marco de puerta con los antebrazos apoyados en los costados, codos a la altura de los hombros.',
-        'Da un pequeño paso hacia adelante con un pie.',
-        'Deja que el pecho avance suavemente por el marco hasta sentir el estiramiento en el pecho y los hombros.',
+        'Párate en un marco de puerta con los brazos a 90 grados apoyados en el marco.',
+        'Da un paso suave al frente.',
+        'Deja que el pecho avance suavemente hasta sentir la apertura torácica y elongación pectoral.',
         'Mantén 30 segundos con el abdomen firme, sin arquear la espalda baja.'
     ],
     'flow de isquiotibiales': [
@@ -8316,7 +8385,16 @@ function buildRoutineDayViewHTML(days, selectedDayId, suggestedDayId) {
                 <button type="button" class="btn btn-ghost btn-sm" onclick="showWorkoutDayForm(${activeDay.id})" title="Editar título y estiramientos de este día">✎ Editar día</button>
                 <button type="button" class="btn btn-ghost btn-sm" onclick="deleteWorkoutDay(${activeDay.id})" title="Eliminar día">🗑️</button>
             </div>
-        </div>`;
+        </div>
+
+        <details style="margin:0 0 12px;padding:10px 14px;border-radius:10px;background:var(--bg);border:1px solid var(--border-light);font-size:0.84rem">
+            <summary style="cursor:pointer;font-weight:700;color:var(--text-secondary);user-select:none">🔩 Configuración Exacta de Pesas (Mes 2 — 3 armados estándar)</summary>
+            <div style="margin-top:8px;display:flex;flex-direction:column;gap:6px;color:var(--text-secondary);line-height:1.45">
+                <div>• <strong>Mancuerna Máxima (9.5 kg):</strong> 1 mango + 2 discos de 2kg + 2 de 1.5kg + 2 de 1.25kg <em>(3 discos de cada lado)</em>.</div>
+                <div>• <strong>Par de Mancuernas (7.0 kg c/u — 14 kg totales):</strong> 2 mangos. En cada mango colocar 2 discos de 2kg + 2 de 1.5kg <em>(1 de 2kg y 1 de 1.5kg por lado)</em>.</div>
+                <div>• <strong>Disco Suelto (4.0 kg):</strong> 2 discos de 2kg apilados uno sobre otro, sostenidos con la mano <em>(sin mango)</em>.</div>
+            </div>
+        </details>`;
 
     if (activeDay.warmup_notes) {
         const shortWarmup = summarizeStretchNames(activeDay.warmup_notes, 'warmup');

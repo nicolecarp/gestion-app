@@ -2029,23 +2029,29 @@ def apply_cleanups_and_seeds(conn):
         except Exception as e:
             print("[seed_lindley_automation_v1] Error:", e)
 
+    # 17. Update workout routine to Mes 2 (Hipertrofia Focalizada y Control de Cintura)
+    seed_mes2 = conn.execute("SELECT value FROM config WHERE key='update_workout_routine_mes2_v1'").fetchone()
+    if not seed_mes2:
+        try:
+            apply_workout_routine_mes2(conn)
+            conn.execute("INSERT OR REPLACE INTO config (key, value) VALUES ('update_workout_routine_mes2_v1', '1')")
+            conn.commit()
+            print("[update_workout_routine_mes2_v1] Successfully updated workout routines to Mes 2.")
+        except Exception as e:
+            print("[update_workout_routine_mes2_v1] Error:", e)
 
 
-def seed_default_workouts(conn):
-    count = conn.execute("SELECT COUNT(*) FROM workout_days").fetchone()[0]
-    if count > 0:
-        return
-
+def _get_mes2_workout_data():
     post_stretch = (
-        "Estiramiento de Mariposa (45 segundos)\n"
-        "• Siéntate en el piso, junta las plantas de tus pies y acerca los talones hacia tu pelvis.\n"
-        "• Sujeta tus pies con las manos, mantén la espalda derecha y empuja suavemente las rodillas hacia el piso para elongar los aductores.\n\n"
-        "Figura de 4 con pie base en el piso (30 segundos por pierna)\n"
-        "• Acuéstate boca arriba con las rodillas flexionadas y los pies apoyados en el piso.\n"
-        "• Cruza un tobillo sobre la rodilla opuesta formando un 4 y empuja suavemente la rodilla cruzada o acerca el muslo base hacia el pecho para estirar el glúteo profundo y piriforme.\n\n"
-        "Estiramiento 90-90 (30 segundos por lado)\n"
-        "• Siéntate en el piso con la pierna delantera flexionada a 90° frente a ti (rotación externa) y la pierna trasera flexionada a 90° hacia el costado (rotación interna).\n"
-        "• Mantén la espalda larga e inclina suavemente el torso hacia la pierna delantera, luego cambia de lado."
+        "Estiramiento de Mariposa — Aductores (45 segundos)\n"
+        "• Sentada en el suelo, junta las plantas de los pies y acerca los talones hacia la pelvis.\n"
+        "• Deja caer las rodillas hacia los lados empujándolas suavemente con los codos, manteniendo la espalda erguida.\n\n"
+        "Figura de 4 — Glúteo profundo y piriforme (30 segundos por pierna)\n"
+        "• Acostada boca arriba con un pie apoyado en el suelo (rodilla flexionada).\n"
+        "• Cruza el tobillo opuesto sobre esa rodilla formando un 4. Si tira suficiente ahí, sostén; si buscas más intensidad, toma el muslo de base por detrás y tira suavemente hacia el pecho.\n\n"
+        "Estiramiento 90-90 — Movilidad capsular de cadera (30 segundos por lado)\n"
+        "• Sentada en el suelo, coloca la pierna delantera flexionada a 90° frente al torso (rotación externa) y la pierna trasera flexionada a 90° hacia el costado/atrás (rotación interna).\n"
+        "• Inclínate suavemente hacia adelante con el pecho recto sobre la tibia delantera y luego cambia de lado."
     )
     warmup_std = (
         "Flow de Isquiotibiales (Repetir 5 a 8 veces)\n"
@@ -2055,65 +2061,91 @@ def seed_default_workouts(conn):
         "• Sostén esa posición estirada por 2 segundos.\n"
         "• Vuelve a bajar la cadera hacia la posición de sentadilla profunda, levanta el pecho y mira hacia adelante.\n\n"
         "Lunges para el Psoas (Repetir 5 a 8 veces por pierna)\n"
-        "• Apoya una rodilla en el piso y pisa con el otro pie hacia adelante (como si te estuvieras arrodillando para pedir matrimonio). Ambas rodillas deben formar un ángulo de 90 grados.\n"
+        "• Apoya una rodilla en el piso y pisa con el otro pie hacia adelante. Ambas rodillas deben formar un ángulo de 90 grados.\n"
         "• Mantén la espalda completamente recta y contrae el abdomen.\n"
-        "• Empuja tu cadera suavemente hacia adelante, sin arquear la espalda baja ni inclinar el torso. Debes sentir el estiramiento en la parte frontal de la cadera de la pierna que está apoyada en el piso.\n"
-        "• Sostén la máxima tensión por 2 segundos.\n"
-        "• Retrocede suavemente la cadera a la posición inicial.\n\n"
-        "⏱ Realiza estos dos movimientos de forma continua, alternando entre ellos, hasta cumplir entre 5 y 10 minutos en total antes de tocar las pesas."
+        "• Empuja tu cadera suavemente hacia adelante, sin arquear la espalda baja ni inclinar el torso. Debes sentir el estiramiento en la parte frontal de la cadera de la pierna apoyada.\n"
+        "• Sostén la máxima tensión por 2 segundos y retrocede suavemente a la posición inicial.\n\n"
+        "⏱ Realiza estos dos movimientos de forma continua (1 serie de ~5 minutos en total con peso corporal) antes de tocar las pesas."
     )
 
-    days_data = [
-        (1, "Día 1: Ensanchamiento Lateral y Zancadas", "Glúteo medio, abducción y piernas", warmup_std, post_stretch, 1, [
-            ("Principal", "Clamshells (Almejas)", 3, "15 (por lado)", "Banda nivel Medio", 0, 45, 1),
-            ("Principal", "Abducción Tumbada", 4, "15 (por lado)", "Disco Suelto sobre el muslo", 5.0, 60, 1),
-            ("Principal", "Zancadas", 3, "12 (por pierna)", "Par de Mancuernas (4kg totales)", 4.0, 60, 1),
-            ("Principal", "Abducción Sentada", 4, "20", "Banda nivel Fuerte", 0, 45, 1),
+    return [
+        (1, "Día 1: Bloque A — Ensanchamiento Lateral", "Glúteo medio y menor (abducción frontal) · Equipo: Mancuerna Máxima (9.5 kg) + Disco Suelto (4.0 kg)", warmup_std, post_stretch, 1, [
+            ("Principal", "Abducción de Cadera Tumbada de Lado", 4, "15 por lado", "Disco Suelto (4.0 kg) en muslo externo", 4.0, 60, 1),
+            ("Principal", "Zancada Lateral (Lateral Lunge)", 4, "12 por lado", "Mancuerna Máxima (9.5 kg) al pecho", 9.5, 75, 1),
+            ("Aislamiento", "Patada Lateral de Pie (Abducción de pie)", 4, "15 por lado", "Banda elástica nivel Fuerte (tobillos)", 0.0, 60, 1),
+            ("Bombeo", "Abducción Sentada con Banda", 4, "25", "Banda elástica nivel Fuerte (rodillas)", 0.0, 60, 1),
         ]),
-        (2, "Día 2: Abdomen de Corsé (Vacuums 1)", "Core profundo, cintura y estabilidad", None, None, 2, [
-            ("Principal", "Levantamiento de piernas", 2, "15", "Peso corporal", 0, 45, 1),
-            ("Principal", "Stomach Vacuums", 5, "15 segundos", "Peso corporal", 0, 30, 1),
-            ("Principal", "Plancha Frontal (Plank)", 4, "Fallo", "Peso corporal", 0, 60, 1),
-            ("Principal", "Plancha Lateral", 3, "30 segundos (por lado)", "Peso corporal", 0, 45, 1),
+        (2, "Día 2: Cintura de Corsé (Transverso y Core)", "Activación isométrica profunda y core anti-rotacional · Peso corporal", None, None, 2, [
+            ("Core Profundo", "Stomach Vacuums (Vacío Abdominal)", 5, "15 segundos", "Peso corporal", 0.0, 30, 1),
+            ("Core Inferior", "Levantamiento de Piernas Acostada", 3, "15", "Peso corporal", 0.0, 45, 1),
+            ("Estabilidad", "Dead Bug (Bicho Muerto)", 3, "10 por lado", "Peso corporal", 0.0, 45, 1),
+            ("Isometría", "Plancha Frontal (Plank tradicional)", 4, "Al fallo técnico", "Peso corporal", 0.0, 60, 1),
         ]),
-        (3, "Día 3: Proyección", "Fuerza e hipertrofia de glúteo e isquios", warmup_std, post_stretch, 3, [
-            ("Principal", "Real Hip Thrust", 3, "12", "Barra Armada (9.5kg)", 9.5, 90, 1),
-            ("Principal", "Split Squat (Sentadilla Dividida)", 3, "12 (por pierna)", "Par de Mancuernas (4kg c/u)", 8.0, 75, 1),
-            ("Principal", "Peso Muerto Rumano (Normal)", 3, "12", "Par de Mancuernas (4kg c/u)", 8.0, 75, 1),
+        (3, "Día 3: Bloque B — Proyección y Masa", "Glúteo mayor e isquios · Truco: Iniciar con Mancuerna Máxima (9.5 kg) en Ej. 1 y pasar a Par de Mancuernas (7.0 kg c/u) en Ej. 2 y 3", warmup_std, post_stretch, 3, [
+            ("Principal", "Puente de Glúteo Acostada a 1 Pierna", 4, "12 por pierna", "Mancuerna Máxima (9.5 kg) en cadera", 9.5, 75, 1),
+            ("Principal", "Split Squat (Sentadilla Dividida Estática)", 4, "10 por pierna", "Par de Mancuernas (7.0 kg c/u)", 14.0, 90, 1),
+            ("Principal", "Peso Muerto Rumano (Tradicional a 2 piernas)", 4, "12", "Par de Mancuernas (7.0 kg c/u)", 14.0, 90, 1),
+            ("Aislamiento", "Donkey Kicks (Patada de burro en 4 apoyos)", 3, "15 por pierna", "Banda elástica nivel Fuerte", 0.0, 60, 1),
         ]),
-        (4, "Día 4: Bombeo Lateral (Vacuums 2)", "Aislamiento de glúteo con bandas y core", None, post_stretch, 4, [
-            ("Principal", "Caminata Lateral (Monster Walks)", 4, "20 pasos totales", "Banda nivel Fuerte", 0, 45, 1),
-            ("Principal", "Donkey Kicks (Patadas de burro)", 3, "12 (por pierna)", "Banda nivel Medio", 0, 45, 1),
-            ("Principal", "Patada Lateral de Pie", 4, "15 (por lado)", "Banda nivel Fuerte", 0, 45, 1),
-            ("Principal", "Stomach Vacuums", 5, "15 segundos", "Peso corporal", 0, 30, 1),
+        (4, "Día 4: Bloque A — Ensanchamiento Lateral + Core", "Glúteo medio y menor + Vacío abdominal · Equipo: Mancuerna Máxima (9.5 kg) + Disco Suelto (4.0 kg)", warmup_std, post_stretch, 4, [
+            ("Principal", "Abducción de Cadera Tumbada de Lado", 4, "15 por lado", "Disco Suelto (4.0 kg) en muslo externo", 4.0, 60, 1),
+            ("Principal", "Zancada Lateral (Lateral Lunge)", 4, "12 por lado", "Mancuerna Máxima (9.5 kg) al pecho", 9.5, 75, 1),
+            ("Aislamiento", "Patada Lateral de Pie (Abducción de pie)", 4, "15 por lado", "Banda elástica nivel Fuerte (tobillos)", 0.0, 60, 1),
+            ("Bombeo", "Abducción Sentada con Banda", 4, "25", "Banda elástica nivel Fuerte (rodillas)", 0.0, 60, 1),
+            ("Core (Solo Día 4)", "Stomach Vacuums (Vacío Abdominal)", 5, "15 segundos", "Peso corporal", 0.0, 30, 1),
         ]),
-        (5, "Día 5: Glúteo Integral", "Trabajo completo de tren inferior", warmup_std, post_stretch, 5, [
-            ("Principal", "Hip Thrust Acostada (Puente)", 3, "15", "Mancuerna Pesada (8kg cadera)", 8.0, 60, 1),
-            ("Principal", "Sentadilla Copa (Goblet Squat)", 4, "12", "Mancuerna Pesada (en pecho)", 8.0, 75, 1),
-            ("Principal", "Zancadas Inversas", 3, "12 (por pierna)", "Par de Mancuernas ligeras", 4.0, 60, 1),
+        (5, "Día 5: Bloque B — Proyección y Masa", "Glúteo mayor e isquios · Truco: Iniciar con Mancuerna Máxima (9.5 kg) en Ej. 1 y pasar a Par de Mancuernas (7.0 kg c/u) en Ej. 2 y 3", warmup_std, post_stretch, 5, [
+            ("Principal", "Puente de Glúteo Acostada a 1 Pierna", 4, "12 por pierna", "Mancuerna Máxima (9.5 kg) en cadera", 9.5, 75, 1),
+            ("Principal", "Split Squat (Sentadilla Dividida Estática)", 4, "10 por pierna", "Par de Mancuernas (7.0 kg c/u)", 14.0, 90, 1),
+            ("Principal", "Peso Muerto Rumano (Tradicional a 2 piernas)", 4, "12", "Par de Mancuernas (7.0 kg c/u)", 14.0, 90, 1),
+            ("Aislamiento", "Donkey Kicks (Patada de burro en 4 apoyos)", 3, "15 por pierna", "Banda elástica nivel Fuerte", 0.0, 60, 1),
         ]),
-        (6, "Día 6: Postura, Flexibilidad y Relax (Circuito Continuo)", "Realizar el circuito principal de 3 a 4 rondas seguidas, fluyendo de un movimiento al otro", None, None, 6, [
-            ("Circuito (3-4 Rondas)", "Flow de isquiotibiales", 4, "Fluido", "Peso corporal", 0, 20, 1),
-            ("Circuito (3-4 Rondas)", "Lunges para el psoas", 4, "Fluido", "Peso corporal", 0, 20, 1),
-            ("Circuito (3-4 Rondas)", "Estiramiento 90-90", 4, "Fluido", "Peso corporal", 0, 20, 1),
-            ("Circuito (3-4 Rondas)", "Alcance de pies sentada", 4, "Fluido", "Peso corporal", 0, 20, 1),
-            ("Cierre", "Apertura de pecho en marco de puerta", 3, "30 segundos", "Marco de puerta", 0, 30, 1),
-            ("Cierre", "Stomach Vacuums", 5, "15 segundos", "Peso corporal", 0, 30, 1),
+        (6, "Día 6: Postura, Flexibilidad y Relax (Circuito Continuo)", "Descompresión lumbopélvica y apertura torácica · 3 a 4 rondas continuas de forma fluida", None, None, 6, [
+            ("Circuito Principal (3-4 Rondas)", "Flow de isquiotibiales", 4, "Fluido", "Peso corporal", 0.0, 20, 1),
+            ("Circuito Principal (3-4 Rondas)", "Lunges profundos para psoas", 4, "Fluido", "Peso corporal", 0.0, 20, 1),
+            ("Circuito Principal (3-4 Rondas)", "Transiciones 90-90", 4, "Fluido", "Peso corporal", 0.0, 20, 1),
+            ("Circuito Principal (3-4 Rondas)", "Alcance de pies sentada", 4, "Fluido", "Peso corporal", 0.0, 20, 1),
+            ("Cierre Postural", "Apertura de pecho en marco de puerta", 3, "30 segundos", "Marco de puerta", 0.0, 30, 1),
+            ("Cierre Core", "Stomach Vacuums (Vacío Abdominal)", 5, "15 segundos", "Peso corporal", 0.0, 30, 1),
         ]),
     ]
 
+
+def apply_workout_routine_mes2(conn):
+    days_data = _get_mes2_workout_data()
     for day_num, name, subtitle, warmup, cooldown, sort_ord, exercises in days_data:
-        cur = conn.execute("""
-            INSERT INTO workout_days (day_number, name, subtitle, warmup_notes, cooldown_notes, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (day_num, name, subtitle, warmup, cooldown, sort_ord))
-        day_id = cur.lastrowid
+        existing = conn.execute(
+            "SELECT id FROM workout_days WHERE day_number = ? ORDER BY id ASC LIMIT 1",
+            (day_num,)
+        ).fetchone()
+        if existing:
+            day_id = existing[0]
+            conn.execute("""
+                UPDATE workout_days
+                SET name = ?, subtitle = ?, warmup_notes = ?, cooldown_notes = ?, sort_order = ?
+                WHERE id = ?
+            """, (name, subtitle, warmup, cooldown, sort_ord, day_id))
+            conn.execute("DELETE FROM workout_exercises WHERE day_id = ?", (day_id,))
+        else:
+            cur = conn.execute("""
+                INSERT INTO workout_days (day_number, name, subtitle, warmup_notes, cooldown_notes, sort_order)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (day_num, name, subtitle, warmup, cooldown, sort_ord))
+            day_id = cur.lastrowid
+
         for idx, (phase, ex_name, sets, reps_text, equip, weight, rest_s, trackable) in enumerate(exercises, start=1):
             conn.execute("""
                 INSERT INTO workout_exercises
                 (day_id, phase, name, sets, reps_text, equipment, default_weight_kg, rest_seconds, is_trackable, sort_order)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (day_id, phase, ex_name, sets, reps_text, equip, weight, rest_s, trackable, idx))
+
+
+def seed_default_workouts(conn):
+    count = conn.execute("SELECT COUNT(*) FROM workout_days").fetchone()[0]
+    if count > 0:
+        return
+    apply_workout_routine_mes2(conn)
     conn.commit()
 
 

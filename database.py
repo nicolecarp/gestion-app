@@ -688,6 +688,9 @@ def init_db():
             submitted_at TEXT DEFAULT (datetime('now','-3 hours')),
             UNIQUE(plan_id, period_key)
         )""",
+        "UPDATE lindley_technicians SET short_name='Gonzalo Arizaga', dni='45727624', web_full_name='RAMIREZ ARIZAGA GONZALO LEONARDO' WHERE dni='48574525' OR short_name LIKE '%Karin%'",
+        "UPDATE lindley_plans SET activity_text = REPLACE(activity_text, 'Karin Vasquez', 'Gonzalo Arizaga') WHERE activity_text LIKE '%Karin Vasquez%'",
+        "UPDATE lindley_matrix_rows SET col1 = 'RAMIREZ ARIZAGA GONZALO LEONARDO' WHERE section_type = 'PNE' AND sede_filter = 'TRUJILLO' AND col1 LIKE '%KARIN%'",
         """CREATE TABLE IF NOT EXISTS voice_sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             date TEXT NOT NULL,
@@ -1903,7 +1906,7 @@ def apply_cleanups_and_seeds(conn):
                 (5, 'MEGA HUACHIPA', 1, '362', 'Mega Huachipa', 'MEGAS Y ZARATE', 'GENERAL_PLANTAS', 'LIMA', 'Cinthya Mendoza', 'cinthya.mendoza@aclogistica.pe', '10', '', 'Control de plagas, Control de roedores, aves, cambio de placas entomológicas, fumigación', 1, '1799,2012,1621,1623', 0, 0, '', 5),
                 (6, 'ZARATE', 1, '379', 'Planta Zarate', 'MEGAS Y ZARATE', 'GENERAL_PLANTAS', 'LIMA', 'Yveth Yaire', 'yaire@lindley.pe', '4', '', 'Control de plagas, Control de roedores, aves, cambio de placas entomológicas, fumigación', 1, '1799,2012,1621,1623', 0, 0, '', 6),
                 (7, 'CEDI TRUJILLO', 1, '360', 'CEDI-Trujillo', 'TRUJILLO', 'GENERAL_PLANTAS', 'TRUJILLO', 'Kenyhi Garcia', 'kenyhi.garcia@aclogistica.pe', '13', '', 'GESTION Y CONTROL AMBIENTAL/ CONTROL DE PLAGAS', 1, '1799,2012,1621,1623', 0, 1, '11707,11708', 7),
-                (8, 'TRUJILLO', 1, '396', 'Planta Trujillo', 'TRUJILLO', 'GENERAL_PLANTAS', 'TRUJILLO', 'Yohana Sarango', 'YSARANGO@lindley.pe', '5', '', 'Javier Llontop, Julio Llontop, Jose Laguna, Diego Obando y Karin Vasquez: Control de plagas, roedores, aves, fumigación (SIN LOTO); Javier Llontop, Diego Obando y Karin Vasquez: cambio de placas entomologicas de insectocutores (CON LOTO)', 1, '1799,2012,1621,1623', 0, 1, '11707,11708', 8),
+                (8, 'TRUJILLO', 1, '396', 'Planta Trujillo', 'TRUJILLO', 'GENERAL_PLANTAS', 'TRUJILLO', 'Yohana Sarango', 'YSARANGO@lindley.pe', '5', '', 'Javier Llontop, Julio Llontop, Jose Laguna, Diego Obando y Gonzalo Arizaga: Control de plagas, roedores, aves, fumigación (SIN LOTO); Javier Llontop, Diego Obando y Gonzalo Arizaga: cambio de placas entomologicas de insectocutores (CON LOTO)', 1, '1799,2012,1621,1623', 0, 1, '11707,11708', 8),
                 (9, 'VEND EQUIPOS (Fumigación)', 1, '369', 'VENDOMATICA', 'MEGAS Y ZARATE', 'VEND_FUMIGACION_EQUIPOS', 'VEND_EQUIPOS', 'Luis Felix', 'luis.felix@arcacontal.com', '20', '', 'Fumigación de equipos', 1, '1799,2012', 0, 0, '', 9),
                 (10, 'VEND PLANTA (Desratización)', 1, '369', 'VENDOMATICA', 'MEGAS Y ZARATE', 'VEND_DESRATIZACION', 'VEND_PLANTA', 'Xihomara Segura', 'Xihomara.segura@arcacontal.com', '19', '', 'Control de roedores', 1, '1623', 0, 0, '', 10),
                 (11, 'AREQUIPA', 0, '423', 'Planta Arequipa', 'AREQUIPA', 'GENERAL_PLANTAS', 'AREQUIPA', 'Angel Diaz', 'adiaz@lindley.pe', '6', '', 'Control de plagas, Control de roedores, aves, cambio de placas entomológicas, fumigación', 1, '1799,2012,1621,1623', 0, 1, '11707,11708', 11),
@@ -1944,7 +1947,7 @@ def apply_cleanups_and_seeds(conn):
                 ('TRUJILLO', 'Obando Martinez', '71510419', 'OBANDO MARTINEZ DIEGO JOSE', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'SI', 'CON LOTO', 18),
                 ('TRUJILLO', 'Perez Rodriguez', '74831033', 'PEREZ RODRIGUEZ JESUS MANUEL', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', '', 19),
                 ('TRUJILLO', 'Jose Laguna', '77569770', 'LAGUNA CAIPO JOSE ENRIQUE', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', 'SIN LOTO', 20),
-                ('TRUJILLO', 'Vasquez Karin', '48574525', 'VASQUEZ AREVALO KARIN JANETH', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'SI', 'CON LOTO', 21),
+                ('TRUJILLO', 'Gonzalo Arizaga', '45727624', 'RAMIREZ ARIZAGA GONZALO LEONARDO', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'SI', 'CON LOTO', 21),
                 # AREQUIPA y CUSCO
                 ('AREQUIPA', 'Rosa Casas', '76447943', 'CASAS LIPE ROSA STEFANY', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', 'Arequipa', 22),
                 ('AREQUIPA', 'David Alvarez', '45807040', 'ALVAREZ QUISPE DAVID', 1, 'NO', 'NO', 'NO', 'SI', 'NO', 'NO', 'Arequipa', 23),
@@ -1978,7 +1981,7 @@ def apply_cleanups_and_seeds(conn):
                 # GENERAL_PLANTAS - PNE (#tbl2)
                 ('GENERAL_PLANTAS', 'PNE', 'IQUITOS', 'Lizet Alvarado Yumbato', '993202728', 'Paralizar el trabajo, Delimitar el area de trabajo, Reportar al dueño de area y area de Seguridad, topico, Estabilizar al paciente, trasladarlo al centro de salud mas cercano, realizar investigacion de accidentes.', 15),
                 ('GENERAL_PLANTAS', 'PNE', 'LIMA', 'Dany Rios German', '943576167', 'Paralizar el trabajo, Delimitar el area de trabajo, Reportar al dueño de area y area de Seguridad, topico, Estabilizar al paciente, trasladarlo al centro de salud mas cercano, realizar investigacion de accidentes.', 16),
-                ('GENERAL_PLANTAS', 'PNE', 'TRUJILLO', 'VASQUEZ AREVALO KARIN JANETH', '922664535', 'Paralizar el trabajo, Delimitar el area de trabajo, Reportar al dueño de area y area de Seguridad, topico, Estabilizar al paciente, trasladarlo al centro de salud mas cercano, realizar investigacion de accidentes.', 17),
+                ('GENERAL_PLANTAS', 'PNE', 'TRUJILLO', 'RAMIREZ ARIZAGA GONZALO LEONARDO', '922664535', 'Paralizar el trabajo, Delimitar el area de trabajo, Reportar al dueño de area y area de Seguridad, topico, Estabilizar al paciente, trasladarlo al centro de salud mas cercano, realizar investigacion de accidentes.', 17),
                 ('GENERAL_PLANTAS', 'PNE', 'AREQUIPA', 'Rosa Casas Lipe', '922671344', 'Paralizar el trabajo, Delimitar el area de trabajo, Reportar al dueño de area y area de Seguridad, topico, Estabilizar al paciente, trasladarlo al centro de salud mas cercano, realizar investigacion de accidentes.', 18),
                 ('GENERAL_PLANTAS', 'PNE', 'CUSCO', 'Rosa Casas Lipe', '922671344', 'Paralizar el trabajo, Delimitar el area de trabajo, Reportar al dueño de area y area de Seguridad, topico, Estabilizar al paciente, trasladarlo al centro de salud mas cercano, realizar investigacion de accidentes.', 19),
                 # GENERAL_PLANTAS - DIA (#tbl3)
